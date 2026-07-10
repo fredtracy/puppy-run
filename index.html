@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Puppy Run</title>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background: #87ceeb;
+        height: 100%;
+      }
+      canvas {
+        display: block;
+      }
+      #touch-controls {
+        position: fixed;
+        left: 20px;
+        bottom: 20px;
+        display: grid;
+        grid-template-columns: repeat(3, 56px);
+        grid-template-rows: repeat(3, 56px);
+        gap: 4px;
+        z-index: 10;
+        touch-action: none;
+        user-select: none;
+      }
+      #touch-controls button {
+        grid-column: var(--col);
+        grid-row: var(--row);
+        border: none;
+        border-radius: 12px;
+        background: rgba(20, 20, 20, 0.45);
+        color: #fff;
+        font-size: 22px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        touch-action: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      #touch-controls button:active {
+        background: rgba(20, 20, 20, 0.7);
+      }
+      #touch-controls button[data-action='jump'] {
+        background: rgba(255, 197, 74, 0.55);
+      }
+      #touch-controls button[data-action='jump']:active {
+        background: rgba(255, 197, 74, 0.8);
+      }
+      @media (hover: hover) and (pointer: fine) {
+        #touch-controls {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="touch-controls">
+      <button data-key="KeyW" style="--col:2;--row:1">&#9650;</button>
+      <button data-key="KeyA" style="--col:1;--row:2">&#9664;</button>
+      <button data-key="KeyS" style="--col:2;--row:3">&#9660;</button>
+      <button data-key="KeyD" style="--col:3;--row:2">&#9654;</button>
+      <button data-action="jump" style="--col:2;--row:2">&#8593;</button>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
