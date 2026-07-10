@@ -35,38 +35,24 @@ function makeSpeckleTexture(base, variance, repeatX, repeatY) {
   return texture;
 }
 
-function makeBrickTexture() {
-  const w = 256;
-  const h = 256;
-  const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#cbbfae';
-  ctx.fillRect(0, 0, w, h);
-  const brickH = 20;
-  const brickW = 46;
-  const gap = 4;
-  let row = 0;
-  for (let y = -brickH; y < h + brickH; y += brickH + gap) {
-    const offset = row % 2 === 0 ? 0 : -(brickW + gap) / 2;
-    for (let x = offset - brickW; x < w + brickW; x += brickW + gap) {
-      const shade = Math.random() * 30 - 15;
-      const r = 139 + shade;
-      const g = 68 + shade * 0.6;
-      const b = 56 + shade * 0.5;
-      ctx.fillStyle = `rgb(${r | 0},${g | 0},${b | 0})`;
-      ctx.fillRect(x, y, brickW, brickH);
-    }
-    row++;
-  }
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(4, 2);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = 16;
-  return texture;
+const textureLoader = new THREE.TextureLoader();
+
+// Real photographed brick (CC0, polyhaven.com: brick_wall_001) instead of a
+// hand-drawn canvas — diffuse + normal + roughness maps give it actual
+// physical depth and per-pixel material variation under lighting.
+function loadBrickTextures() {
+  const base = `${import.meta.env.BASE_URL}textures/brick_wall_001/brick_wall_001_`;
+  const map = textureLoader.load(`${base}diffuse_1k.jpg`);
+  map.colorSpace = THREE.SRGBColorSpace;
+  const normalMap = textureLoader.load(`${base}nor_gl_1k.jpg`);
+  const roughnessMap = textureLoader.load(`${base}rough_1k.jpg`);
+  [map, normalMap, roughnessMap].forEach((texture) => {
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(4, 2);
+    texture.anisotropy = 16;
+  });
+  return { map, normalMap, roughnessMap };
 }
 
 function makeSignTexture(text) {
@@ -143,9 +129,12 @@ export function createHouse() {
   const wallHeight = 2.7;
   const roofHeight = 2.3;
 
+  const brickTextures = loadBrickTextures();
   const brickMat = new THREE.MeshStandardMaterial({
-    map: makeBrickTexture(),
-    roughness: 0.85,
+    map: brickTextures.map,
+    normalMap: brickTextures.normalMap,
+    roughnessMap: brickTextures.roughnessMap,
+    roughness: 1,
   });
   const roofMat = new THREE.MeshStandardMaterial({
     map: makeSpeckleTexture('#8d8880', 40, 6, 4),
@@ -180,15 +169,23 @@ export function createHouse() {
   const wallThickness = 0.3;
   const doorway = { xMin: -0.1, xMax: 1.25, yMax: 2.2 };
 
-  // Physical size (world units) that one repeat of the brick canvas texture
-  // should cover, so bricks read as the same size on every wall piece
-  // instead of a different density on every differently-sized surface.
+  // Physical size (world units) that one repeat of the brick texture should
+  // cover, so bricks read as the same size on every wall piece instead of a
+  // different density on every differently-sized surface.
   const brickTileSize = wallHeight / 2;
   function scaledBrickMat(faceWidth, faceHeight) {
-    const texture = brickMat.map.clone();
-    texture.needsUpdate = true;
-    texture.repeat.set(faceWidth / brickTileSize, faceHeight / brickTileSize);
-    return new THREE.MeshStandardMaterial({ map: texture, roughness: 0.85 });
+    const repeatX = faceWidth / brickTileSize;
+    const repeatY = faceHeight / brickTileSize;
+    const map = brickMat.map.clone();
+    map.needsUpdate = true;
+    map.repeat.set(repeatX, repeatY);
+    const normalMap = brickMat.normalMap.clone();
+    normalMap.needsUpdate = true;
+    normalMap.repeat.set(repeatX, repeatY);
+    const roughnessMap = brickMat.roughnessMap.clone();
+    roughnessMap.needsUpdate = true;
+    roughnessMap.repeat.set(repeatX, repeatY);
+    return new THREE.MeshStandardMaterial({ map, normalMap, roughnessMap, roughness: 1 });
   }
 
   // Front/back walls stop at the *inner* face of the side walls instead of

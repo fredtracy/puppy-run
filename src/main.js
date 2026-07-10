@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { createDarla, createPoop } from './darla.js';
@@ -53,10 +54,20 @@ controls.enableDamping = true;
 controls.minDistance = 0.8;
 controls.maxDistance = 26;
 
-// Image-based lighting so materials get realistic reflections/ambient
-// without depending on an external HDRI download.
+// Image-based lighting from a real photographed sky (CC0, polyhaven.com) —
+// gives every reflective/PBR material realistic ambient light and
+// reflections instead of a synthetic room-interior approximation. Only used
+// for scene.environment (reflections/ambient), not scene.background — the
+// visible sky stays the flat fog color plus the hand-drawn sun sprite, so
+// there isn't a second, photographic sun competing with the cartoon one.
 const pmrem = new THREE.PMREMGenerator(renderer);
-scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+new RGBELoader().load(
+  `${import.meta.env.BASE_URL}hdri/autumn_field_puresky_1k.hdr`,
+  (hdrTexture) => {
+    scene.environment = pmrem.fromEquirectangular(hdrTexture).texture;
+    hdrTexture.dispose();
+  }
+);
 
 // Sun + fill lighting on top of the environment lighting
 const sunLight = new THREE.DirectionalLight(0xfff2e0, 2.2);
@@ -75,6 +86,12 @@ scene.add(sunLight);
 const fillLight = new THREE.DirectionalLight(0xcfe8ff, 0.4);
 fillLight.position.set(-4, 2, -3);
 scene.add(fillLight);
+
+// Sky-to-ground ambient — sky-blue light from above, a warm bounce from the
+// grass below, so shaded surfaces (the underside of the roof overhang, the
+// walls facing away from the sun) don't just go flat and grey.
+const hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x6b8e4e, 0.6);
+scene.add(hemiLight);
 
 // Yard: lawn, house, tree line, and fire pit
 const yard = createYard();
@@ -224,6 +241,18 @@ scene.add(sunSprite);
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
+
+// Ambient occlusion for contact shadows — grounds objects against the
+// lawn/floor and darkens tight corners (under the roof overhang, where the
+// columns meet the patio floor) that direct lighting alone leaves flat.
+// Tuned way down from the defaults (which assume a much larger scene scale)
+// since Darla and the house are only a few units across.
+const ssaoPass = new SSAOPass(scene, camera, window.innerWidth, window.innerHeight);
+ssaoPass.kernelRadius = 0.3;
+ssaoPass.minDistance = 0.0008;
+ssaoPass.maxDistance = 0.05;
+composer.addPass(ssaoPass);
+
 const bloomPass = new UnrealBloomPass(
   new THREE.Vector2(window.innerWidth, window.innerHeight),
   0.25,
