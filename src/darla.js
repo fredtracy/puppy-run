@@ -13,9 +13,9 @@ const COLORS = {
 function furMaterial(color, extra = {}) {
   return new THREE.MeshPhysicalMaterial({
     color,
-    roughness: 0.75,
-    sheen: 0.6,
-    sheenRoughness: 0.55,
+    roughness: 0.88,
+    sheen: 0.25,
+    sheenRoughness: 0.75,
     sheenColor: new THREE.Color(0xffffff),
     ...extra,
   });

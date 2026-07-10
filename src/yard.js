@@ -499,15 +499,24 @@ const TREE_SPACING = 3.6;
 // exclusion checks trivially fail (no effect) far from the origin anyway.
 // A grid also can't leave a directional gap the way random angular sampling
 // can — every slot outside the safe zone gets a tree, full stop.
+// The backyard clearing (open lawn, no trees) and the house's own
+// footprint — shared between the tree chunks (which exclude both) and the
+// grass field (which only grows in the clearing, minus the house).
+const inOpenArea = (x, z) => x > -9.5 && x < 9.5 && z > -4.5 && z < 14.5;
+const inHouse = (x, z) => x > -8.7 && x < 8.7 && z > -17.3 && z < -3.8;
+
+// Matches firePit's own placement in createYard() below — kept separate so
+// grass tufts (createGrassField) can skip it without needing the actual
+// fire pit object to exist yet.
+const FIRE_PIT = { x: -1, z: 5, radius: 0.7 };
+const inFirePit = (x, z) => Math.hypot(x - FIRE_PIT.x, z - FIRE_PIT.z) < FIRE_PIT.radius;
+
 export function createTreeChunk(cx, cz) {
   const group = new THREE.Group();
   const seed = (cx * 374761393 + cz * 668265263) ^ 0x9e3779b9;
   const rand = mulberry32(seed);
   const originX = cx * CHUNK_SIZE;
   const originZ = cz * CHUNK_SIZE;
-
-  const inOpenArea = (x, z) => x > -9.5 && x < 9.5 && z > -4.5 && z < 14.5;
-  const inHouse = (x, z) => x > -8.7 && x < 8.7 && z > -17.3 && z < -3.8;
 
   for (let lx = 0; lx < CHUNK_SIZE; lx += TREE_SPACING) {
     for (let lz = 0; lz < CHUNK_SIZE; lz += TREE_SPACING) {
@@ -522,6 +531,9 @@ export function createTreeChunk(cx, cz) {
       group.add(tree);
     }
   }
+
+  const grass = createChunkGrass(cx, cz, rand);
+  if (grass) group.add(grass);
 
   return group;
 }
@@ -684,11 +696,199 @@ function createLawn() {
   return ground;
 }
 
+const GRASS_BLADE_HEIGHT = 0.35;
+
+// A single tapered blade (base pinned at y=0, tip at y=BLADE_HEIGHT) with
+// several height segments so the wind shader below can bend it smoothly
+// like it's actually rooted in the ground, instead of hinging at one point.
+function createGrassBladeGeometry() {
+  const bladeWidth = 0.05;
+  const geo = new THREE.PlaneGeometry(bladeWidth, GRASS_BLADE_HEIGHT, 1, 4);
+  geo.translate(0, GRASS_BLADE_HEIGHT / 2, 0);
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const t = pos.getY(i) / GRASS_BLADE_HEIGHT;
+    pos.setX(i, pos.getX(i) * (1 - t * 0.7));
+  }
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// Cheap per-blade shading: a fixed vertical color gradient (dark at the
+// root, bright toward the tip) plus per-instance tint variation, rather
+// than a real lit response — the sun never moves in this scene, so a real
+// lighting calculation here would just reproduce the same gradient anyway.
+// The wind itself is a sine wave offset by world position (so it ripples
+// across the field instead of every blade moving in lockstep) and by a
+// per-instance random phase (so they don't all ripple in perfect unison),
+// applied more strongly toward the tip so the blade bends like it's rooted.
+function createGrassMaterial() {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: { value: 0 },
+      fogColor: { value: new THREE.Color(0x87ceeb) },
+      fogNear: { value: 18 },
+      fogFar: { value: 55 },
+    },
+    vertexShader: `
+      attribute float instanceRandom;
+      uniform float uTime;
+      varying float vHeightT;
+      varying float vRandom;
+      varying float vFogDepth;
+
+      void main() {
+        vHeightT = position.y / ${GRASS_BLADE_HEIGHT.toFixed(3)};
+        vRandom = instanceRandom;
+
+        // Each blade's own random per-instance rotation (baked into
+        // instanceMatrix) is for visual variety of its resting shape only.
+        // The wind bend below is added AFTER that transform, as a fixed
+        // world-space direction shared by every blade — bending in local
+        // space first (before the per-instance rotation) made each blade
+        // sway off in its own random direction, which read as worms
+        // wriggling rather than a field leaning together in the wind.
+        vec4 restPos = instanceMatrix * vec4(position, 1.0);
+
+        vec2 windDir = normalize(vec2(1.0, 0.35));
+        float wave = sin(uTime * 1.6 + restPos.x * 0.3 + restPos.z * 0.3 + instanceRandom * 6.2831);
+        float bendAmount = wave * 0.16 * pow(vHeightT, 1.6);
+        restPos.x += windDir.x * bendAmount;
+        restPos.z += windDir.y * bendAmount;
+
+        vec4 mvPosition = modelViewMatrix * restPos;
+        vFogDepth = -mvPosition.z;
+        gl_Position = projectionMatrix * mvPosition;
+      }
+    `,
+    fragmentShader: `
+      precision mediump float;
+      varying float vHeightT;
+      varying float vRandom;
+      varying float vFogDepth;
+      uniform vec3 fogColor;
+      uniform float fogNear;
+      uniform float fogFar;
+
+      void main() {
+        vec3 baseColor = vec3(0.08, 0.28, 0.09);
+        vec3 tipColor = vec3(0.24, 0.62, 0.2);
+        vec3 color = mix(baseColor, tipColor, vHeightT);
+        color *= 0.8 + vRandom * 0.35;
+
+        float fogFactor = smoothstep(fogNear, fogFar, vFogDepth);
+        color = mix(color, fogColor, fogFactor);
+
+        gl_FragColor = vec4(color, 1.0);
+      }
+    `,
+    side: THREE.DoubleSide,
+  });
+}
+
+// One shared shader program for every grass field — the yard clearing's
+// and every wooded chunk's — so there's only ever one shader compile and
+// one place (main.js) needs to update the wind's time uniform. Geometry is
+// NOT shared: each field gets its own copy (see buildGrassMesh) so a
+// chunk's grass can be safely disposed when it unloads without taking
+// down every other field that happens to reuse the same blade shape.
+export const grassMaterial = createGrassMaterial();
+
+// Scatters blades in sparse, dense tufts rather than blanketing an area
+// evenly — most of the ground stays plain, and every so often there's a
+// cute little clump. `exclude(x, z)` skips spots that shouldn't get grass
+// (the house footprint, or — for wooded chunks — the open clearing, which
+// already gets its own denser tufts from createGrassField). Linear radius
+// sampling naturally packs more blades near a tuft's center than its edge.
+function scatterTuftPositions(tuftCenters, tuftRadius, bladesPerTuft, rand, exclude) {
+  const positions = [];
+  tuftCenters.forEach(({ cx, cz }) => {
+    for (let i = 0; i < bladesPerTuft; i++) {
+      const angle = rand() * Math.PI * 2;
+      const r = rand() * tuftRadius;
+      const x = cx + Math.cos(angle) * r;
+      const z = cz + Math.sin(angle) * r;
+      if (exclude(x, z)) continue;
+      positions.push([x, z]);
+    }
+  });
+  return positions;
+}
+
+function buildGrassMesh(positions, rand) {
+  const geometry = createGrassBladeGeometry();
+  const field = new THREE.InstancedMesh(geometry, grassMaterial, positions.length);
+  const instanceRandom = new Float32Array(positions.length);
+  const dummy = new THREE.Object3D();
+  positions.forEach(([x, z], i) => {
+    dummy.position.set(x, 0, z);
+    dummy.rotation.y = rand() * Math.PI * 2;
+    const scale = 0.8 + rand() * 0.5;
+    dummy.scale.set(scale, scale, scale);
+    dummy.updateMatrix();
+    field.setMatrixAt(i, dummy.matrix);
+    instanceRandom[i] = rand();
+  });
+  geometry.setAttribute('instanceRandom', new THREE.InstancedBufferAttribute(instanceRandom, 1));
+  field.instanceMatrix.needsUpdate = true;
+  return field;
+}
+
+function createGrassField() {
+  const tuftCount = 24;
+  const bladesPerTuft = 80;
+  const tuftRadius = 0.8;
+  const exclude = (x, z) => inHouse(x, z) || inFirePit(x, z);
+
+  const tufts = [];
+  let attempts = 0;
+  while (tufts.length < tuftCount && attempts < tuftCount * 20) {
+    attempts++;
+    const cx = -9.5 + Math.random() * 19;
+    const cz = -4.5 + Math.random() * 19;
+    if (exclude(cx, cz)) continue;
+    tufts.push({ cx, cz });
+  }
+
+  const positions = scatterTuftPositions(tufts, tuftRadius, bladesPerTuft, Math.random, exclude);
+  return buildGrassMesh(positions, Math.random);
+}
+
+// Sparser forest-floor tufts for a wooded chunk — deep shade under a
+// canopy has a different, patchier character than the open lawn. Seeded
+// from the same per-chunk RNG as the trees so a chunk always looks the
+// same on every visit, and skips both the house and the open clearing
+// (which already has its own denser grass) in case a chunk happens to
+// straddle either.
+function createChunkGrass(cx, cz, rand) {
+  const originX = cx * CHUNK_SIZE;
+  const originZ = cz * CHUNK_SIZE;
+  const tuftCount = 8;
+  const bladesPerTuft = 60;
+  const tuftRadius = 0.7;
+  const exclude = (x, z) => inOpenArea(x, z) || inHouse(x, z);
+
+  const tufts = [];
+  for (let i = 0; i < tuftCount; i++) {
+    const tx = originX + rand() * CHUNK_SIZE;
+    const tz = originZ + rand() * CHUNK_SIZE;
+    if (exclude(tx, tz)) continue;
+    tufts.push({ cx: tx, cz: tz });
+  }
+
+  const positions = scatterTuftPositions(tufts, tuftRadius, bladesPerTuft, rand, exclude);
+  if (positions.length === 0) return null;
+  return buildGrassMesh(positions, rand);
+}
+
 export function createYard() {
   const group = new THREE.Group();
   const lawn = createLawn();
   group.add(lawn);
   group.userData.lawn = lawn;
+
+  const grassField = createGrassField();
+  group.add(grassField);
 
   const house = createHouse();
   house.position.set(0, 0, -11);

@@ -7,7 +7,8 @@ import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { createDarla, createPoop } from './darla.js';
-import { createYard, createTreeChunk, CHUNK_SIZE } from './yard.js';
+import { createMom } from './mom.js';
+import { createYard, createTreeChunk, CHUNK_SIZE, grassMaterial } from './yard.js';
 import {
   initAudio,
   startMusic,
@@ -27,8 +28,8 @@ window.addEventListener('keydown', beginAudioOnFirstInput, { once: true });
 window.addEventListener('pointerdown', beginAudioOnFirstInput, { once: true });
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x87ceeb);
-scene.fog = new THREE.Fog(0x87ceeb, 18, 55);
+scene.background = new THREE.Color(0x060a18);
+scene.fog = new THREE.Fog(0x0a1228, 14, 46);
 
 const camera = new THREE.PerspectiveCamera(
   45,
@@ -44,7 +45,7 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.15;
+renderer.toneMappingExposure = 0.85;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 
@@ -68,29 +69,40 @@ new RGBELoader().load(
     hdrTexture.dispose();
   }
 );
+// The HDRI itself is a bright midday sky — fine for realistic reflections,
+// wrong for how much it should contribute to a moonlit night's overall
+// brightness, so its contribution is dialed way down rather than swapped
+// for a night HDRI (there isn't a good CC0 one on hand, and reflections
+// barely register at this weight anyway).
+scene.environmentIntensity = 0.15;
 
-// Sun + fill lighting on top of the environment lighting
-const sunLight = new THREE.DirectionalLight(0xfff2e0, 2.2);
-sunLight.position.set(3, 4, 2);
-sunLight.castShadow = true;
-sunLight.shadow.mapSize.set(2048, 2048);
-sunLight.shadow.camera.left = -14;
-sunLight.shadow.camera.right = 14;
-sunLight.shadow.camera.top = 14;
-sunLight.shadow.camera.bottom = -14;
-sunLight.shadow.camera.near = 1;
-sunLight.shadow.camera.far = 30;
-sunLight.shadow.bias = -0.0015;
-scene.add(sunLight);
+// Moonlight + fill lighting on top of the environment lighting — cool, dim,
+// and low-contrast compared to the old midday sun.
+// Matches moonSprite's position below (the same -65, 40, 100 direction)
+// so shadows fall as if actually cast by the moon hanging there, instead
+// of from an unrelated angle like before.
+const MOON_DIRECTION = new THREE.Vector3(-65, 40, 100).normalize();
+const moonLight = new THREE.DirectionalLight(0xcdd8ff, 0.55);
+moonLight.position.copy(MOON_DIRECTION.clone().multiplyScalar(6));
+moonLight.castShadow = true;
+moonLight.shadow.mapSize.set(2048, 2048);
+moonLight.shadow.camera.left = -14;
+moonLight.shadow.camera.right = 14;
+moonLight.shadow.camera.top = 14;
+moonLight.shadow.camera.bottom = -14;
+moonLight.shadow.camera.near = 1;
+moonLight.shadow.camera.far = 30;
+moonLight.shadow.bias = -0.0015;
+scene.add(moonLight);
 
-const fillLight = new THREE.DirectionalLight(0xcfe8ff, 0.4);
+const fillLight = new THREE.DirectionalLight(0x4a5f8a, 0.15);
 fillLight.position.set(-4, 2, -3);
 scene.add(fillLight);
 
-// Sky-to-ground ambient — sky-blue light from above, a warm bounce from the
-// grass below, so shaded surfaces (the underside of the roof overhang, the
-// walls facing away from the sun) don't just go flat and grey.
-const hemiLight = new THREE.HemisphereLight(0x87ceeb, 0x6b8e4e, 0.6);
+// Sky-to-ground ambient — dark navy from above, a near-black bounce from
+// the grass below, so shaded surfaces (the underside of the roof overhang,
+// the walls facing away from the moon) don't just go flat and grey.
+const hemiLight = new THREE.HemisphereLight(0x1a2340, 0x0d1a12, 0.25);
 scene.add(hemiLight);
 
 // Yard: lawn, house, tree line, and fire pit
@@ -100,6 +112,22 @@ scene.add(yard);
 // Darla
 const darla = createDarla();
 scene.add(darla);
+
+// A soft glow that follows her everywhere — now that it's actually dark,
+// this is what lets you see her and the ground immediately around her.
+// Added as a child of Darla so it tracks her position/rotation for free,
+// with no shadow casting (a shadow-casting point light renders 6 shadow
+// faces instead of 1 — not worth it for a small ambient glow, and keeps
+// this cheap enough for phones).
+const darlaGlow = new THREE.PointLight(0xbfd4ff, 1.4, 5, 2);
+darlaGlow.position.set(0, 0.6, 0);
+darla.add(darlaGlow);
+
+// Darla's mom, hanging out by the fire pit
+const mom = createMom();
+mom.position.set(-1.9, 0, 4.4);
+mom.rotation.y = 0.7;
+scene.add(mom);
 
 // Endless woods: trees stream in as chunks around Darla's current position
 // (each chunk seeded so revisiting it looks the same) and unload once far
@@ -143,9 +171,10 @@ function updateTreeChunks() {
 
 updateTreeChunks();
 
-// A cheerful smiling sun, hand-drawn onto a canvas texture and billboarded
-// so it always faces the camera
-function makeSunTexture() {
+// A surprised little moon, hand-drawn onto a canvas texture and billboarded
+// so it always faces the camera. Pale and soft-edged with a gentle glow
+// halo rather than rayed like the old sun — moonlight glows, it doesn't beam.
+function makeMoonTexture() {
   const size = 512;
   const canvas = document.createElement('canvas');
   canvas.width = size;
@@ -154,23 +183,17 @@ function makeSunTexture() {
   const c = size / 2;
 
   ctx.translate(c, c);
-  ctx.fillStyle = '#ffd54a';
-  const rayCount = 16;
-  const outerR = size * 0.49;
-  const innerR = size * 0.33;
+
+  const haloR = size * 0.49;
+  const halo = ctx.createRadialGradient(0, 0, haloR * 0.55, 0, 0, haloR);
+  halo.addColorStop(0, 'rgba(214, 226, 255, 0.55)');
+  halo.addColorStop(1, 'rgba(214, 226, 255, 0)');
+  ctx.fillStyle = halo;
   ctx.beginPath();
-  for (let i = 0; i < rayCount * 2; i++) {
-    const angle = (Math.PI / rayCount) * i;
-    const r = i % 2 === 0 ? outerR : innerR;
-    const x = Math.cos(angle) * r;
-    const y = Math.sin(angle) * r;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.closePath();
+  ctx.arc(0, 0, haloR, 0, Math.PI * 2);
   ctx.fill();
 
-  const faceR = size * 0.3;
+  const faceR = size * 0.32;
   const faceGradient = ctx.createRadialGradient(
     -faceR * 0.3,
     -faceR * 0.3,
@@ -179,42 +202,45 @@ function makeSunTexture() {
     0,
     faceR
   );
-  faceGradient.addColorStop(0, '#fff2b0');
-  faceGradient.addColorStop(1, '#ffc93c');
+  faceGradient.addColorStop(0, '#f5f8ff');
+  faceGradient.addColorStop(1, '#c7d3ee');
   ctx.fillStyle = faceGradient;
   ctx.beginPath();
   ctx.arc(0, 0, faceR, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.fillStyle = '#ffb3c6';
-  ctx.globalAlpha = 0.6;
-  ctx.beginPath();
-  ctx.ellipse(-faceR * 0.55, faceR * 0.15, faceR * 0.16, faceR * 0.1, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.ellipse(faceR * 0.55, faceR * 0.15, faceR * 0.16, faceR * 0.1, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalAlpha = 1;
+  // A few soft craters for texture
+  ctx.fillStyle = 'rgba(150, 165, 200, 0.35)';
+  [
+    [-faceR * 0.4, -faceR * 0.5, faceR * 0.11],
+    [faceR * 0.45, -faceR * 0.15, faceR * 0.08],
+    [-faceR * 0.15, faceR * 0.5, faceR * 0.13],
+    [faceR * 0.35, faceR * 0.45, faceR * 0.07],
+  ].forEach(([x, y, r]) => {
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  });
 
-  ctx.fillStyle = '#3a2b1a';
+  // Wide, surprised eyes
+  ctx.fillStyle = '#3a3f55';
   [-1, 1].forEach((side) => {
     ctx.beginPath();
-    ctx.ellipse(side * faceR * 0.32, -faceR * 0.08, faceR * 0.075, faceR * 0.095, 0, 0, Math.PI * 2);
+    ctx.ellipse(side * faceR * 0.32, -faceR * 0.08, faceR * 0.1, faceR * 0.12, 0, 0, Math.PI * 2);
     ctx.fill();
   });
   ctx.fillStyle = '#fff';
   [-1, 1].forEach((side) => {
     ctx.beginPath();
-    ctx.arc(side * faceR * 0.32 + 3, -faceR * 0.11, faceR * 0.022, 0, Math.PI * 2);
+    ctx.arc(side * faceR * 0.32 + 3, -faceR * 0.11, faceR * 0.03, 0, Math.PI * 2);
     ctx.fill();
   });
 
-  ctx.strokeStyle = '#3a2b1a';
-  ctx.lineWidth = faceR * 0.05;
-  ctx.lineCap = 'round';
+  // A little "oh!" mouth
+  ctx.fillStyle = '#3a3f55';
   ctx.beginPath();
-  ctx.arc(0, faceR * 0.12, faceR * 0.38, 0.18 * Math.PI, 0.82 * Math.PI);
-  ctx.stroke();
+  ctx.ellipse(0, faceR * 0.28, faceR * 0.11, faceR * 0.14, 0, 0, Math.PI * 2);
+  ctx.fill();
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -226,18 +252,89 @@ function makeSunTexture() {
 // the roof, and trees whenever they're actually in the way (as they should
 // be), while it still reads as impossibly distant everywhere else. Disabling
 // depth testing (an earlier attempt at fixing occlusion) was the wrong fix —
-// it made the sun draw on top of literally everything, including Darla.
+// it made the moon draw on top of literally everything, including Darla.
 // Still exempt from fog so it doesn't fade to the fog color at this range.
-const sunMaterial = new THREE.SpriteMaterial({
-  map: makeSunTexture(),
+const moonMaterial = new THREE.SpriteMaterial({
+  map: makeMoonTexture(),
   transparent: true,
   toneMapped: false,
   fog: false,
 });
-const sunSprite = new THREE.Sprite(sunMaterial);
-sunSprite.scale.set(28, 28, 1);
-sunSprite.position.set(-65, 40, 100);
-scene.add(sunSprite);
+const moonSprite = new THREE.Sprite(moonMaterial);
+moonSprite.scale.set(28, 28, 1);
+moonSprite.position.set(-65, 40, 100);
+scene.add(moonSprite);
+
+// A starfield — soft, gently twinkling points across the upper sky, at a
+// large fixed radius from Darla (recentered on her every frame, the same
+// trick the endless lawn uses) so it always surrounds her no matter how
+// far she wanders into the woods, rather than being left behind at one
+// fixed spot in the world the way the moon currently is.
+function createStarfield() {
+  const starCount = 1200;
+  const radius = 150;
+  const positions = new Float32Array(starCount * 3);
+  const phases = new Float32Array(starCount);
+  const sizes = new Float32Array(starCount);
+
+  for (let i = 0; i < starCount; i++) {
+    let x, y, z, lenSq;
+    do {
+      x = Math.random() * 2 - 1;
+      y = Math.random() * 2 - 1;
+      z = Math.random() * 2 - 1;
+      lenSq = x * x + y * y + z * z;
+    } while (lenSq > 1 || y < 0.15);
+    const len = Math.sqrt(lenSq);
+    positions[i * 3] = (x / len) * radius;
+    positions[i * 3 + 1] = (y / len) * radius;
+    positions[i * 3 + 2] = (z / len) * radius;
+    phases[i] = Math.random() * Math.PI * 2;
+    sizes[i] = 1.5 + Math.random() * 2.5;
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute('phase', new THREE.BufferAttribute(phases, 1));
+  geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+
+  const material = new THREE.ShaderMaterial({
+    uniforms: { uTime: { value: 0 } },
+    vertexShader: `
+      attribute float phase;
+      attribute float size;
+      uniform float uTime;
+      varying float vTwinkle;
+
+      void main() {
+        vTwinkle = 0.55 + 0.45 * sin(uTime * 2.0 + phase * 6.2831);
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        gl_PointSize = size * vTwinkle;
+        gl_Position = projectionMatrix * mvPosition;
+      }
+    `,
+    fragmentShader: `
+      precision mediump float;
+      varying float vTwinkle;
+
+      void main() {
+        vec2 uv = gl_PointCoord - vec2(0.5);
+        float alpha = smoothstep(0.5, 0.0, length(uv)) * vTwinkle;
+        gl_FragColor = vec4(1.0, 1.0, 1.0, alpha);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+
+  const points = new THREE.Points(geometry, material);
+  points.userData.material = material;
+  return points;
+}
+
+const starfield = createStarfield();
+scene.add(starfield);
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
@@ -405,10 +502,12 @@ ballButton.addEventListener('pointerdown', (e) => {
 });
 
 // Poops are left behind in the world, permanently, rather than attached to
-// Darla, so she can walk away and leave them there. Holding the button spawns
-// a quick, slightly randomized scatter of them instead of just one.
+// Darla, so she can walk away and leave them there — well, "permanently"
+// until Mom comes and collects them (see updateMom below). Holding the
+// button spawns a quick, slightly randomized scatter instead of just one.
 let poopSpawnTimer = 0;
 const POOP_SPAWN_INTERVAL = 0.1;
+const poops = [];
 
 function spawnPoop(spread = 1) {
   const behindX = -Math.sin(darla.rotation.y);
@@ -423,6 +522,7 @@ function spawnPoop(spread = 1) {
   );
   poop.rotation.y = Math.random() * Math.PI * 2;
   scene.add(poop);
+  poops.push(poop);
   playPoopSound();
 }
 
@@ -597,6 +697,96 @@ function wrapAngle(angle) {
   return Math.atan2(Math.sin(angle), Math.cos(angle));
 }
 
+// Mom's tiny AI: stand by the fire, and whenever Darla leaves a poop
+// behind, walk over, bend down to collect it, and head back home. Reuses
+// the same "nearest unclaimed target, walk toward it, rotate to face
+// travel direction" idiom as Darla's own click-to-move.
+const MOM_HOME = new THREE.Vector3(mom.position.x, 0, mom.position.z);
+const MOM_WALK_SPEED = 2.6;
+const MOM_PICKUP_DURATION = 0.7;
+const momMoveDir = new THREE.Vector3();
+let momState = 'idle'; // 'idle' | 'walking' | 'pickingUp'
+let momTargetPoop = null;
+let momPickupElapsed = 0;
+
+function resetMomLimbs() {
+  mom.userData.legs.legL.rotation.x = 0;
+  mom.userData.legs.legR.rotation.x = 0;
+  mom.userData.arms.armL.rotation.x = 0;
+  mom.userData.arms.armR.rotation.x = 0;
+}
+
+function updateMom(delta) {
+  if (momState === 'idle') {
+    resetMomLimbs();
+    if (poops.length === 0) return;
+    let nearest = poops[0];
+    let nearestDist = mom.position.distanceTo(nearest.position);
+    for (let i = 1; i < poops.length; i++) {
+      const dist = mom.position.distanceTo(poops[i].position);
+      if (dist < nearestDist) {
+        nearest = poops[i];
+        nearestDist = dist;
+      }
+    }
+    momTargetPoop = nearest;
+    momState = 'walking';
+    return;
+  }
+
+  if (momState === 'walking') {
+    const target = momTargetPoop ? momTargetPoop.position : MOM_HOME;
+    momMoveDir.set(target.x - mom.position.x, 0, target.z - mom.position.z);
+    const dist = momMoveDir.length();
+    if (dist < 0.2) {
+      if (momTargetPoop) {
+        momState = 'pickingUp';
+        momPickupElapsed = 0;
+      } else {
+        momState = 'idle';
+      }
+      return;
+    }
+    momMoveDir.normalize();
+    mom.position.x += momMoveDir.x * MOM_WALK_SPEED * delta;
+    mom.position.z += momMoveDir.z * MOM_WALK_SPEED * delta;
+    mom.position.y = Math.abs(Math.sin(elapsed * 9)) * 0.02;
+    const targetAngle = Math.atan2(momMoveDir.x, momMoveDir.z);
+    mom.rotation.y += wrapAngle(targetAngle - mom.rotation.y) * Math.min(1, delta * 8);
+
+    const stride = elapsed * 10;
+    mom.userData.legs.legL.rotation.x = Math.sin(stride) * 0.5;
+    mom.userData.legs.legR.rotation.x = Math.sin(stride + Math.PI) * 0.5;
+    mom.userData.arms.armL.rotation.x = Math.sin(stride + Math.PI) * 0.35;
+    mom.userData.arms.armR.rotation.x = Math.sin(stride) * 0.35;
+    return;
+  }
+
+  // pickingUp: a quick bend-down-and-back-up while the poop disappears
+  resetMomLimbs();
+  momPickupElapsed += delta;
+  const t = Math.min(momPickupElapsed / MOM_PICKUP_DURATION, 1);
+  const bend = Math.sin(t * Math.PI) * 0.55;
+  mom.rotation.x = bend;
+  mom.position.y = -bend * 0.15;
+  if (t >= 1) {
+    mom.rotation.x = 0;
+    mom.position.y = 0;
+    scene.remove(momTargetPoop);
+    momTargetPoop.traverse((child) => {
+      if (child.isMesh) child.geometry.dispose();
+    });
+    const idx = poops.indexOf(momTargetPoop);
+    if (idx !== -1) poops.splice(idx, 1);
+    momTargetPoop = null;
+    // If there's another poop waiting, go idle so the branch above picks
+    // the nearest one immediately next frame instead of detouring home
+    // first — only actually heads back to MOM_HOME once there's nothing
+    // left to clean up.
+    momState = poops.length > 0 ? 'idle' : 'walking';
+  }
+}
+
 function updateMovement(delta) {
   camera.getWorldDirection(cameraForward);
   cameraForward.y = 0;
@@ -731,9 +921,19 @@ function animate() {
   const baseY = updateWalkCycle(isMoving, isJumping, isJumping && jumpHeld);
   darla.position.y = baseY + jumpY;
 
+  updateMom(delta);
+
   // tail wag + head sway so there's life on screen even standing still
   darla.userData.tail.rotation.y = Math.sin(elapsed * 5) * 0.5;
   darla.userData.head.rotation.y = Math.sin(elapsed * 0.7) * 0.08;
+
+  // a gentle idle sway for Mom, standing by the fire — only while she's
+  // actually idle, so it doesn't fight with her walk/bend-down animation
+  if (momState === 'idle') {
+    mom.userData.torso.rotation.y = Math.sin(elapsed * 0.4) * 0.04;
+    mom.userData.head.rotation.y = Math.sin(elapsed * 0.55 + 1) * 0.06;
+    mom.userData.hairBack.rotation.z = Math.sin(elapsed * 0.9) * 0.02;
+  }
 
   if (clickMarker.visible) {
     clickMarker.scale.setScalar(1 + Math.sin(elapsed * 8) * 0.08);
@@ -782,7 +982,7 @@ function animate() {
   controls.target.add(followOffset);
   camera.position.add(followOffset);
 
-  sunSprite.position.y = 40 + Math.sin(elapsed * 0.8) * 0.6;
+  moonSprite.position.y = 40 + Math.sin(elapsed * 0.8) * 0.6;
 
   // fire pit flicker
   const firePit = yard.userData.firePit;
@@ -802,6 +1002,8 @@ function animate() {
   yard.userData.fireplaceLight.intensity =
     0.85 + Math.sin(elapsed * 18) * 0.15 + Math.random() * 0.12;
 
+  grassMaterial.uniforms.uTime.value = elapsed;
+
   updateTreeChunks();
 
   // The lawn is a large-but-finite plane (its speckle texture tiles
@@ -810,6 +1012,9 @@ function animate() {
   // woods stream in endlessly around her, walking past the plane's fixed
   // edge would drop her off the grass into bare background color.
   yard.userData.lawn.position.set(darla.position.x, 0, darla.position.z);
+
+  starfield.position.set(darla.position.x, 0, darla.position.z);
+  starfield.userData.material.uniforms.uTime.value = elapsed;
 
   controls.update();
   composer.render();
