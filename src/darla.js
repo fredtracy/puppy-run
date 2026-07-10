@@ -219,9 +219,133 @@ export function createDarla() {
   tailGroup.add(tail);
   darla.add(tailGroup);
 
+  const dress = createDress();
+  dress.visible = false;
+  darla.add(dress);
+
   darla.userData.legs = { legFR, legFL, legBR, legBL };
   darla.userData.tail = tailGroup;
   darla.userData.head = head;
+  darla.userData.dress = dress;
 
   return darla;
+}
+
+function buildFlower() {
+  const flower = new THREE.Group();
+  const petalMat = new THREE.MeshStandardMaterial({ color: 0xf6b8cf, roughness: 0.6 });
+  const petalGeo = new THREE.SphereGeometry(0.022, 8, 6);
+  const petalCount = 6;
+  for (let i = 0; i < petalCount; i++) {
+    const angle = (i / petalCount) * Math.PI * 2;
+    const petal = mesh(petalGeo, petalMat);
+    petal.position.set(Math.cos(angle) * 0.02, 0, Math.sin(angle) * 0.02);
+    petal.scale.set(1, 0.4, 1);
+    flower.add(petal);
+  }
+  const centerMat = new THREE.MeshStandardMaterial({ color: 0xdff28a, roughness: 0.6 });
+  const center = mesh(new THREE.SphereGeometry(0.014, 8, 6), centerMat);
+  center.scale.set(1, 0.5, 1);
+  flower.add(center);
+  return flower;
+}
+
+// A toggle-able white top + pink-and-mint tutu with a flower accent,
+// matching the reference photo. Hidden by default (darla.userData.dress).
+function createDress() {
+  const dress = new THREE.Group();
+
+  // Shirt is short and shifted toward the chest so it doesn't peek out
+  // through/behind the tutu.
+  const shirtMat = new THREE.MeshStandardMaterial({ color: 0xf7f6f2, roughness: 0.7 });
+  const shirt = mesh(new THREE.CapsuleGeometry(0.16, 0.16, 6, 12), shirtMat);
+  shirt.rotation.x = Math.PI / 2;
+  shirt.position.set(0, 0.42, 0.14);
+  dress.add(shirt);
+
+  // A thin waistband encircling her girth, plus tulle that flares backward
+  // and down over her hips toward her tail — a symmetric donut around her
+  // reads as an innertube; a real tutu drapes back over the haunches.
+  const tutuGroup = new THREE.Group();
+  tutuGroup.position.set(0, 0.42, -0.02);
+
+  const bandMat = new THREE.MeshStandardMaterial({ color: 0xf6a8c6, roughness: 0.6 });
+  const band = mesh(new THREE.TorusGeometry(0.165, 0.022, 10, 24), bandMat);
+  tutuGroup.add(band);
+
+  // The attaching end sits at the pivot's own origin (by shifting the shape
+  // -height/2 inside the pivot before any rotation), pinning it exactly at
+  // the band no matter the tilt angle. Using a frustum (different top/bottom
+  // radii) instead of a true cone means the attaching end is already as
+  // wide as the band, instead of starting from a zero-radius point and
+  // leaving a gap where her body shows through underneath.
+  function buildSkirtFrill(topRadius, bottomRadius, height, material, tilt) {
+    const pivot = new THREE.Group();
+    const shape = mesh(
+      new THREE.CylinderGeometry(topRadius, bottomRadius, height, 16, 1, true),
+      material
+    );
+    shape.position.y = -height / 2;
+    pivot.add(shape);
+    pivot.rotation.x = tilt;
+    return pivot;
+  }
+
+  const tulleMat = new THREE.MeshStandardMaterial({
+    color: 0xf6a8c6,
+    roughness: 0.6,
+    transparent: true,
+    opacity: 0.85,
+    side: THREE.DoubleSide,
+  });
+  const skirtOuter = buildSkirtFrill(0.16, 0.28, 0.22, tulleMat, Math.PI / 2);
+  tutuGroup.add(skirtOuter);
+
+  const ribbonMat = new THREE.MeshStandardMaterial({ color: 0x8fbf6f, roughness: 0.5 });
+  const ribbon = mesh(new THREE.TorusGeometry(0.165, 0.012, 8, 20), ribbonMat);
+  tutuGroup.add(ribbon);
+
+  const flower = buildFlower();
+  flower.position.set(0.1, 0.1, 0.1);
+  tutuGroup.add(flower);
+
+  dress.add(tutuGroup);
+
+  return dress;
+}
+
+const poopMat = new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 0.8 });
+const poopEyeMat = new THREE.MeshStandardMaterial({ color: 0x1c1712, roughness: 0.3 });
+const poopEyeWhiteMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4 });
+
+// A classic soft-serve swirl, cartoon-poop-emoji style, with a couple of
+// cute eyes because that's funnier than a plain pile.
+export function createPoop() {
+  const group = new THREE.Group();
+
+  const tiers = [
+    { r: 0.12, h: 0.09, y: 0.045, offset: 0 },
+    { r: 0.09, h: 0.08, y: 0.12, offset: 0.015 },
+    { r: 0.06, h: 0.07, y: 0.185, offset: -0.012 },
+    { r: 0.03, h: 0.05, y: 0.235, offset: 0.008 },
+  ];
+  tiers.forEach(({ r, h, y, offset }, i) => {
+    const rTop = i === tiers.length - 1 ? r * 0.3 : tiers[i + 1]?.r ?? r * 0.5;
+    const cone = mesh(new THREE.CylinderGeometry(rTop, r, h, 10), poopMat);
+    cone.position.set(offset, y, 0);
+    group.add(cone);
+  });
+
+  const eyeWhiteGeo = new THREE.SphereGeometry(0.018, 8, 6);
+  const eyeGeo = new THREE.SphereGeometry(0.009, 8, 6);
+  [-1, 1].forEach((side) => {
+    const white = mesh(eyeWhiteGeo, poopEyeWhiteMat);
+    white.position.set(side * 0.025, 0.15, 0.055);
+    group.add(white);
+    const pupil = mesh(eyeGeo, poopEyeMat);
+    pupil.position.set(side * 0.025, 0.15, 0.066);
+    group.add(pupil);
+  });
+
+  return group;
 }

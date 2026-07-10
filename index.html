@@ -50,10 +50,9 @@
       #touch-controls button[data-action='jump']:active {
         background: rgba(255, 197, 74, 0.8);
       }
-      #moo-button {
+      .action-button {
         position: fixed;
         right: 20px;
-        bottom: 20px;
         z-index: 10;
         width: 64px;
         height: 64px;
@@ -66,14 +65,44 @@
         user-select: none;
         -webkit-tap-highlight-color: transparent;
       }
-      #moo-button:active {
+      .action-button:active {
         background: rgba(20, 20, 20, 0.7);
       }
-      @media (hover: hover) and (pointer: fine) {
-        #touch-controls,
-        #moo-button {
-          display: none;
-        }
+      .action-button:disabled,
+      .action-button.disabled {
+        opacity: 0.35;
+        filter: grayscale(1);
+      }
+      .action-button.aiming {
+        box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.85);
+      }
+      #moo-button {
+        bottom: 20px;
+      }
+      #poop-button {
+        bottom: 94px;
+      }
+      #dress-button {
+        bottom: 168px;
+      }
+      #bark-button {
+        bottom: 242px;
+      }
+      #ball-button {
+        bottom: 316px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #ball-button::after {
+        content: '';
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        background: radial-gradient(circle at 35% 30%, #ff6b5b, #d93025 55%, #8f1f16 100%);
+      }
+      #ball-button:active::after {
+        background: radial-gradient(circle at 35% 30%, #ff6b5b, #b5251a 55%, #7a1a12 100%);
       }
     </style>
   </head>
@@ -85,7 +114,11 @@
       <button data-key="KeyD" style="--col:3;--row:2">&#9654;</button>
       <button data-action="jump" style="--col:2;--row:2">&#8593;</button>
     </div>
-    <button id="moo-button">&#128012;</button>
+    <button id="moo-button" class="action-button">&#128046;</button>
+    <button id="poop-button" class="action-button">&#128169;</button>
+    <button id="dress-button" class="action-button">&#128087;</button>
+    <button id="bark-button" class="action-button">&#128021;</button>
+    <button id="ball-button" class="action-button"></button>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

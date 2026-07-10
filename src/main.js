@@ -5,9 +5,16 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { createDarla } from './darla.js';
-import { createYard } from './yard.js';
-import { initAudio, startMusic, playJumpSound, playMooSound } from './audio.js';
+import { createDarla, createPoop } from './darla.js';
+import { createYard, createTreeChunk, CHUNK_SIZE } from './yard.js';
+import {
+  initAudio,
+  startMusic,
+  playJumpSound,
+  playMooSound,
+  playPoopSound,
+  playBarkSound,
+} from './audio.js';
 
 // Browsers block audio until a user gesture — kick it off on the first
 // keypress or tap/click, whichever comes first.
@@ -69,12 +76,55 @@ const fillLight = new THREE.DirectionalLight(0xcfe8ff, 0.4);
 fillLight.position.set(-4, 2, -3);
 scene.add(fillLight);
 
-// Yard: lawn, house, and tree line
-scene.add(createYard());
+// Yard: lawn, house, tree line, and fire pit
+const yard = createYard();
+scene.add(yard);
 
 // Darla
 const darla = createDarla();
 scene.add(darla);
+
+// Endless woods: trees stream in as chunks around Darla's current position
+// (each chunk seeded so revisiting it looks the same) and unload once far
+// behind her, so she can walk in any direction indefinitely without the
+// tree count growing forever.
+const CHUNK_LOAD_RADIUS = 3;
+const CHUNK_UNLOAD_RADIUS = 4;
+const loadedChunks = new Map();
+
+function updateTreeChunks() {
+  const currentCx = Math.floor(darla.position.x / CHUNK_SIZE);
+  const currentCz = Math.floor(darla.position.z / CHUNK_SIZE);
+
+  for (let dx = -CHUNK_LOAD_RADIUS; dx <= CHUNK_LOAD_RADIUS; dx++) {
+    for (let dz = -CHUNK_LOAD_RADIUS; dz <= CHUNK_LOAD_RADIUS; dz++) {
+      const cx = currentCx + dx;
+      const cz = currentCz + dz;
+      const key = `${cx},${cz}`;
+      if (!loadedChunks.has(key)) {
+        const chunk = createTreeChunk(cx, cz);
+        scene.add(chunk);
+        loadedChunks.set(key, chunk);
+      }
+    }
+  }
+
+  for (const [key, chunk] of loadedChunks) {
+    const [cx, cz] = key.split(',').map(Number);
+    if (
+      Math.abs(cx - currentCx) > CHUNK_UNLOAD_RADIUS ||
+      Math.abs(cz - currentCz) > CHUNK_UNLOAD_RADIUS
+    ) {
+      scene.remove(chunk);
+      chunk.traverse((child) => {
+        if (child.isMesh) child.geometry.dispose();
+      });
+      loadedChunks.delete(key);
+    }
+  }
+}
+
+updateTreeChunks();
 
 // A cheerful smiling sun, hand-drawn onto a canvas texture and billboarded
 // so it always faces the camera
@@ -154,23 +204,22 @@ function makeSunTexture() {
   return texture;
 }
 
-// A real place in the sky, high above the tree line. Rendered without depth
-// testing (so the roof/trees can never block it) and exempt from fog (so it
-// stays bright instead of fading to the fog color at distance) — those were
-// the two actual bugs that made it "disappear" before, not its being in
-// world space.
+// A real place in the sky, genuinely far away rather than just "high up" —
+// at this distance, normal depth testing keeps it correctly behind Darla,
+// the roof, and trees whenever they're actually in the way (as they should
+// be), while it still reads as impossibly distant everywhere else. Disabling
+// depth testing (an earlier attempt at fixing occlusion) was the wrong fix —
+// it made the sun draw on top of literally everything, including Darla.
+// Still exempt from fog so it doesn't fade to the fog color at this range.
 const sunMaterial = new THREE.SpriteMaterial({
   map: makeSunTexture(),
   transparent: true,
   toneMapped: false,
-  depthTest: false,
-  depthWrite: false,
   fog: false,
 });
 const sunSprite = new THREE.Sprite(sunMaterial);
-sunSprite.scale.set(7, 7, 1);
-sunSprite.renderOrder = -1;
-sunSprite.position.set(-16, 20, -26);
+sunSprite.scale.set(28, 28, 1);
+sunSprite.position.set(-65, 40, 100);
 scene.add(sunSprite);
 
 const composer = new EffectComposer(renderer);
@@ -208,30 +257,145 @@ document.querySelectorAll('#touch-controls button[data-key]').forEach((button) =
   button.addEventListener('pointerleave', release);
 });
 
-document.querySelector('#touch-controls button[data-action="jump"]').addEventListener(
-  'pointerdown',
-  (e) => {
-    e.preventDefault();
-    triggerJump();
-  }
-);
+const jumpButtonEl = document.querySelector('#touch-controls button[data-action="jump"]');
+jumpButtonEl.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  jumpHeld = true;
+  triggerJump();
+});
+['pointerup', 'pointercancel', 'pointerleave'].forEach((evt) => {
+  jumpButtonEl.addEventListener(evt, () => {
+    jumpHeld = false;
+  });
+});
 
-// Space bar jumps, Enter makes her moo
+// Space bar jumps (hold to fly), Enter makes her moo, Backspace makes her poop
 window.addEventListener('keydown', (e) => {
-  if (e.code === 'Space' && !e.repeat) {
+  if (e.code === 'Space') {
     e.preventDefault();
-    triggerJump();
+    jumpHeld = true;
+    if (!e.repeat) triggerJump();
   }
   if (e.code === 'Enter' && !e.repeat) {
     e.preventDefault();
     playMooSound();
   }
+  if (e.code === 'Backspace' && !e.repeat) {
+    e.preventDefault();
+    spawnPoop();
+  }
+});
+window.addEventListener('keyup', (e) => {
+  if (e.code === 'Space') jumpHeld = false;
 });
 
 document.getElementById('moo-button').addEventListener('pointerdown', (e) => {
   e.preventDefault();
   playMooSound();
 });
+
+let poopButtonHeld = false;
+let poopHoldStart = 0;
+const poopButton = document.getElementById('poop-button');
+poopButton.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  poopButtonHeld = true;
+  poopHoldStart = elapsed;
+  poopSpawnTimer = 0;
+});
+['pointerup', 'pointercancel', 'pointerleave'].forEach((evt) => {
+  poopButton.addEventListener(evt, () => {
+    poopButtonHeld = false;
+  });
+});
+
+document.getElementById('dress-button').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  darla.userData.dress.visible = !darla.userData.dress.visible;
+});
+
+document.getElementById('bark-button').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  playBarkSound();
+});
+
+// Fetch: click the ball button to arm a throw, then click/tap a spot in the
+// yard to throw it there (clamped to a reasonable distance from Darla).
+// Darla walks to it (reusing the click-to-move system); the button stays
+// greyed out until she arrives.
+const ballButton = document.getElementById('ball-button');
+const ballMat = new THREE.MeshStandardMaterial({ color: 0xd93025, roughness: 0.55 });
+const ball = new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 10), ballMat);
+ball.castShadow = true;
+ball.visible = false;
+scene.add(ball);
+
+let ballState = 'idle'; // 'idle' | 'flying' | 'thrown'
+let ballAiming = false;
+let ballThrowElapsed = 0;
+const BALL_THROW_DURATION = 0.55;
+const MAX_THROW_DIST = 8;
+const ballThrowStart = new THREE.Vector3();
+const ballThrowTarget = new THREE.Vector3();
+
+function throwBallTo(x, z) {
+  if (ballState !== 'idle') return;
+  ballState = 'flying';
+  ballThrowElapsed = 0;
+  ballButton.disabled = true;
+  ballButton.classList.add('disabled');
+
+  const dx = x - darla.position.x;
+  const dz = z - darla.position.z;
+  const dist = Math.hypot(dx, dz);
+  const scale = dist > MAX_THROW_DIST ? MAX_THROW_DIST / dist : 1;
+  const tx = THREE.MathUtils.clamp(
+    darla.position.x + dx * scale,
+    YARD_BOUNDS.xMin,
+    YARD_BOUNDS.xMax
+  );
+  const tz = THREE.MathUtils.clamp(
+    darla.position.z + dz * scale,
+    YARD_BOUNDS.zMin,
+    YARD_BOUNDS.zMax
+  );
+
+  // Falls from directly above the landing spot, like the player tossed it
+  // in from off-screen, rather than Darla lobbing it herself.
+  ballThrowStart.set(tx, 7, tz);
+  ballThrowTarget.set(tx, 0.06, tz);
+  ball.visible = true;
+  ball.position.copy(ballThrowStart);
+}
+
+ballButton.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  if (ballState !== 'idle') return;
+  ballAiming = !ballAiming;
+  ballButton.classList.toggle('aiming', ballAiming);
+});
+
+// Poops are left behind in the world, permanently, rather than attached to
+// Darla, so she can walk away and leave them there. Holding the button spawns
+// a quick, slightly randomized scatter of them instead of just one.
+let poopSpawnTimer = 0;
+const POOP_SPAWN_INTERVAL = 0.1;
+
+function spawnPoop(spread = 1) {
+  const behindX = -Math.sin(darla.rotation.y);
+  const behindZ = -Math.cos(darla.rotation.y);
+  const jitterX = (Math.random() - 0.5) * 0.5 * spread;
+  const jitterZ = (Math.random() - 0.5) * 0.35 * spread;
+  const poop = createPoop();
+  poop.position.set(
+    darla.position.x + behindX * 0.35 + jitterX,
+    0,
+    darla.position.z + behindZ * 0.35 + jitterZ
+  );
+  poop.rotation.y = Math.random() * Math.PI * 2;
+  scene.add(poop);
+  playPoopSound();
+}
 
 // Click/tap-to-move: click the lawn and Darla walks there, isometric-game
 // style. A short drag is treated as an orbit-camera gesture, not a click.
@@ -276,17 +440,102 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 
   const point = getGroundPoint(e.clientX, e.clientY);
   if (!point) return;
-  moveTarget = new THREE.Vector3(
-    THREE.MathUtils.clamp(point.x, YARD_BOUNDS.xMin, YARD_BOUNDS.xMax),
-    0,
-    THREE.MathUtils.clamp(point.z, YARD_BOUNDS.zMin, YARD_BOUNDS.zMax)
-  );
+
+  if (ballAiming) {
+    ballAiming = false;
+    ballButton.classList.remove('aiming');
+    throwBallTo(point.x, point.z);
+    return;
+  }
+
+  const clamped = clampTargetPoint(point.x, point.z);
+  moveTarget = new THREE.Vector3(clamped.x, 0, clamped.z);
   clickMarker.position.set(moveTarget.x, 0.02, moveTarget.z);
   clickMarker.visible = true;
 });
 
-const WALK_SPEED = 2.6;
+const WALK_SPEED = 4.2;
 const YARD_BOUNDS = { xMin: -9, xMax: 9, zMin: -4, zMax: 14 };
+
+// The house is a solid obstacle you walk around, except through the
+// doorway, which leads to the free-roam interior. INTERIOR_BOUNDS covers
+// the whole interior floor (not just the doorway's width) so she isn't
+// funneled back out the moment she steps sideways once inside — that's
+// tracked with the `insideHouse` flag below rather than being inferred
+// from position each frame, since "am I inside" and "is this point inside
+// the wall footprint" are different questions.
+const DOORWAY_X = { min: -0.3, max: 1.7 };
+const INTERIOR_BOUNDS = { xMin: -5.2, xMax: 5.2, zMin: -14.1, zMax: -7.5 };
+const HOUSE_SOLID = { xMin: -6.3, xMax: 6.3, zMin: -14.9, zMax: -7.5 };
+
+let insideHouse = false;
+
+function pushOutOfHouse(x, z) {
+  if (
+    x <= HOUSE_SOLID.xMin ||
+    x >= HOUSE_SOLID.xMax ||
+    z <= HOUSE_SOLID.zMin ||
+    z >= HOUSE_SOLID.zMax
+  ) {
+    return { x, z };
+  }
+  const distLeft = x - HOUSE_SOLID.xMin;
+  const distRight = HOUSE_SOLID.xMax - x;
+  const distFront = HOUSE_SOLID.zMax - z;
+  const distBack = z - HOUSE_SOLID.zMin;
+  const minDist = Math.min(distLeft, distRight, distFront, distBack);
+  if (minDist === distFront) return { x, z: HOUSE_SOLID.zMax };
+  if (minDist === distBack) return { x, z: HOUSE_SOLID.zMin };
+  if (minDist === distLeft) return { x: HOUSE_SOLID.xMin, z };
+  return { x: HOUSE_SOLID.xMax, z };
+}
+
+// Used for the per-frame movement step: has side effects (flips
+// insideHouse) since it tracks Darla's actual physical journey through
+// the doorway, in either direction.
+function clampToWalkable(x, z) {
+  if (insideHouse) {
+    const exiting =
+      z > INTERIOR_BOUNDS.zMax && x >= DOORWAY_X.min && x <= DOORWAY_X.max;
+    if (!exiting) {
+      return {
+        x: THREE.MathUtils.clamp(x, INTERIOR_BOUNDS.xMin, INTERIOR_BOUNDS.xMax),
+        z: THREE.MathUtils.clamp(z, INTERIOR_BOUNDS.zMin, INTERIOR_BOUNDS.zMax),
+      };
+    }
+    insideHouse = false;
+  }
+
+  if (
+    z <= HOUSE_SOLID.zMax &&
+    z > HOUSE_SOLID.zMin &&
+    x >= DOORWAY_X.min &&
+    x <= DOORWAY_X.max
+  ) {
+    insideHouse = true;
+    return {
+      x: THREE.MathUtils.clamp(x, INTERIOR_BOUNDS.xMin, INTERIOR_BOUNDS.xMax),
+      z: THREE.MathUtils.clamp(z, INTERIOR_BOUNDS.zMin, INTERIOR_BOUNDS.zMax),
+    };
+  }
+
+  // No outer boundary anymore — she can walk endlessly in any direction;
+  // the house is the only obstacle out here.
+  return pushOutOfHouse(x, z);
+}
+
+// Used for picking a click-to-move destination: a stateless best-guess
+// clamp (no insideHouse side effects) — the actual per-frame walk there
+// still enforces the doorway properly as she physically approaches it.
+function clampTargetPoint(x, z) {
+  if (z <= HOUSE_SOLID.zMax) {
+    return {
+      x: THREE.MathUtils.clamp(x, INTERIOR_BOUNDS.xMin, INTERIOR_BOUNDS.xMax),
+      z: THREE.MathUtils.clamp(z, INTERIOR_BOUNDS.zMin, INTERIOR_BOUNDS.zMax),
+    };
+  }
+  return pushOutOfHouse(x, z);
+}
 
 const cameraForward = new THREE.Vector3();
 const cameraRight = new THREE.Vector3();
@@ -332,16 +581,13 @@ function updateMovement(delta) {
   const isMoving = moveDir.lengthSq() > 0.0001;
   if (isMoving) {
     moveDir.normalize();
-    darla.position.x = THREE.MathUtils.clamp(
-      darla.position.x + moveDir.x * WALK_SPEED * delta,
-      YARD_BOUNDS.xMin,
-      YARD_BOUNDS.xMax
+    const speed = ballState === 'thrown' ? WALK_SPEED * 1.6 : WALK_SPEED;
+    const clamped = clampToWalkable(
+      darla.position.x + moveDir.x * speed * delta,
+      darla.position.z + moveDir.z * speed * delta
     );
-    darla.position.z = THREE.MathUtils.clamp(
-      darla.position.z + moveDir.z * WALK_SPEED * delta,
-      YARD_BOUNDS.zMin,
-      YARD_BOUNDS.zMax
-    );
+    darla.position.x = clamped.x;
+    darla.position.z = clamped.z;
 
     const targetAngle = Math.atan2(moveDir.x, moveDir.z);
     darla.rotation.y += wrapAngle(targetAngle - darla.rotation.y) * Math.min(1, delta * 10);
@@ -350,8 +596,16 @@ function updateMovement(delta) {
   return isMoving;
 }
 
-function updateWalkCycle(isMoving, jumping) {
+function updateWalkCycle(isMoving, jumping, flying) {
   const legs = darla.userData.legs;
+  if (flying) {
+    const kick = elapsed * 14;
+    legs.legFR.rotation.x = Math.sin(kick) * 0.6 - 0.2;
+    legs.legFL.rotation.x = Math.sin(kick + Math.PI) * 0.6 - 0.2;
+    legs.legBR.rotation.x = Math.sin(kick + Math.PI) * 0.5 + 0.3;
+    legs.legBL.rotation.x = Math.sin(kick) * 0.5 + 0.3;
+    return 0;
+  }
   if (jumping) {
     legs.legFR.rotation.x = -0.5;
     legs.legFL.rotation.x = -0.5;
@@ -360,12 +614,12 @@ function updateWalkCycle(isMoving, jumping) {
     return 0;
   }
   if (isMoving) {
-    const stride = elapsed * 12;
-    legs.legFR.rotation.x = Math.sin(stride) * 0.45;
-    legs.legBL.rotation.x = Math.sin(stride) * 0.45;
-    legs.legFL.rotation.x = Math.sin(stride + Math.PI) * 0.45;
-    legs.legBR.rotation.x = Math.sin(stride + Math.PI) * 0.45;
-    return Math.abs(Math.sin(stride * 2)) * 0.025;
+    const stride = elapsed * (ballState === 'thrown' ? 19 * 1.6 : 19);
+    legs.legFR.rotation.x = Math.sin(stride) * 0.55;
+    legs.legBL.rotation.x = Math.sin(stride) * 0.55;
+    legs.legFL.rotation.x = Math.sin(stride + Math.PI) * 0.55;
+    legs.legBR.rotation.x = Math.sin(stride + Math.PI) * 0.55;
+    return Math.abs(Math.sin(stride * 2)) * 0.035;
   }
   legs.legFR.rotation.x = 0;
   legs.legFL.rotation.x = 0;
@@ -374,12 +628,16 @@ function updateWalkCycle(isMoving, jumping) {
   return Math.sin(elapsed * 1.6) * 0.01;
 }
 
-// Jump — a simple gravity arc triggered by space bar or the on-screen button
+// Jump — a normal gravity arc triggered by space bar or the on-screen
+// button. Holding it doesn't change the height or duration at all — it
+// only switches her legs into the reindeer-kick animation for however long
+// the (otherwise ordinary) jump lasts.
 const JUMP_SPEED = 3.4;
 const GRAVITY = 9;
 let isJumping = false;
 let jumpVelocity = 0;
 let jumpHeight = 0;
+let jumpHeld = false;
 
 function triggerJump() {
   if (isJumping) return;
@@ -418,7 +676,7 @@ function animate() {
 
   const isMoving = updateMovement(delta);
   const jumpY = updateJump(delta);
-  const baseY = updateWalkCycle(isMoving, isJumping);
+  const baseY = updateWalkCycle(isMoving, isJumping, isJumping && jumpHeld);
   darla.position.y = baseY + jumpY;
 
   // tail wag + head sway so there's life on screen even standing still
@@ -427,6 +685,40 @@ function animate() {
 
   if (clickMarker.visible) {
     clickMarker.scale.setScalar(1 + Math.sin(elapsed * 8) * 0.08);
+  }
+
+  if (poopButtonHeld) {
+    poopSpawnTimer -= delta;
+    if (poopSpawnTimer <= 0) {
+      const heldDuration = elapsed - poopHoldStart;
+      const spread = 1 + Math.min(heldDuration / 1.5, 1) * 2; // ramps 1x -> 3x over 1.5s
+      spawnPoop(spread);
+      poopSpawnTimer = POOP_SPAWN_INTERVAL;
+    }
+  }
+
+  if (ballState === 'flying') {
+    ballThrowElapsed += delta;
+    const t = Math.min(ballThrowElapsed / BALL_THROW_DURATION, 1);
+    const fallT = t * t; // ease-in, accelerating like it's actually falling
+    ball.position.x = ballThrowTarget.x;
+    ball.position.z = ballThrowTarget.z;
+    ball.position.y = THREE.MathUtils.lerp(ballThrowStart.y, ballThrowTarget.y, fallT);
+    if (t >= 1) {
+      ballState = 'thrown';
+      moveTarget = new THREE.Vector3(ballThrowTarget.x, 0, ballThrowTarget.z);
+      clickMarker.visible = false;
+    }
+  } else if (ballState === 'thrown') {
+    const dx = darla.position.x - ball.position.x;
+    const dz = darla.position.z - ball.position.z;
+    if (Math.hypot(dx, dz) < 0.4) {
+      ballState = 'idle';
+      ball.visible = false;
+      playBarkSound();
+      ballButton.disabled = false;
+      ballButton.classList.remove('disabled');
+    }
   }
 
   // camera follows Darla, keeping the same relative angle/distance the
@@ -438,8 +730,27 @@ function animate() {
   controls.target.add(followOffset);
   camera.position.add(followOffset);
 
-  sunSprite.position.y = 20 + Math.sin(elapsed * 0.8) * 0.2;
-  sunSprite.material.rotation = elapsed * 0.05;
+  sunSprite.position.y = 40 + Math.sin(elapsed * 0.8) * 0.6;
+
+  // fire pit flicker
+  const firePit = yard.userData.firePit;
+  firePit.userData.flames.children.forEach((flame, i) => {
+    const flicker = Math.sin(elapsed * (14 + i * 3)) * 0.15 + Math.random() * 0.1;
+    flame.scale.set(1 + flicker * 0.3, 1 + flicker, 1 + flicker * 0.3);
+  });
+  firePit.userData.light.intensity = 1.1 + Math.sin(elapsed * 17) * 0.2 + Math.random() * 0.15;
+
+  yard.userData.fanBlades.rotation.y = elapsed * 6;
+
+  // interior fireplace flicker
+  yard.userData.fireplaceFlames.children.forEach((flame, i) => {
+    const flicker = Math.sin(elapsed * (15 + i * 3)) * 0.15 + Math.random() * 0.1;
+    flame.scale.set(1 + flicker * 0.3, 1 + flicker, 1 + flicker * 0.3);
+  });
+  yard.userData.fireplaceLight.intensity =
+    0.85 + Math.sin(elapsed * 18) * 0.15 + Math.random() * 0.12;
+
+  updateTreeChunks();
 
   controls.update();
   composer.render();
