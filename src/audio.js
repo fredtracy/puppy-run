@@ -69,7 +69,7 @@ export function playMooSound() {
     source.buffer = buffer;
     source.playbackRate.value = 2;
     const gain = audioCtx.createGain();
-    gain.gain.value = 0.56;
+    gain.gain.value = 0.39;
     source.connect(gain);
     gain.connect(audioCtx.destination);
     source.start();
