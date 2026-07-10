@@ -470,15 +470,36 @@ const HOUSE_SOLID = { xMin: -6.3, xMax: 6.3, zMin: -14.9, zMax: -7.5 };
 
 let insideHouse = false;
 
-function pushOutOfHouse(x, z) {
-  if (
-    x <= HOUSE_SOLID.xMin ||
-    x >= HOUSE_SOLID.xMax ||
-    z <= HOUSE_SOLID.zMin ||
-    z >= HOUSE_SOLID.zMax
-  ) {
-    return { x, z };
-  }
+function isInHouseFootprint(x, z) {
+  return (
+    x > HOUSE_SOLID.xMin &&
+    x < HOUSE_SOLID.xMax &&
+    z > HOUSE_SOLID.zMin &&
+    z < HOUSE_SOLID.zMax
+  );
+}
+
+// Resolves a per-frame move against the house as a solid box using
+// axis-separated sliding collision: try the full move, then each axis on
+// its own, keeping whichever axes don't land inside the footprint. This is
+// what lets Darla slide smoothly along a wall she's walking beside. The old
+// approach snapped straight to whichever edge was numerically nearest the
+// candidate point, which — especially near a corner, or approaching at a
+// shallow angle — could be a different wall than the one she was actually
+// pressed up against, yanking her sideways into the house instead of
+// blocking just the axis that was actually obstructed.
+function pushOutOfHouse(prevX, prevZ, x, z) {
+  if (!isInHouseFootprint(x, z)) return { x, z };
+  if (!isInHouseFootprint(x, prevZ)) return { x, z: prevZ };
+  if (!isInHouseFootprint(prevX, z)) return { x: prevX, z };
+  return { x: prevX, z: prevZ };
+}
+
+// Used only for picking a click-to-move destination, where there's no
+// "previous position" to slide from — just projects an arbitrary clicked
+// point to the nearest valid point outside the house footprint.
+function nearestPointOutsideHouse(x, z) {
+  if (!isInHouseFootprint(x, z)) return { x, z };
   const distLeft = x - HOUSE_SOLID.xMin;
   const distRight = HOUSE_SOLID.xMax - x;
   const distFront = HOUSE_SOLID.zMax - z;
@@ -493,7 +514,7 @@ function pushOutOfHouse(x, z) {
 // Used for the per-frame movement step: has side effects (flips
 // insideHouse) since it tracks Darla's actual physical journey through
 // the doorway, in either direction.
-function clampToWalkable(x, z) {
+function clampToWalkable(prevX, prevZ, x, z) {
   if (insideHouse) {
     const exiting =
       z > INTERIOR_BOUNDS.zMax && x >= DOORWAY_X.min && x <= DOORWAY_X.max;
@@ -521,20 +542,20 @@ function clampToWalkable(x, z) {
 
   // No outer boundary anymore — she can walk endlessly in any direction;
   // the house is the only obstacle out here.
-  return pushOutOfHouse(x, z);
+  return pushOutOfHouse(prevX, prevZ, x, z);
 }
 
 // Used for picking a click-to-move destination: a stateless best-guess
 // clamp (no insideHouse side effects) — the actual per-frame walk there
 // still enforces the doorway properly as she physically approaches it.
 function clampTargetPoint(x, z) {
-  if (z <= HOUSE_SOLID.zMax) {
+  if (isInHouseFootprint(x, z)) {
     return {
       x: THREE.MathUtils.clamp(x, INTERIOR_BOUNDS.xMin, INTERIOR_BOUNDS.xMax),
       z: THREE.MathUtils.clamp(z, INTERIOR_BOUNDS.zMin, INTERIOR_BOUNDS.zMax),
     };
   }
-  return pushOutOfHouse(x, z);
+  return nearestPointOutsideHouse(x, z);
 }
 
 const cameraForward = new THREE.Vector3();
@@ -583,6 +604,8 @@ function updateMovement(delta) {
     moveDir.normalize();
     const speed = ballState === 'thrown' ? WALK_SPEED * 1.6 : WALK_SPEED;
     const clamped = clampToWalkable(
+      darla.position.x,
+      darla.position.z,
       darla.position.x + moveDir.x * speed * delta,
       darla.position.z + moveDir.z * speed * delta
     );
@@ -751,6 +774,13 @@ function animate() {
     0.85 + Math.sin(elapsed * 18) * 0.15 + Math.random() * 0.12;
 
   updateTreeChunks();
+
+  // The lawn is a large-but-finite plane (its speckle texture tiles
+  // seamlessly via RepeatWrapping) so it can just follow Darla around
+  // instead of needing genuinely infinite geometry — otherwise, since the
+  // woods stream in endlessly around her, walking past the plane's fixed
+  // edge would drop her off the grass into bare background color.
+  yard.userData.lawn.position.set(darla.position.x, 0, darla.position.z);
 
   controls.update();
   composer.render();

@@ -641,7 +641,9 @@ function createLawn() {
 
 export function createYard() {
   const group = new THREE.Group();
-  group.add(createLawn());
+  const lawn = createLawn();
+  group.add(lawn);
+  group.userData.lawn = lawn;
 
   const house = createHouse();
   house.position.set(0, 0, -11);
