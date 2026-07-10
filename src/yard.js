@@ -27,6 +27,11 @@ function makeSpeckleTexture(base, variance, repeatX, repeatY) {
   texture.wrapT = THREE.RepeatWrapping;
   texture.repeat.set(repeatX, repeatY);
   texture.colorSpace = THREE.SRGBColorSpace;
+  // Without this, tiled textures shimmer/moiré at grazing viewing angles —
+  // most noticeable exactly at the house's corners, where a wall face is
+  // seen nearly edge-on. The renderer clamps this to whatever the GPU
+  // actually supports, so it's safe to just ask for the max.
+  texture.anisotropy = 16;
   return texture;
 }
 
@@ -60,6 +65,7 @@ function makeBrickTexture() {
   texture.wrapT = THREE.RepeatWrapping;
   texture.repeat.set(4, 2);
   texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 16;
   return texture;
 }
 
@@ -174,48 +180,78 @@ export function createHouse() {
   const wallThickness = 0.3;
   const doorway = { xMin: -0.1, xMax: 1.25, yMax: 2.2 };
 
+  // Physical size (world units) that one repeat of the brick canvas texture
+  // should cover, so bricks read as the same size on every wall piece
+  // instead of a different density on every differently-sized surface.
+  const brickTileSize = wallHeight / 2;
+  function scaledBrickMat(faceWidth, faceHeight) {
+    const texture = brickMat.map.clone();
+    texture.needsUpdate = true;
+    texture.repeat.set(faceWidth / brickTileSize, faceHeight / brickTileSize);
+    return new THREE.MeshStandardMaterial({ map: texture, roughness: 0.85 });
+  }
+
+  // Front/back walls stop at the *inner* face of the side walls instead of
+  // running the full building width. They used to extend all the way to
+  // the outer corner, which put their thin end-cap face exactly coplanar
+  // with the side wall's own face at that same corner — two overlapping
+  // brick surfaces occupying the same spot, which is a textbook z-fighting
+  // setup and showed up as shimmering right where the walls met. The side
+  // walls' own end-cap faces (below) already cover that sliver, so nothing
+  // is left uncovered.
+  const innerHalfWidth = width / 2 - wallThickness;
+  const sideBrickMat = scaledBrickMat(depth, wallHeight);
+  const sideEndCapMat = scaledBrickMat(wallThickness, wallHeight);
+
   // BoxGeometry material order: [+x, -x, +y, -y, +z, -z]
   const frontMats = [brickMat, brickMat, brickMat, brickMat, brickMat, interiorWallMat];
   const backMats = [brickMat, brickMat, brickMat, brickMat, interiorWallMat, brickMat];
-  const leftMats = [interiorWallMat, brickMat, brickMat, brickMat, brickMat, brickMat];
-  const rightMats = [brickMat, interiorWallMat, brickMat, brickMat, brickMat, brickMat];
+  const leftMats = [
+    interiorWallMat,
+    sideBrickMat,
+    sideEndCapMat,
+    sideEndCapMat,
+    sideEndCapMat,
+    sideEndCapMat,
+  ];
+  const rightMats = [
+    sideBrickMat,
+    interiorWallMat,
+    sideEndCapMat,
+    sideEndCapMat,
+    sideEndCapMat,
+    sideEndCapMat,
+  ];
 
   const frontLeft = mesh(
-    new THREE.BoxGeometry(width / 2 + doorway.xMin, wallHeight, wallThickness),
+    new THREE.BoxGeometry(innerHalfWidth + doorway.xMin, wallHeight, wallThickness),
     frontMats
   );
   frontLeft.position.set(
-    -width / 4 + doorway.xMin / 2,
+    (-innerHalfWidth + doorway.xMin) / 2,
     wallHeight / 2,
     depth / 2 - wallThickness / 2
   );
   group.add(frontLeft);
 
   const frontRight = mesh(
-    new THREE.BoxGeometry(width / 2 - doorway.xMax, wallHeight, wallThickness),
+    new THREE.BoxGeometry(innerHalfWidth - doorway.xMax, wallHeight, wallThickness),
     frontMats
   );
   frontRight.position.set(
-    doorway.xMax + (width / 2 - doorway.xMax) / 2,
+    (doorway.xMax + innerHalfWidth) / 2,
     wallHeight / 2,
     depth / 2 - wallThickness / 2
   );
   group.add(frontRight);
 
-  // The lintel is much shorter than the main walls, so reusing the same
-  // brick texture (repeat tuned for the full wall height) would show
-  // squished, undersized bricks compared to the rest of the house. Clone
-  // the texture with the vertical repeat scaled down to match the lintel's
-  // actual height, so bricks appear the same physical size as everywhere
-  // else instead of just being stretched or left flat.
+  // The lintel is much smaller than the wall sections around it, so mapping
+  // it with the same brick texture repeat (tuned for a much bigger surface)
+  // would squeeze in far too many brick courses, both horizontally and
+  // vertically — a distorted, dense pattern instead of matching brick.
+  const lintelWidth = doorway.xMax - doorway.xMin;
   const lintelHeight = wallHeight - doorway.yMax;
-  const lintelTexture = brickMat.map.clone();
-  lintelTexture.needsUpdate = true;
-  lintelTexture.repeat.set(4, 2 * (lintelHeight / wallHeight));
-  const lintelBrickMat = new THREE.MeshStandardMaterial({
-    map: lintelTexture,
-    roughness: 0.85,
-  });
+  const lintelBrickMat = scaledBrickMat(lintelWidth, lintelHeight);
   const lintelMats = [
     lintelBrickMat,
     lintelBrickMat,
@@ -226,7 +262,7 @@ export function createHouse() {
   ];
 
   const lintel = mesh(
-    new THREE.BoxGeometry(doorway.xMax - doorway.xMin, lintelHeight, wallThickness),
+    new THREE.BoxGeometry(lintelWidth, lintelHeight, wallThickness),
     lintelMats
   );
   lintel.position.set(
@@ -236,7 +272,10 @@ export function createHouse() {
   );
   group.add(lintel);
 
-  const backWall = mesh(new THREE.BoxGeometry(width, wallHeight, wallThickness), backMats);
+  const backWall = mesh(
+    new THREE.BoxGeometry(innerHalfWidth * 2, wallHeight, wallThickness),
+    backMats
+  );
   backWall.position.set(0, wallHeight / 2, -depth / 2 + wallThickness / 2);
   group.add(backWall);
 
@@ -350,8 +389,17 @@ export function createHouse() {
   // Column height is set to reach exactly the underside of the patio roof
   // panel below (wallHeight + 0.02, thickness 0.14), not past it.
   const columnHeight = wallHeight - 0.05;
+  const columnSize = 0.35;
+
+  // Columns are far thinner than the walls, so — same issue as the lintel —
+  // the wall-sized brick repeat would squeeze in way too many courses.
+  const columnBrickMat = scaledBrickMat(columnSize, columnHeight);
+
   [-patioWidth / 2 + 0.2, 0.3, patioWidth / 2 - 0.2].forEach((x) => {
-    const col = mesh(new THREE.BoxGeometry(0.35, columnHeight, 0.35), brickMat);
+    const col = mesh(
+      new THREE.BoxGeometry(columnSize, columnHeight, columnSize),
+      columnBrickMat
+    );
     col.position.set(x, columnHeight / 2, depth / 2 + patioDepth - 0.2);
     group.add(col);
   });
