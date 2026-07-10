@@ -7,7 +7,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { createDarla } from './darla.js';
 import { createYard } from './yard.js';
-import { initAudio, startMusic, playJumpSound } from './audio.js';
+import { initAudio, startMusic, playJumpSound, playMooSound } from './audio.js';
 
 // Browsers block audio until a user gesture — kick it off on the first
 // keypress or tap/click, whichever comes first.
@@ -216,12 +216,21 @@ document.querySelector('#touch-controls button[data-action="jump"]').addEventLis
   }
 );
 
-// Space bar jumps
+// Space bar jumps, Enter makes her moo
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Space' && !e.repeat) {
     e.preventDefault();
     triggerJump();
   }
+  if (e.code === 'Enter' && !e.repeat) {
+    e.preventDefault();
+    playMooSound();
+  }
+});
+
+document.getElementById('moo-button').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  playMooSound();
 });
 
 // Click/tap-to-move: click the lawn and Darla walks there, isometric-game

@@ -11,6 +11,25 @@ export function initAudio() {
   musicGain = audioCtx.createGain();
   musicGain.gain.value = 0.1;
   musicGain.connect(audioCtx.destination);
+  loadMooBuffer();
+}
+
+// A real recorded cow moo (CC BY-SA 4.0, see ATTRIBUTIONS.md), converted to
+// WAV for universal browser support — Safari doesn't play Ogg Vorbis.
+let mooBuffer = null;
+let mooLoadPromise = null;
+
+function loadMooBuffer() {
+  if (mooBuffer) return Promise.resolve(mooBuffer);
+  if (mooLoadPromise) return mooLoadPromise;
+  mooLoadPromise = fetch(`${import.meta.env.BASE_URL}audio/moo.wav`)
+    .then((res) => res.arrayBuffer())
+    .then((data) => audioCtx.decodeAudioData(data))
+    .then((buffer) => {
+      mooBuffer = buffer;
+      return buffer;
+    });
+  return mooLoadPromise;
 }
 
 function tone(freq, startTime, duration, type, gainValue, destination) {
@@ -41,6 +60,20 @@ export function playJumpSound() {
   gain.connect(audioCtx.destination);
   osc.start(t);
   osc.stop(t + 0.2);
+}
+
+export function playMooSound() {
+  if (!audioCtx) return;
+  loadMooBuffer().then((buffer) => {
+    const source = audioCtx.createBufferSource();
+    source.buffer = buffer;
+    source.playbackRate.value = 2;
+    const gain = audioCtx.createGain();
+    gain.gain.value = 0.56;
+    source.connect(gain);
+    gain.connect(audioCtx.destination);
+    source.start();
+  });
 }
 
 // A short, silly, looping melody

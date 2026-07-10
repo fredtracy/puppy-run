@@ -50,8 +50,28 @@
       #touch-controls button[data-action='jump']:active {
         background: rgba(255, 197, 74, 0.8);
       }
+      #moo-button {
+        position: fixed;
+        right: 20px;
+        bottom: 20px;
+        z-index: 10;
+        width: 64px;
+        height: 64px;
+        border: none;
+        border-radius: 50%;
+        background: rgba(20, 20, 20, 0.45);
+        color: #fff;
+        font-size: 26px;
+        touch-action: none;
+        user-select: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      #moo-button:active {
+        background: rgba(20, 20, 20, 0.7);
+      }
       @media (hover: hover) and (pointer: fine) {
-        #touch-controls {
+        #touch-controls,
+        #moo-button {
           display: none;
         }
       }
@@ -65,6 +85,7 @@
       <button data-key="KeyD" style="--col:3;--row:2">&#9654;</button>
       <button data-action="jump" style="--col:2;--row:2">&#8593;</button>
     </div>
+    <button id="moo-button">&#128012;</button>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
