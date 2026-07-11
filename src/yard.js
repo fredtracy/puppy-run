@@ -760,6 +760,7 @@ function createHammock() {
   const group = new THREE.Group();
   const spacing = 3.4;
   const attachHeight = 0.85;
+  const maxSag = 0.32;
 
   [-1, 1].forEach((side) => {
     const tree = createHammockTree();
@@ -776,7 +777,7 @@ function createHammock() {
   const posAttr = fabricGeo.attributes.position;
   for (let i = 0; i < posAttr.count; i++) {
     const x = posAttr.getX(i);
-    const sag = (1 - (x / (fabricWidth / 2)) ** 2) * 0.32;
+    const sag = (1 - (x / (fabricWidth / 2)) ** 2) * maxSag;
     posAttr.setZ(i, posAttr.getZ(i) - sag);
   }
   fabricGeo.computeVertexNormals();
@@ -790,6 +791,15 @@ function createHammock() {
   fabric.rotation.x = -Math.PI / 2;
   fabric.position.y = attachHeight;
   group.add(fabric);
+
+  // Exposed so main.js can raycast for click-to-lie-down and know exactly
+  // where the fabric's deepest point sits (its resting height at the point
+  // of max sag, right at the center where someone would actually lie).
+  group.userData.lieHeight = attachHeight - maxSag;
+  // Exposed alongside lieHeight so main.js can position a hover-highlight
+  // glow at the fabric's actual mounting height without duplicating the
+  // constant.
+  group.userData.attachHeight = attachHeight;
 
   return group;
 }
@@ -1049,6 +1059,7 @@ export function createYard() {
   hammock.position.set(6, 0, 9);
   hammock.rotation.y = 0.4;
   group.add(hammock);
+  group.userData.hammock = hammock;
 
   return group;
 }

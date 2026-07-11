@@ -25,6 +25,7 @@ import {
   playPoopSound,
   playBarkSound,
   playBiteSound,
+  playCallDarlaSound,
 } from './audio.js';
 
 // Browsers block audio until a user gesture — kick it off on the first
@@ -187,6 +188,69 @@ const mom = createMom();
 mom.position.set(-1.9, 0, 4.4);
 mom.rotation.y = 0.7;
 scene.add(mom);
+
+// Hover highlight for click-to-interact targets (Darla/Miranda/hammock): a
+// soft yellow glow sprite floating around them, rather than tinting their
+// own materials (reads as the whole body changing color, not a highlight
+// around it) or a true silhouette outline (which would need to track every
+// animated limb's rotation each frame to stay in sync as they walk/idle).
+// One shared radial-gradient texture, additive-blended so it reads as a
+// glow rather than a flat colored card, and reused across every target.
+function createGlowTexture() {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  gradient.addColorStop(0, 'rgba(255, 221, 51, 0.9)');
+  gradient.addColorStop(0.5, 'rgba(255, 221, 51, 0.35)');
+  gradient.addColorStop(1, 'rgba(255, 221, 51, 0)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(canvas);
+}
+const glowTexture = createGlowTexture();
+
+// width/height size the billboard to roughly envelop the target's
+// silhouette; yOffset centers it vertically since each parent's own local
+// origin sits at their feet/base, not their middle.
+function createHoverGlow(width, height, yOffset) {
+  const material = new THREE.SpriteMaterial({
+    map: glowTexture,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false,
+  });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(width, height, 1);
+  sprite.position.y = yOffset;
+  sprite.visible = false;
+  return sprite;
+}
+
+const momGlow = createHoverGlow(1.1, 1.9, 0.75);
+mom.add(momGlow);
+let momHovered = false;
+function setMomHover(hovered) {
+  if (hovered === momHovered) return;
+  momHovered = hovered;
+  momGlow.visible = hovered;
+  renderer.domElement.style.cursor = hovered ? 'pointer' : '';
+}
+
+// Same hover-highlight idiom, mirrored for Darla so Miranda can click on
+// her to talk too.
+const darlaHoverGlow = createHoverGlow(1.0, 0.85, 0.42);
+darla.add(darlaHoverGlow);
+let darlaHovered = false;
+function setDarlaHover(hovered) {
+  if (hovered === darlaHovered) return;
+  darlaHovered = hovered;
+  darlaHoverGlow.visible = hovered;
+  renderer.domElement.style.cursor = hovered ? 'pointer' : '';
+}
 
 // Character-select portraits — simple hand-drawn 2D faces using each
 // character's own palette (copied from darla.js/mom.js), rather than
@@ -868,7 +932,7 @@ const ballThrowStart = new THREE.Vector3();
 const ballThrowTarget = new THREE.Vector3();
 
 function throwBallTo(x, z) {
-  if (ballState !== 'idle') return;
+  if (ballState !== 'idle' || darlaCheeseState !== 'idle') return;
   ballState = 'flying';
   ballThrowElapsed = 0;
   ballButton.disabled = true;
@@ -909,6 +973,78 @@ ballButton.addEventListener('pointerdown', (e) => {
   ballButton.classList.toggle('aiming', ballAiming);
 });
 
+// Cheese: Miranda's other skill, same aim-then-throw idiom as fetch, but
+// Darla doesn't bring anything back — she eats it where it lands and
+// immediately poops (see updateDarlaCheese below), which Miranda then has
+// to go clean up herself. Guards against both her own state and the fetch
+// state below since Darla can't run two different errands at once.
+const cheeseButton = document.getElementById('cheese-button');
+const cheeseMat = new THREE.MeshStandardMaterial({ color: 0xf4c430, roughness: 0.6 });
+const cheese = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.09, 3), cheeseMat);
+cheese.rotation.z = Math.PI / 2;
+cheese.castShadow = true;
+cheese.visible = false;
+scene.add(cheese);
+
+let cheeseState = 'idle'; // 'idle' | 'flying' | 'landed'
+let cheeseAiming = false;
+let cheeseThrowElapsed = 0;
+let cheeseThrowDuration = 0.55;
+let cheeseArcHeight = 1.5;
+const cheeseThrowStart = new THREE.Vector3();
+const cheeseThrowTarget = new THREE.Vector3();
+
+function throwCheeseTo(x, z) {
+  if (cheeseState !== 'idle' || darlaFetchState !== 'idle' || darlaCheeseState !== 'idle') return;
+  cheeseState = 'flying';
+  cheeseThrowElapsed = 0;
+  cheeseButton.disabled = true;
+  cheeseButton.classList.add('disabled');
+
+  const dx = x - player.position.x;
+  const dz = z - player.position.z;
+  const dist = Math.hypot(dx, dz);
+  const scale = dist > MAX_THROW_DIST ? MAX_THROW_DIST / dist : 1;
+  const tx = THREE.MathUtils.clamp(
+    player.position.x + dx * scale,
+    YARD_BOUNDS.xMin,
+    YARD_BOUNDS.xMax
+  );
+  const tz = THREE.MathUtils.clamp(
+    player.position.z + dz * scale,
+    YARD_BOUNDS.zMin,
+    YARD_BOUNDS.zMax
+  );
+
+  const throwDist = Math.hypot(tx - player.position.x, tz - player.position.z);
+  cheeseThrowDuration = THREE.MathUtils.clamp(throwDist / 11, 0.35, 0.9);
+  cheeseArcHeight = THREE.MathUtils.clamp(throwDist * 0.22, 0.8, 3);
+  cheeseThrowStart.set(player.position.x, 1.1, player.position.z);
+  cheeseThrowTarget.set(tx, 0.06, tz);
+  cheese.visible = true;
+  cheese.position.copy(cheeseThrowStart);
+}
+
+cheeseButton.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  if (cheeseState !== 'idle') return;
+  cheeseAiming = !cheeseAiming;
+  cheeseButton.classList.toggle('aiming', cheeseAiming);
+});
+
+// Calling Darla over: an instant skill, no aiming step — press it and she
+// comes running, reusing the ball-fetch AI's own "returning" leg (which
+// already walks her toward Miranda's live position and re-idles on
+// arrival) rather than a whole separate state machine for the same walk.
+const callButton = document.getElementById('call-button');
+callButton.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  if (playerKind !== 'miranda' || darlaFetchState !== 'idle' || darlaCheeseState !== 'idle') return;
+  playCallDarlaSound();
+  showSpeechBubble(mom, 'Darla!');
+  darlaFetchState = 'returning';
+});
+
 // Poops are left behind in the world, permanently, rather than attached to
 // Darla, so she can walk away and leave them there — well, "permanently"
 // until Mom comes and collects them (see updateMom below). Holding the
@@ -916,6 +1052,12 @@ ballButton.addEventListener('pointerdown', (e) => {
 let poopSpawnTimer = 0;
 const POOP_SPAWN_INTERVAL = 0.1;
 const poops = [];
+
+// Total individual poops across all piles — a pile that 5 poops merged
+// into still counts as 5 toward the shovel threshold, not 1.
+function totalPoopCount() {
+  return poops.reduce((sum, p) => sum + p.userData.growth + 1, 0);
+}
 
 // Pooping in roughly the same spot repeatedly grows whatever's already
 // there instead of scattering a pile of identical little ones — each
@@ -993,6 +1135,140 @@ function getGroundPoint(clientX, clientY) {
   return raycaster.ray.intersectPlane(groundPlaneMath, point) ? point : null;
 }
 
+// Speech bubble: a DOM element projected onto the speaking character's
+// (not the clicked character's) head position each frame, rather than a
+// sprite in the 3D scene, so text stays crisp and screen-aligned.
+const speechBubbleEl = document.getElementById('speech-bubble');
+let speechBubbleTarget = null;
+let speechBubbleUntil = 0;
+const speechBubbleWorldPos = new THREE.Vector3();
+
+function showSpeechBubble(target, text, duration = 1.6) {
+  speechBubbleEl.textContent = text;
+  speechBubbleTarget = target;
+  speechBubbleUntil = elapsed + duration;
+  speechBubbleEl.classList.add('visible');
+}
+
+function hitsMom(clientX, clientY) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointerNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointerNDC, camera);
+  return raycaster.intersectObject(mom, true).length > 0;
+}
+
+// Returns the specific poop pile clicked (its own meshes are direct
+// children of the pile's group, so the first hit's parent is the pile
+// itself), or null.
+function pickPoop(clientX, clientY) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointerNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointerNDC, camera);
+  const hits = raycaster.intersectObjects(poops, true);
+  return hits.length > 0 ? hits[0].object.parent : null;
+}
+
+// Talking to another character: for now just Darla clicking on Miranda,
+// who gets a "Woof!" speech bubble and her bark sound — the speaking
+// character (not whoever got clicked) is who the bubble appears over.
+function talkToMiranda() {
+  playBarkSound();
+  showSpeechBubble(darla, 'Woof!');
+}
+
+function hitsDarla(clientX, clientY) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointerNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointerNDC, camera);
+  return raycaster.intersectObject(darla, true).length > 0;
+}
+
+// The reverse direction: Miranda clicking on Darla. No voice sample for
+// her yet (unlike Darla's bark), just the bubble.
+function talkToDarla() {
+  showSpeechBubble(mom, 'Hi Bubby');
+}
+
+function hitsHammock(clientX, clientY) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointerNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointerNDC, camera);
+  return raycaster.intersectObject(yard.userData.hammock, true).length > 0;
+}
+
+// Clicking the hammock (Miranda only) walks her over via the normal
+// moveTarget path, then — once she arrives — settles her into it instead
+// of just stopping. mirandaLoungeTarget marks "this particular walk ends
+// in lying down" so updateMovement knows to call enterHammockLounge()
+// on arrival rather than just clearing moveTarget like an ordinary click.
+let mirandaLounging = false;
+let mirandaLoungeTarget = false;
+
+function enterHammockLounge() {
+  mirandaLounging = true;
+  const hammock = yard.userData.hammock;
+  // Built directly from the world-space axes she should end up pointing
+  // along, rather than hand-composing Euler angles (which turned out
+  // wrong — she ended up lying crosswise instead of along the fabric):
+  // her local +Y (head-to-feet) axis maps onto the hammock's length
+  // direction, her local +Z (chest) maps straight up so she lies face-up,
+  // and +X (right side) falls out of those two via the cross product.
+  const theta = hammock.rotation.y;
+  const lengthDir = new THREE.Vector3(Math.cos(theta), 0, -Math.sin(theta));
+  const upDir = new THREE.Vector3(0, 1, 0);
+  const rightDir = new THREE.Vector3().crossVectors(lengthDir, upDir);
+  const basis = new THREE.Matrix4().makeBasis(rightDir, lengthDir, upDir);
+  mom.quaternion.setFromRotationMatrix(basis);
+
+  // Her local origin sits near her feet, not her center, so anchoring it
+  // at the hammock's center would hang half of her off one side — offset
+  // back along the length axis by roughly half her standing height to
+  // center her instead, and lift her slightly above the fabric's sag
+  // point so her back doesn't clip through the mesh she's lying on.
+  const halfHeight = 0.72;
+  const restLift = 0.15;
+  mom.position.set(
+    hammock.position.x - lengthDir.x * halfHeight,
+    hammock.userData.lieHeight + restLift,
+    hammock.position.z - lengthDir.z * halfHeight
+  );
+
+  mom.userData.legs.legL.rotation.x = 0;
+  mom.userData.legs.legR.rotation.x = 0;
+  mom.userData.arms.armL.rotation.x = 0;
+  mom.userData.arms.armR.rotation.x = 0;
+}
+
+function exitHammockLounge() {
+  mirandaLounging = false;
+  mom.quaternion.identity();
+}
+
+const hammockGlow = createHoverGlow(3.4, 1.7, yard.userData.hammock.userData.attachHeight);
+yard.userData.hammock.add(hammockGlow);
+let hammockHovered = false;
+function setHammockHover(hovered) {
+  if (hovered === hammockHovered) return;
+  hammockHovered = hovered;
+  hammockGlow.visible = hovered;
+  renderer.domElement.style.cursor = hovered ? 'pointer' : '';
+}
+
+// Hover highlight only makes sense with a mouse (no persistent "hover" on
+// touch); pointermove still fires harmlessly during a touch drag, it just
+// never matters since nothing reads momHovered/hammockHovered on mobile.
+renderer.domElement.addEventListener('pointermove', (e) => {
+  setMomHover(gameStarted && playerKind === 'darla' && hitsMom(e.clientX, e.clientY));
+  setDarlaHover(gameStarted && playerKind === 'miranda' && hitsDarla(e.clientX, e.clientY));
+  setHammockHover(
+    gameStarted && playerKind === 'miranda' && !mirandaLounging && hitsHammock(e.clientX, e.clientY)
+  );
+});
+
 renderer.domElement.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;
   pointerDownPos = { x: e.clientX, y: e.clientY };
@@ -1002,6 +1278,34 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   const dragDist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
   pointerDownPos = null;
   if (dragDist > 6) return; // was an orbit-camera drag, not a click
+
+  if (playerKind === 'darla' && hitsMom(e.clientX, e.clientY)) {
+    talkToMiranda();
+    return;
+  }
+
+  if (playerKind === 'miranda' && hitsDarla(e.clientX, e.clientY)) {
+    talkToDarla();
+    return;
+  }
+
+  if (playerKind === 'miranda' && !mirandaLounging && hitsHammock(e.clientX, e.clientY)) {
+    const hammock = yard.userData.hammock;
+    mirandaLoungeTarget = true;
+    moveTarget = new THREE.Vector3(hammock.position.x, 0, hammock.position.z);
+    clickMarker.position.set(moveTarget.x, 0.02, moveTarget.z);
+    clickMarker.visible = true;
+    return;
+  }
+
+  if (playerKind === 'miranda' && !momAnnoyed && momState !== 'pickingUp') {
+    const clickedPoop = pickPoop(e.clientX, e.clientY);
+    if (clickedPoop) {
+      momTargetPoop = clickedPoop;
+      momState = 'walking';
+      return;
+    }
+  }
 
   const point = getGroundPoint(e.clientX, e.clientY);
   if (!point) return;
@@ -1013,6 +1317,14 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     return;
   }
 
+  if (cheeseAiming) {
+    cheeseAiming = false;
+    cheeseButton.classList.remove('aiming');
+    throwCheeseTo(point.x, point.z);
+    return;
+  }
+
+  if (mirandaLounging) exitHammockLounge();
   const clamped = clampTargetPoint(point.x, point.z);
   moveTarget = new THREE.Vector3(clamped.x, 0, clamped.z);
   clickMarker.position.set(moveTarget.x, 0.02, moveTarget.z);
@@ -1135,11 +1447,16 @@ function wrapAngle(angle) {
 
 // Darla's tiny AI, active only while Miranda is the one being played: sit
 // by the fire, and whenever Miranda throws the ball, run over, grab it,
-// and trot back home — the mirror image of Mom's own poop-collecting AI
-// below (nearest-target, walk-toward-it, rotate-to-face idiom), just with
-// a single ball instead of a list of poops.
-const DARLA_HOME = new THREE.Vector3(darla.position.x, 0, darla.position.z);
-const DARLA_FETCH_SPEED = 3.2;
+// and trot back to Miranda — the mirror image of Mom's own poop-collecting
+// AI below (nearest-target, walk-toward-it, rotate-to-face idiom), just
+// with a single ball instead of a list of poops. Miranda is `player` here
+// (fetch only ever runs in Miranda-mode), and re-reads her live position
+// every frame rather than a fixed spot, since she can keep walking around
+// while Darla is out fetching.
+// An eager sprint, not just her normal walk — matches the 1.6x stride
+// speedup her walk-cycle animation already fakes while fetching (see the
+// ballState === 'thrown' check in the stride calc below).
+const DARLA_FETCH_SPEED = WALK_SPEED * 1.6;
 const darlaFetchDir = new THREE.Vector3();
 let darlaFetchState = 'idle'; // 'idle' | 'fetching' | 'returning'
 
@@ -1150,19 +1467,23 @@ function updateDarlaFetch(delta) {
   if (darlaFetchState === 'idle') return false;
 
   const returning = darlaFetchState === 'returning';
-  const target = returning ? DARLA_HOME : ball.position;
+  const target = returning ? player.position : ball.position;
   darlaFetchDir.set(target.x - darla.position.x, 0, target.z - darla.position.z);
   const dist = darlaFetchDir.length();
-  const arriveDist = returning ? 0.15 : 0.35;
+  // Returning stops well short of Miranda's own position (unlike the 0.35
+  // used for reaching the ball itself) so Darla ends up standing next to
+  // her instead of walking into/through her — needs to clear both her
+  // skirt's radius and Darla's own body width.
+  const arriveDist = returning ? 0.6 : 0.35;
   if (dist < arriveDist) {
     if (returning) {
       darlaFetchState = 'idle';
-    } else {
-      ball.visible = false;
       ballState = 'idle';
-      playBarkSound();
       ballButton.disabled = false;
       ballButton.classList.remove('disabled');
+    } else {
+      ball.visible = false;
+      playBarkSound();
       darlaFetchState = 'returning';
     }
     return false;
@@ -1176,6 +1497,51 @@ function updateDarlaFetch(delta) {
   return true;
 }
 
+// Same idiom again for the cheese trick, except she doesn't bring
+// anything back — she eats it in place, then immediately poops (letting
+// Mom's own poop-collecting AI pick that up on its own), and just stays
+// put rather than trotting home to Miranda the way fetch does.
+const DARLA_CHEESE_EAT_DURATION = 0.5;
+const darlaCheeseDir = new THREE.Vector3();
+let darlaCheeseState = 'idle'; // 'idle' | 'going' | 'eating'
+let darlaCheeseElapsed = 0;
+
+function updateDarlaCheese(delta) {
+  if (darlaCheeseState === 'idle') return false;
+
+  if (darlaCheeseState === 'going') {
+    darlaCheeseDir.set(cheese.position.x - darla.position.x, 0, cheese.position.z - darla.position.z);
+    const dist = darlaCheeseDir.length();
+    if (dist < 0.35) {
+      darlaCheeseState = 'eating';
+      darlaCheeseElapsed = 0;
+      return false;
+    }
+    darlaCheeseDir.normalize();
+    darla.position.x += darlaCheeseDir.x * DARLA_FETCH_SPEED * delta;
+    darla.position.z += darlaCheeseDir.z * DARLA_FETCH_SPEED * delta;
+    const targetAngle = Math.atan2(darlaCheeseDir.x, darlaCheeseDir.z);
+    darla.rotation.y += wrapAngle(targetAngle - darla.rotation.y) * Math.min(1, delta * 10);
+    return true;
+  }
+
+  // eating: a quick head-dip chomp, then she poops right where she's
+  // standing and the cheese/button reset for next time.
+  darlaCheeseElapsed += delta;
+  const t = Math.min(darlaCheeseElapsed / DARLA_CHEESE_EAT_DURATION, 1);
+  darla.userData.head.rotation.x = -Math.sin(t * Math.PI) * 0.3;
+  if (t >= 1) {
+    darla.userData.head.rotation.x = 0;
+    cheese.visible = false;
+    cheeseState = 'idle';
+    cheeseButton.disabled = false;
+    cheeseButton.classList.remove('disabled');
+    spawnPoop();
+    darlaCheeseState = 'idle';
+  }
+  return false;
+}
+
 // Mom's tiny AI: stand by the fire, and whenever Darla leaves a poop
 // behind, walk over, bend down to collect it, and head back home. Reuses
 // the same "nearest unclaimed target, walk toward it, rotate to face
@@ -1187,6 +1553,11 @@ const momMoveDir = new THREE.Vector3();
 let momState = 'idle'; // 'idle' | 'walking' | 'pickingUp'
 let momTargetPoop = null;
 let momPickupElapsed = 0;
+// Once the backlog gets past 5, she grabs the shovel instead of picking up
+// by hand — still one poop per pickup either way, just a different tool/
+// animation for a big mess.
+const MOM_SHOVEL_THRESHOLD = 5;
+let momUsingShovel = false;
 
 function resetMomLimbs() {
   mom.userData.legs.legL.rotation.x = 0;
@@ -1196,6 +1567,15 @@ function resetMomLimbs() {
 }
 
 function updateMom(delta) {
+  // Checked live every frame (rather than snapshotted once when a fetch
+  // starts) so the shovel reflects the current backlog even if more poops
+  // land while she's already out collecting an earlier one. Hysteresis:
+  // once she's grabbed the shovel she keeps using it down to the last
+  // poop, rather than swapping back to picking up by hand the instant the
+  // count dips back under the threshold.
+  momUsingShovel = momUsingShovel ? totalPoopCount() > 1 : totalPoopCount() >= MOM_SHOVEL_THRESHOLD;
+  mom.userData.shovel.visible = momUsingShovel;
+
   if (momState === 'idle') {
     resetMomLimbs();
     if (momAnnoyed || poops.length === 0) return;
@@ -1208,8 +1588,8 @@ function updateMom(delta) {
         nearestDist = dist;
       }
     }
-    // momTargetPoop = nearest;
-    // momState = 'walking';
+    momTargetPoop = nearest;
+    momState = 'walking';
     return;
   }
 
@@ -1255,22 +1635,37 @@ function updateMom(delta) {
     return;
   }
 
-  // pickingUp: a quick bend-down-and-back-up while the poop disappears
+  // pickingUp: a quick bend-down-and-back-up while the poop disappears, or
+  // — with the shovel out — a shallower bend plus a scoop-and-flick swing
+  // of the right arm instead, since a full shovel scoop still only clears
+  // one poop per swing, same as picking up by hand.
   resetMomLimbs();
   momPickupElapsed += delta;
   const t = Math.min(momPickupElapsed / MOM_PICKUP_DURATION, 1);
-  const bend = Math.sin(t * Math.PI) * 0.55;
+  const bend = Math.sin(t * Math.PI) * (momUsingShovel ? 0.3 : 0.55);
   mom.rotation.x = bend;
   mom.position.y = -bend * 0.15;
+  if (momUsingShovel) {
+    mom.userData.arms.armR.rotation.x = Math.sin(t * Math.PI) * 0.9;
+  }
   if (t >= 1) {
     mom.rotation.x = 0;
     mom.position.y = 0;
-    scene.remove(momTargetPoop);
-    momTargetPoop.traverse((child) => {
-      if (child.isMesh) child.geometry.dispose();
-    });
-    const idx = poops.indexOf(momTargetPoop);
-    if (idx !== -1) poops.splice(idx, 1);
+    mom.userData.arms.armR.rotation.x = 0;
+    // A merged pile only loses one poop per pickup, same as an unmerged
+    // one — shrink it back down a growth step rather than clearing the
+    // whole pile in one go, so a pile of 5 genuinely takes 5 pickups.
+    if (momTargetPoop.userData.growth > 0) {
+      momTargetPoop.userData.growth -= 1;
+      momTargetPoop.scale.setScalar(1 + momTargetPoop.userData.growth * POOP_GROWTH_PER_MERGE);
+    } else {
+      scene.remove(momTargetPoop);
+      momTargetPoop.traverse((child) => {
+        if (child.isMesh) child.geometry.dispose();
+      });
+      const idx = poops.indexOf(momTargetPoop);
+      if (idx !== -1) poops.splice(idx, 1);
+    }
     momTargetPoop = null;
     // If there's another poop waiting, go idle so the branch above picks
     // the nearest one immediately next frame instead of detouring home
@@ -1281,17 +1676,27 @@ function updateMom(delta) {
 }
 
 function updateMovement(delta) {
+  const keyUp = pressedKeys.has('KeyW') || pressedKeys.has('ArrowUp');
+  const keyDown = pressedKeys.has('KeyS') || pressedKeys.has('ArrowDown');
+  const keyRight = pressedKeys.has('KeyD') || pressedKeys.has('ArrowRight');
+  const keyLeft = pressedKeys.has('KeyA') || pressedKeys.has('ArrowLeft');
+  const keyboardActive = keyUp || keyDown || keyRight || keyLeft;
+
+  // Frozen in the hammock until WASD wakes her back up (a click-elsewhere
+  // wakes her too, but that's handled where the click sets moveTarget,
+  // since by then this function needs to already treat her as not lounging
+  // in order to actually walk her there).
+  if (mirandaLounging) {
+    if (!keyboardActive) return false;
+    exitHammockLounge();
+  }
+
   camera.getWorldDirection(cameraForward);
   cameraForward.y = 0;
   cameraForward.normalize();
   cameraRight.crossVectors(cameraForward, worldUp);
 
   moveDir.set(0, 0, 0);
-  const keyUp = pressedKeys.has('KeyW') || pressedKeys.has('ArrowUp');
-  const keyDown = pressedKeys.has('KeyS') || pressedKeys.has('ArrowDown');
-  const keyRight = pressedKeys.has('KeyD') || pressedKeys.has('ArrowRight');
-  const keyLeft = pressedKeys.has('KeyA') || pressedKeys.has('ArrowLeft');
-  const keyboardActive = keyUp || keyDown || keyRight || keyLeft;
 
   if (keyboardActive) {
     moveTarget = null;
@@ -1308,6 +1713,10 @@ function updateMovement(delta) {
     } else {
       moveTarget = null;
       clickMarker.visible = false;
+      if (mirandaLoungeTarget) {
+        mirandaLoungeTarget = false;
+        enterHammockLounge();
+      }
     }
   }
 
@@ -1348,11 +1757,12 @@ function updateWalkCycle(isMoving, jumping, flying) {
     return 0;
   }
   if (isMoving) {
-    // Faster stride specifically while she's running to fetch a thrown
-    // ball (ballState stays 'thrown' for exactly the duration of her fetch
-    // run — see updateDarlaFetch) — an eager sprint rather than her normal
+    // Faster stride specifically while she's off on a fetch/call errand
+    // (darlaFetchState stays non-'idle' for the whole out-and-back trip,
+    // whether that's chasing a thrown ball or just coming when called —
+    // see updateDarlaFetch) — an eager sprint rather than her normal
     // walk/player-driven pace.
-    const stride = elapsed * (ballState === 'thrown' ? 19 * 1.6 : 19);
+    const stride = elapsed * (darlaFetchState !== 'idle' ? 19 * 1.6 : 19);
     legs.legFR.rotation.x = Math.sin(stride) * 0.55;
     legs.legBL.rotation.x = Math.sin(stride) * 0.55;
     legs.legFL.rotation.x = Math.sin(stride + Math.PI) * 0.55;
@@ -1401,7 +1811,7 @@ let jumpHeight = 0;
 let jumpHeld = false;
 
 function triggerJump() {
-  if (!gameStarted || isJumping) return;
+  if (!gameStarted || isJumping || mirandaLounging) return;
   isJumping = true;
   jumpVelocity = JUMP_SPEED;
   playJumpSound();
@@ -1438,12 +1848,17 @@ function animate() {
   if (gameStarted) {
     updateBiteChase();
     const isMoving = updateMovement(delta);
-    const jumpY = updateJump(delta);
-    const baseY =
-      playerKind === 'darla'
-        ? updateWalkCycle(isMoving, isJumping, isJumping && jumpHeld)
-        : updateMirandaWalkCycle(isMoving);
-    player.position.y = baseY + jumpY;
+    // While lounging her position/pose is fixed by enterHammockLounge — the
+    // usual walk-cycle/jump-height math would otherwise stomp her y back
+    // toward 0 every frame.
+    if (!mirandaLounging) {
+      const jumpY = updateJump(delta);
+      const baseY =
+        playerKind === 'darla'
+          ? updateWalkCycle(isMoving, isJumping, isJumping && jumpHeld)
+          : updateMirandaWalkCycle(isMoving);
+      player.position.y = baseY + jumpY;
+    }
   }
 
   // Darla's own idle tail wag + head sway run regardless of whether she's
@@ -1486,6 +1901,19 @@ function animate() {
     clickMarker.scale.setScalar(1 + Math.sin(elapsed * 8) * 0.08);
   }
 
+  if (speechBubbleTarget) {
+    if (elapsed < speechBubbleUntil) {
+      speechBubbleTarget.userData.head.getWorldPosition(speechBubbleWorldPos);
+      speechBubbleWorldPos.y += 0.15;
+      speechBubbleWorldPos.project(camera);
+      speechBubbleEl.style.left = `${(speechBubbleWorldPos.x * 0.5 + 0.5) * window.innerWidth}px`;
+      speechBubbleEl.style.top = `${(-speechBubbleWorldPos.y * 0.5 + 0.5) * window.innerHeight}px`;
+    } else {
+      speechBubbleTarget = null;
+      speechBubbleEl.classList.remove('visible');
+    }
+  }
+
   if (poopButtonHeld) {
     poopSpawnTimer -= delta;
     if (poopSpawnTimer <= 0) {
@@ -1513,13 +1941,29 @@ function animate() {
     }
   }
 
-  // Darla's fetch AI only runs while Miranda is the one being played —
-  // it's what makes the thrown ball actually go somewhere. Reuses her own
-  // (quadruped) walk cycle for the run, same as the player-driven path
-  // does, just fed by her AI's isMoving instead of WASD/click-to-move.
+  if (cheeseState === 'flying') {
+    cheeseThrowElapsed += delta;
+    const t = Math.min(cheeseThrowElapsed / cheeseThrowDuration, 1);
+    cheese.position.x = THREE.MathUtils.lerp(cheeseThrowStart.x, cheeseThrowTarget.x, t);
+    cheese.position.z = THREE.MathUtils.lerp(cheeseThrowStart.z, cheeseThrowTarget.z, t);
+    const heightLerp = THREE.MathUtils.lerp(cheeseThrowStart.y, cheeseThrowTarget.y, t);
+    cheese.position.y = heightLerp + cheeseArcHeight * 4 * t * (1 - t);
+    if (t >= 1) {
+      cheeseState = 'landed';
+      darlaCheeseState = 'going';
+    }
+  }
+
+  // Darla's fetch/cheese AI only runs while Miranda is the one being
+  // played — it's what makes a thrown ball or cheese actually go
+  // somewhere. Reuses her own (quadruped) walk cycle for the run, same as
+  // the player-driven path does, just fed by whichever AI's isMoving
+  // instead of WASD/click-to-move (only one of the two is ever active at
+  // once, per the guards in throwBallTo/throwCheeseTo).
   if (playerKind === 'miranda') {
     const fetching = updateDarlaFetch(delta);
-    darla.position.y = updateWalkCycle(fetching, false, false);
+    const eatingCheese = updateDarlaCheese(delta);
+    darla.position.y = updateWalkCycle(fetching || eatingCheese, false, false);
   }
 
   // camera follows whichever character is being played, keeping the same

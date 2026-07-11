@@ -125,7 +125,6 @@
       #bite-button {
         bottom: 316px;
         background: rgba(90, 10, 10, 0.55);
-        position: relative;
       }
       #bite-button:active {
         background: rgba(90, 10, 10, 0.8);
@@ -168,12 +167,31 @@
       #ball-button:active::after {
         background: radial-gradient(circle at 35% 30%, #ff6b5b, #b5251a 55%, #7a1a12 100%);
       }
-      /* Fetch is Miranda-only: everyone else's skills hide when she's
-         playing, and the ball button only shows up for her. */
-      .miranda-mode .action-button:not(#ball-button) {
+      #cheese-button {
+        bottom: 94px;
+        display: none;
+        align-items: center;
+        justify-content: center;
+      }
+      #call-button {
+        bottom: 168px;
+        display: none;
+        align-items: center;
+        justify-content: center;
+      }
+      /* Fetch, cheese, and calling Darla over are all Miranda-only:
+         everyone else's skills hide when she's playing, and only these
+         show up for her. */
+      .miranda-mode .action-button:not(#ball-button):not(#cheese-button):not(#call-button) {
         display: none;
       }
       .miranda-mode #ball-button {
+        display: flex;
+      }
+      .miranda-mode #cheese-button {
+        display: flex;
+      }
+      .miranda-mode #call-button {
         display: flex;
       }
       #character-select {
@@ -236,6 +254,37 @@
         font-weight: 600;
         text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
       }
+      #speech-bubble {
+        position: fixed;
+        left: 0;
+        top: 0;
+        transform: translate(-50%, -100%);
+        background: rgba(255, 255, 255, 0.92);
+        color: #222;
+        padding: 8px 14px;
+        border-radius: 14px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        font-size: 15px;
+        font-weight: 600;
+        white-space: nowrap;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        pointer-events: none;
+        z-index: 15;
+        opacity: 0;
+        transition: opacity 0.15s ease;
+      }
+      #speech-bubble::after {
+        content: '';
+        position: absolute;
+        left: 50%;
+        bottom: -8px;
+        transform: translateX(-50%);
+        border: 8px solid transparent;
+        border-top-color: rgba(255, 255, 255, 0.92);
+      }
+      #speech-bubble.visible {
+        opacity: 1;
+      }
     </style>
   </head>
   <body>
@@ -267,6 +316,9 @@
     <button id="bark-button" class="action-button">&#128021;</button>
     <button id="bite-button" class="action-button"></button>
     <button id="ball-button" class="action-button"></button>
+    <button id="cheese-button" class="action-button">&#129472;</button>
+    <button id="call-button" class="action-button">&#128227;</button>
+    <div id="speech-bubble"></div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

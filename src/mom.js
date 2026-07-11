@@ -23,6 +23,26 @@ function mesh(geometry, material) {
   return m;
 }
 
+// A simple handle + blade, held in the right hand once the poop backlog
+// gets big enough that picking up by hand stops looking sane. Hidden by
+// default; main.js toggles it on based on poop count.
+function buildShovel() {
+  const shovel = new THREE.Group();
+  const handleMat = new THREE.MeshStandardMaterial({ color: 0x8a5a2f, roughness: 0.7 });
+  const metalMat = new THREE.MeshStandardMaterial({
+    color: 0xb9bcbf,
+    roughness: 0.35,
+    metalness: 0.6,
+  });
+  const handle = mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.42, 8), handleMat);
+  handle.position.y = -0.21;
+  shovel.add(handle);
+  const blade = mesh(new THREE.BoxGeometry(0.09, 0.13, 0.015), metalMat);
+  blade.position.y = -0.42;
+  shovel.add(blade);
+  return shovel;
+}
+
 export function createMom() {
   const group = new THREE.Group();
 
@@ -158,6 +178,14 @@ export function createMom() {
     armPivot.add(hand);
 
     armPivots[side] = armPivot;
+
+    if (side === 1) {
+      const shovel = buildShovel();
+      shovel.position.copy(hand.position);
+      shovel.visible = false;
+      armPivot.add(shovel);
+      group.userData.shovel = shovel;
+    }
   });
 
   // Neck, choker, and a small pendant
