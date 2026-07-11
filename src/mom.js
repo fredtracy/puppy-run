@@ -11,7 +11,7 @@ const COLORS = {
   corset: 0x0d0d0d,
   tights: 0xe9e2df,
   shoes: 0x0a0a0a,
-  lips: 0x3a0f1a,
+  lips: 0x6b1c2e,
   blush: 0xd99a8a,
   metal: 0x2a2a2a,
 };
@@ -63,7 +63,9 @@ export function createMom() {
 
   // Legs + shoes — each leg is a pivot group hinged at the hip (rather than
   // a plain mesh) so a walk cycle can swing the whole thing forward/back.
-  const legGeo = new THREE.CylinderGeometry(0.055, 0.045, 0.62, 10);
+  // Capsules instead of flat-capped cylinders round off the joints so the
+  // silhouette reads as a limb, not a stack of tubes.
+  const legGeo = new THREE.CapsuleGeometry(0.05, 0.5, 6, 20);
   const legPivots = {};
   [-1, 1].forEach((side) => {
     const legPivot = new THREE.Group();
@@ -74,39 +76,64 @@ export function createMom() {
     leg.position.set(0, -0.31, 0);
     legPivot.add(leg);
 
-    const shoe = mesh(new THREE.SphereGeometry(0.06, 10, 8), shoeMat);
+    // A tall lace-up boot shaft wrapping the lower leg, plus the foot
+    // itself, instead of a bare ankle and shoe.
+    const bootShaft = mesh(new THREE.CylinderGeometry(0.062, 0.07, 0.26, 14), shoeMat);
+    bootShaft.position.set(0, -0.47, 0.01);
+    legPivot.add(bootShaft);
+
+    const shoe = mesh(new THREE.SphereGeometry(0.065, 16, 12), shoeMat);
     shoe.scale.set(1.2, 0.7, 1.6);
-    shoe.position.set(0, -0.575, 0.025);
+    shoe.position.set(0, -0.6, 0.025);
     legPivot.add(shoe);
 
     legPivots[side] = legPivot;
   });
 
-  // Ruffled skirt, flared out from the waist
-  const skirt = mesh(new THREE.ConeGeometry(0.27, 0.3, 16, 1, true), outfitMat);
-  skirt.position.y = 0.73;
+  // Ruffled skirt: a lathe-revolved bell profile (narrow at the waist,
+  // flaring out, curling in slightly at the hem) reads as fabric far better
+  // than a straight cone does.
+  const skirtProfile = [
+    [0.02, 0.3],
+    [0.14, 0.26],
+    [0.2, 0.18],
+    [0.235, 0.08],
+    [0.24, 0.0],
+    [0.22, -0.02],
+  ].map(([r, y]) => new THREE.Vector2(r, y));
+  // LatheGeometry is an open shell (no cap where the profile doesn't close
+  // back to the axis), so with the default single-sided material you can
+  // see straight through it into the hollow interior from above or behind
+  // — hence its own material with both faces rendered, instead of sharing
+  // outfitMat with the (already-solid) torso/waist cylinders.
+  const skirtMat = outfitMat.clone();
+  skirtMat.side = THREE.DoubleSide;
+  const skirt = mesh(new THREE.LatheGeometry(skirtProfile, 32), skirtMat);
+  skirt.position.y = 0.58;
   group.add(skirt);
-  const skirtHem = mesh(new THREE.TorusGeometry(0.27, 0.025, 8, 20), outfitMat);
+  const skirtHem = mesh(new THREE.TorusGeometry(0.22, 0.02, 12, 32), outfitMat);
   skirtHem.rotation.x = Math.PI / 2;
-  skirtHem.position.y = 0.59;
+  skirtHem.position.y = 0.56;
   group.add(skirtHem);
 
-  // Cinched corset waist, with a hint of front lacing
-  const waist = mesh(new THREE.CylinderGeometry(0.125, 0.16, 0.2, 16), corsetMat);
+  // Cinched corset waist, with a hint of front lacing. Top radius matches
+  // the torso's bottom radius exactly so the two cylinders meet flush
+  // instead of stepping.
+  const waist = mesh(new THREE.CylinderGeometry(0.135, 0.16, 0.2, 32), corsetMat);
   waist.position.y = 0.88;
   group.add(waist);
   for (let i = -2; i <= 2; i++) {
-    const lace = mesh(new THREE.SphereGeometry(0.012, 6, 6), metalMat);
+    const lace = mesh(new THREE.SphereGeometry(0.012, 8, 8), metalMat);
     lace.position.set(0, 0.8 + i * 0.035, 0.125);
     group.add(lace);
   }
 
   // Bodice + bare off-shoulder chest/shoulders
-  const torso = mesh(new THREE.CylinderGeometry(0.15, 0.135, 0.26, 16), outfitMat);
+  const torso = mesh(new THREE.CylinderGeometry(0.15, 0.135, 0.26, 32), outfitMat);
   torso.position.y = 1.11;
   group.add(torso);
   const chest = mesh(
-    new THREE.SphereGeometry(0.145, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.55),
+    new THREE.SphereGeometry(0.145, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.55),
     skinMat
   );
   chest.position.y = 1.24;
@@ -114,7 +141,7 @@ export function createMom() {
 
   // Arms — same pivot-group trick as the legs, hinged at the shoulder, so
   // they can swing opposite the legs during a walk cycle.
-  const armGeo = new THREE.CylinderGeometry(0.032, 0.026, 0.44, 8);
+  const armGeo = new THREE.CapsuleGeometry(0.029, 0.32, 6, 16);
   const armPivots = {};
   [-1, 1].forEach((side) => {
     const armPivot = new THREE.Group();
@@ -126,7 +153,7 @@ export function createMom() {
     arm.rotation.z = side * 0.16;
     armPivot.add(arm);
 
-    const hand = mesh(new THREE.SphereGeometry(0.03, 8, 8), skinMat);
+    const hand = mesh(new THREE.SphereGeometry(0.03, 12, 10), skinMat);
     hand.position.set(side * 0.035, -0.43, 0.02);
     armPivot.add(hand);
 
@@ -134,10 +161,10 @@ export function createMom() {
   });
 
   // Neck, choker, and a small pendant
-  const neck = mesh(new THREE.CylinderGeometry(0.045, 0.05, 0.06, 10), skinMat);
+  const neck = mesh(new THREE.CylinderGeometry(0.045, 0.05, 0.06, 20), skinMat);
   neck.position.y = 1.35;
   group.add(neck);
-  const choker = mesh(new THREE.TorusGeometry(0.05, 0.011, 8, 16), corsetMat);
+  const choker = mesh(new THREE.TorusGeometry(0.05, 0.011, 12, 24), corsetMat);
   choker.rotation.x = Math.PI / 2;
   choker.position.y = 1.365;
   group.add(choker);
@@ -147,7 +174,7 @@ export function createMom() {
   group.add(pendant);
 
   // Head + face
-  const head = mesh(new THREE.SphereGeometry(0.11, 20, 16), skinMat);
+  const head = mesh(new THREE.SphereGeometry(0.11, 32, 24), skinMat);
   head.position.y = 1.47;
   group.add(head);
 
@@ -157,62 +184,72 @@ export function createMom() {
   // a winged eyeliner flick for the bold made-up look from the photo.
   const eyeWhiteMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3 });
   [-1, 1].forEach((side) => {
-    const iris = mesh(new THREE.SphereGeometry(0.022, 12, 10), eyeMat);
+    const iris = mesh(new THREE.SphereGeometry(0.022, 16, 12), eyeMat);
     iris.position.set(side * 0.05, 1.485, 0.108);
     group.add(iris);
     const highlight = mesh(new THREE.SphereGeometry(0.007, 8, 6), eyeWhiteMat);
     highlight.position.set(side * 0.05 - side * 0.008, 1.492, 0.126);
     group.add(highlight);
 
-    const brow = mesh(new THREE.BoxGeometry(0.05, 0.009, 0.01), hairMat);
+    // A slim capsule instead of a box gives the brow rounded ends rather
+    // than sharp corners.
+    const brow = mesh(new THREE.CapsuleGeometry(0.0045, 0.036, 4, 8), hairMat);
+    brow.rotation.z = Math.PI / 2 + side * -0.2;
     brow.position.set(side * 0.05, 1.515, 0.1);
-    brow.rotation.z = side * -0.2;
     group.add(brow);
 
-    const wing = mesh(new THREE.ConeGeometry(0.012, 0.032, 3), hairMat);
+    const wing = mesh(new THREE.ConeGeometry(0.012, 0.032, 10), hairMat);
     wing.position.set(side * 0.078, 1.487, 0.098);
     wing.rotation.z = side * 1.15;
     wing.rotation.y = Math.PI / 2;
     group.add(wing);
 
-    const blush = mesh(new THREE.SphereGeometry(0.024, 8, 8), blushMat);
+    const blush = mesh(new THREE.SphereGeometry(0.024, 12, 10), blushMat);
     blush.scale.set(1, 0.65, 0.3);
     blush.position.set(side * 0.075, 1.45, 0.09);
     group.add(blush);
   });
-  const mouth = mesh(new THREE.SphereGeometry(0.024, 8, 8), lipMat);
+  const mouth = mesh(new THREE.SphereGeometry(0.024, 12, 10), lipMat);
   mouth.scale.set(1.4, 0.6, 0.55);
   mouth.position.set(0, 1.435, 0.112);
   group.add(mouth);
 
-  // Hair: a rounded volume behind/around the head, bangs framing the face,
-  // and a small bow like the reference photo
-  const hairBack = mesh(new THREE.SphereGeometry(0.125, 16, 12), hairMat);
-  hairBack.scale.set(1.05, 1.3, 0.85);
-  hairBack.position.set(0, 1.47, -0.05);
-  group.add(hairBack);
-  const bangs = mesh(
-    new THREE.SphereGeometry(0.118, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.5),
-    hairMat
-  );
-  bangs.position.set(0, 1.49, 0);
+  // Hair: a head-hugging cap (sized to fully wrap the scalp/temples with
+  // no bald gaps, but stopping at jaw level rather than ballooning down
+  // over the neck — an earlier version sized it big enough to swallow the
+  // neck and part of the chest, which read as a black void under her
+  // chin), a separate drape that falls behind her back for length, a blunt
+  // forehead fringe, and two face-framing locks past the shoulders. Long
+  // dark hair is the single biggest identity cue from the reference
+  // photos. The bangs piece is a flattened shell rather than a full dome
+  // so its lower edge clears eyebrow height by a comfortable margin (an
+  // even earlier version sized it as a dome reaching low enough to fully
+  // enclose the brow/mouth coordinates, hiding those features entirely).
+  const hairCap = mesh(new THREE.SphereGeometry(0.12, 24, 18), hairMat);
+  hairCap.scale.set(1.1, 1.2, 0.9);
+  hairCap.position.set(0, 1.47, -0.03);
+  group.add(hairCap);
+  // Positioned to sit well inside hairCap's lower-back volume (rather than
+  // just touching tip-to-tip, which left a visible gap between the two
+  // rounded ends) so the two pieces read as one continuous mass of hair.
+  const hairFlow = mesh(new THREE.CapsuleGeometry(0.075, 0.4, 8, 12), hairMat);
+  hairFlow.position.set(0, 1.18, -0.1);
+  group.add(hairFlow);
+  const bangs = mesh(new THREE.SphereGeometry(0.1, 16, 12), hairMat);
+  bangs.scale.set(1, 0.24, 0.55);
+  bangs.position.set(0, 1.56, 0.08);
   group.add(bangs);
 
-  const bow = new THREE.Group();
+  const lockGeo = new THREE.CapsuleGeometry(0.026, 0.34, 6, 12);
   [-1, 1].forEach((side) => {
-    const loop = mesh(new THREE.ConeGeometry(0.035, 0.05, 8), hairMat);
-    loop.rotation.z = side * (Math.PI / 2 - 0.3);
-    loop.position.set(side * 0.03, 0, 0);
-    bow.add(loop);
+    const lock = mesh(lockGeo, hairMat);
+    lock.position.set(side * 0.1, 1.36, 0.05);
+    lock.rotation.z = side * 0.06;
+    group.add(lock);
   });
-  const bowKnot = mesh(new THREE.SphereGeometry(0.016, 8, 8), hairMat);
-  bow.add(bowKnot);
-  bow.position.set(0.07, 1.58, -0.02);
-  bow.rotation.x = 0.3;
-  group.add(bow);
 
   group.userData.head = head;
-  group.userData.hairBack = hairBack;
+  group.userData.hairBack = hairCap;
   group.userData.torso = torso;
   group.userData.legs = { legL: legPivots[-1], legR: legPivots[1] };
   group.userData.arms = { armL: armPivots[-1], armR: armPivots[1] };

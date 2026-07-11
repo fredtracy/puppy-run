@@ -35,24 +35,89 @@ function makeSpeckleTexture(base, variance, repeatX, repeatY) {
   return texture;
 }
 
+// A blotchy "clumps of leaves" value texture — soft overlapping circles at a
+// few brightness levels, tiled onto the canopy blobs and multiplied by each
+// material's own green tint (see LEAF_MATS below). Cheap to generate once
+// and share across every tree instead of a downloaded photo, which doesn't
+// map cleanly onto a handful of low-poly spheres anyway.
+function makeFoliageTexture() {
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgb(190,190,190)';
+  ctx.fillRect(0, 0, size, size);
+  for (let i = 0; i < 140; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const r = 6 + Math.random() * 22;
+    const shade = Math.random() > 0.5 ? 120 + Math.random() * 40 : 210 + Math.random() * 45;
+    ctx.fillStyle = `rgba(${shade},${shade},${shade},${0.35 + Math.random() * 0.35})`;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(2, 2);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 8;
+  return texture;
+}
+
 const textureLoader = new THREE.TextureLoader();
 
-// Real photographed brick (CC0, polyhaven.com: brick_wall_001) instead of a
-// hand-drawn canvas — diffuse + normal + roughness maps give it actual
-// physical depth and per-pixel material variation under lighting.
-function loadBrickTextures() {
-  const base = `${import.meta.env.BASE_URL}textures/brick_wall_001/brick_wall_001_`;
-  const map = textureLoader.load(`${base}diffuse_1k.jpg`);
+// Real photographed CC0 textures (polyhaven.com) instead of hand-drawn
+// canvas speckle — diffuse + normal + roughness maps give actual physical
+// depth and per-pixel material variation under lighting. `folder` doubles
+// as the shared filename prefix, matching how Poly Haven ships each set;
+// `diffuseSuffix` covers the one inconsistency between sets ("diffuse" for
+// brick_wall_001, "diff" for everything else added since).
+function loadPbrTextures(folder, diffuseSuffix, repeatX, repeatY) {
+  const base = `${import.meta.env.BASE_URL}textures/${folder}/${folder}_`;
+  const map = textureLoader.load(`${base}${diffuseSuffix}_1k.jpg`);
   map.colorSpace = THREE.SRGBColorSpace;
   const normalMap = textureLoader.load(`${base}nor_gl_1k.jpg`);
   const roughnessMap = textureLoader.load(`${base}rough_1k.jpg`);
   [map, normalMap, roughnessMap].forEach((texture) => {
     texture.wrapS = THREE.RepeatWrapping;
     texture.wrapT = THREE.RepeatWrapping;
-    texture.repeat.set(4, 2);
+    texture.repeat.set(repeatX, repeatY);
     texture.anisotropy = 16;
   });
   return { map, normalMap, roughnessMap };
+}
+
+function loadBrickTextures() {
+  return loadPbrTextures('brick_wall_001', 'diffuse', 4, 2);
+}
+
+function loadBarkTextures() {
+  return loadPbrTextures('bark_brown_02', 'diff', 1, 2);
+}
+
+function loadRoofTextures() {
+  // 1.5x1 instead of 6x4 — 4x fewer repeats across the same roof surface,
+  // so each shingle reads at roughly actual size instead of tiling tiny.
+  return loadPbrTextures('grey_roof_01', 'diff', 1.5, 1);
+}
+
+function loadConcreteTextures() {
+  return loadPbrTextures('concrete_floor', 'diff', 3, 2);
+}
+
+// Negative Y repeat compensates for how the lawn plane gets rotated flat
+// (rotation.x = -PI/2) — without it, the offset compensation in
+// updateLawnTexture below would scroll the texture backwards on the Z
+// axis relative to how it scrolls correctly on X.
+function loadLawnTextures() {
+  return loadPbrTextures('leafy_grass', 'diff', 25, -25);
+}
+
+function loadWoodFloorTextures() {
+  return loadPbrTextures('wood_floor', 'diff', 5, 3);
 }
 
 function makeSignTexture(text) {
@@ -136,9 +201,12 @@ export function createHouse() {
     roughnessMap: brickTextures.roughnessMap,
     roughness: 1,
   });
+  const roofTextures = loadRoofTextures();
   const roofMat = new THREE.MeshStandardMaterial({
-    map: makeSpeckleTexture('#8d8880', 40, 6, 4),
-    roughness: 0.8,
+    map: roofTextures.map,
+    normalMap: roofTextures.normalMap,
+    roughnessMap: roofTextures.roughnessMap,
+    roughness: 1,
   });
   const trimMat = new THREE.MeshStandardMaterial({
     map: makeSpeckleTexture('#e8e2d1', 20, 6, 2),
@@ -150,9 +218,12 @@ export function createHouse() {
     metalness: 0.1,
     clearcoat: 0.4,
   });
+  const concreteTextures = loadConcreteTextures();
   const concreteMat = new THREE.MeshStandardMaterial({
-    map: makeSpeckleTexture('#c7c2b6', 25, 4, 3),
-    roughness: 0.9,
+    map: concreteTextures.map,
+    normalMap: concreteTextures.normalMap,
+    roughnessMap: concreteTextures.roughnessMap,
+    roughness: 1,
   });
   const interiorWallMat = new THREE.MeshStandardMaterial({
     color: 0xf5f2ea,
@@ -284,9 +355,12 @@ export function createHouse() {
   rightWall.position.set(width / 2 - wallThickness / 2, wallHeight / 2, 0);
   group.add(rightWall);
 
+  const woodFloorTextures = loadWoodFloorTextures();
   const floorMat = new THREE.MeshStandardMaterial({
-    map: makeSpeckleTexture('#7d5a3c', 25, 5, 3),
-    roughness: 0.55,
+    map: woodFloorTextures.map,
+    normalMap: woodFloorTextures.normalMap,
+    roughnessMap: woodFloorTextures.roughnessMap,
+    roughness: 1,
   });
   const interiorFloor = mesh(
     new THREE.PlaneGeometry(width - wallThickness, depth - wallThickness),
@@ -436,36 +510,68 @@ export function createHouse() {
   return group;
 }
 
-const PINE_MAT = new THREE.MeshStandardMaterial({ color: 0x2f5233, roughness: 0.9 });
-const LEAF_MATS = [0x4a7c3f, 0x567f3f, 0x3f6b38].map(
-  (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.85 })
+const foliageTexture = makeFoliageTexture();
+const PINE_MATS = [0x2f5233, 0x386040, 0x264a2c].map(
+  (color) => new THREE.MeshStandardMaterial({ color, map: foliageTexture, roughness: 0.88 })
 );
-const TRUNK_MAT = new THREE.MeshStandardMaterial({ color: 0x5b4330, roughness: 0.95 });
+const LEAF_MATS = [0x4a7c3f, 0x567f3f, 0x3f6b38, 0x6b8f42].map(
+  (color) => new THREE.MeshStandardMaterial({ color, map: foliageTexture, roughness: 0.85 })
+);
+const barkTextures = loadBarkTextures();
+const TRUNK_MAT = new THREE.MeshStandardMaterial({
+  map: barkTextures.map,
+  normalMap: barkTextures.normalMap,
+  roughnessMap: barkTextures.roughnessMap,
+  roughness: 1,
+});
 
 function createTree(kind, rand = Math.random) {
   const group = new THREE.Group();
   const trunkH = kind === 'pine' ? 1.2 + rand() * 0.6 : 0.9 + rand() * 0.4;
-  const trunk = mesh(new THREE.CylinderGeometry(0.08, 0.11, trunkH, 7), TRUNK_MAT);
+  const trunk = mesh(new THREE.CylinderGeometry(0.08, 0.11, trunkH, 9), TRUNK_MAT);
   trunk.position.y = trunkH / 2;
   group.add(trunk);
 
   if (kind === 'pine') {
-    for (let i = 0; i < 3; i++) {
-      const r = 0.9 - i * 0.22;
-      const h = 1.1;
-      const cone = mesh(new THREE.ConeGeometry(r, h, 8), PINE_MAT);
-      cone.position.y = trunkH + i * 0.65 + h * 0.35;
+    // Each tier gets its own slight color pick and a small horizontal
+    // jitter/rotation so the stack reads as a slightly shaggy conifer
+    // instead of three perfectly concentric cones.
+    for (let i = 0; i < 4; i++) {
+      const r = 0.85 - i * 0.17;
+      const h = 0.95 - i * 0.08;
+      const cone = mesh(
+        new THREE.ConeGeometry(r, h, 10, 1, false),
+        PINE_MATS[Math.floor(rand() * PINE_MATS.length)]
+      );
+      cone.position.set(
+        (rand() - 0.5) * 0.08,
+        trunkH + i * 0.55 + h * 0.4,
+        (rand() - 0.5) * 0.08
+      );
+      cone.rotation.y = rand() * Math.PI * 2;
       group.add(cone);
     }
   } else {
-    const foliageMat = LEAF_MATS[Math.floor(rand() * LEAF_MATS.length)];
-    for (let i = 0; i < 3; i++) {
-      const r = 0.55 + rand() * 0.35;
-      const blob = mesh(new THREE.SphereGeometry(r, 8, 6), foliageMat);
+    // A fuller, more varied canopy: more blobs than before, each with its
+    // own material pick and a slight squash so they read as leaf clumps
+    // rather than perfect spheres.
+    const blobCount = 4 + Math.floor(rand() * 2);
+    for (let i = 0; i < blobCount; i++) {
+      const r = 0.5 + rand() * 0.38;
+      const foliageMat = LEAF_MATS[Math.floor(rand() * LEAF_MATS.length)];
+      const blob = mesh(new THREE.SphereGeometry(r, 10, 8), foliageMat);
+      const scaleY = 0.82 + rand() * 0.25;
+      blob.scale.set(1, scaleY, 1);
+      // The vertical offset is derived from this blob's own (already
+      // rolled) half-height rather than picked independently — otherwise
+      // an unlucky combination (high offset, small/squashed blob) leaves a
+      // gap above the trunk instead of overlapping it.
+      const halfExtent = r * scaleY;
+      const dip = halfExtent * (0.2 + rand() * 0.5);
       blob.position.set(
-        (rand() - 0.5) * 0.6,
-        trunkH + 0.5 + rand() * 0.5,
-        (rand() - 0.5) * 0.6
+        (rand() - 0.5) * 0.7,
+        trunkH + halfExtent - dip,
+        (rand() - 0.5) * 0.7
       );
       group.add(blob);
     }
@@ -508,7 +614,7 @@ const inHouse = (x, z) => x > -8.7 && x < 8.7 && z > -17.3 && z < -3.8;
 // Matches firePit's own placement in createYard() below — kept separate so
 // grass tufts (createGrassField) can skip it without needing the actual
 // fire pit object to exist yet.
-const FIRE_PIT = { x: -1, z: 5, radius: 0.7 };
+export const FIRE_PIT = { x: -1, z: 5, radius: 0.7 };
 const inFirePit = (x, z) => Math.hypot(x - FIRE_PIT.x, z - FIRE_PIT.z) < FIRE_PIT.radius;
 
 export function createTreeChunk(cx, cz) {
@@ -625,18 +731,23 @@ function makeStripeTexture(colorA, colorB) {
 function createHammockTree() {
   const group = new THREE.Group();
   const trunkH = 1.1;
-  const trunk = mesh(new THREE.CylinderGeometry(0.09, 0.12, trunkH, 7), TRUNK_MAT);
+  const trunk = mesh(new THREE.CylinderGeometry(0.09, 0.12, trunkH, 9), TRUNK_MAT);
   trunk.position.y = trunkH / 2;
   group.add(trunk);
 
-  const foliageMat = LEAF_MATS[Math.floor(Math.random() * LEAF_MATS.length)];
-  for (let i = 0; i < 3; i++) {
-    const r = 0.55 + Math.random() * 0.35;
-    const blob = mesh(new THREE.SphereGeometry(r, 8, 6), foliageMat);
+  const blobCount = 5;
+  for (let i = 0; i < blobCount; i++) {
+    const r = 0.5 + Math.random() * 0.38;
+    const foliageMat = LEAF_MATS[Math.floor(Math.random() * LEAF_MATS.length)];
+    const blob = mesh(new THREE.SphereGeometry(r, 10, 8), foliageMat);
+    const scaleY = 0.82 + Math.random() * 0.25;
+    blob.scale.set(1, scaleY, 1);
+    const halfExtent = r * scaleY;
+    const dip = halfExtent * (0.2 + Math.random() * 0.5);
     blob.position.set(
-      (Math.random() - 0.5) * 0.6,
-      trunkH + 0.5 + Math.random() * 0.5,
-      (Math.random() - 0.5) * 0.6
+      (Math.random() - 0.5) * 0.7,
+      trunkH + halfExtent - dip,
+      (Math.random() - 0.5) * 0.7
     );
     group.add(blob);
   }
@@ -683,17 +794,46 @@ function createHammock() {
   return group;
 }
 
+// World units covered by one texture tile (plane size / repeat count) —
+// used by updateLawnTexture below to keep the pattern anchored to world
+// space instead of gluing itself to whoever's standing on it.
+const LAWN_TILE_WORLD_SIZE = 100 / 25;
+
 function createLawn() {
+  const lawnTextures = loadLawnTextures();
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(100, 100),
     new THREE.MeshStandardMaterial({
-      map: makeSpeckleTexture('#4f8f45', 40, 40, 40),
-      roughness: 0.95,
+      map: lawnTextures.map,
+      normalMap: lawnTextures.normalMap,
+      roughnessMap: lawnTextures.roughnessMap,
+      // The raw photo reads a bit dry/brown for a cartoon backyard lawn —
+      // a green tint (multiplied against the map) pushes it back toward
+      // the same lush green as the grass-blade tufts planted on top of it.
+      color: 0x8fcf72,
+      roughness: 1,
     })
   );
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
+  ground.userData.textures = [lawnTextures.map, lawnTextures.normalMap, lawnTextures.roughnessMap];
   return ground;
+}
+
+// The lawn plane itself is finite and gets recentered on whoever's playing
+// every frame (see main.js) so they never walk off its edge — but with a
+// real photo texture (unlike the old positionally-invariant noise), simply
+// recentering the mesh without also shifting its texture offset makes the
+// pattern look glued in place under the player instead of scrolling by
+// like actual ground would as they walk. This keeps the sampled texture
+// anchored to world coordinates regardless of where the finite plane
+// currently sits.
+export function updateLawnTexture(lawn, worldX, worldZ) {
+  const offsetX = worldX / LAWN_TILE_WORLD_SIZE;
+  const offsetZ = worldZ / LAWN_TILE_WORLD_SIZE;
+  lawn.userData.textures.forEach((texture) => {
+    texture.offset.set(offsetX, offsetZ);
+  });
 }
 
 const GRASS_BLADE_HEIGHT = 0.35;

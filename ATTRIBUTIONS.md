@@ -18,3 +18,33 @@ Source: [Poly Haven — "Autumn Field Puresky"](https://polyhaven.com/a/autumn_f
 Source: [Poly Haven — "Brick Wall 001"](https://polyhaven.com/a/brick_wall_001)
 
 - [CC0](https://polyhaven.com/license) — public domain, no attribution required. Diffuse, normal, roughness, AO, and displacement maps used unmodified.
+
+## Tree bark PBR textures (public/textures/bark_brown_02/)
+
+Source: [Poly Haven — "Bark Brown 02"](https://polyhaven.com/a/bark_brown_02)
+
+- [CC0](https://polyhaven.com/license) — public domain, no attribution required. Diffuse, normal, and roughness maps used unmodified.
+
+## Roof shingle PBR textures (public/textures/grey_roof_01/)
+
+Source: [Poly Haven — "Grey Roof 01"](https://polyhaven.com/a/grey_roof_01)
+
+- [CC0](https://polyhaven.com/license) — public domain, no attribution required. Diffuse, normal, and roughness maps used unmodified.
+
+## Patio concrete PBR textures (public/textures/concrete_floor/)
+
+Source: [Poly Haven — "Concrete Floor"](https://polyhaven.com/a/concrete_floor)
+
+- [CC0](https://polyhaven.com/license) — public domain, no attribution required. Diffuse, normal, and roughness maps used unmodified.
+
+## Lawn PBR textures (public/textures/leafy_grass/)
+
+Source: [Poly Haven — "Leafy Grass"](https://polyhaven.com/a/leafy_grass)
+
+- [CC0](https://polyhaven.com/license) — public domain, no attribution required. Diffuse, normal, and roughness maps used unmodified.
+
+## Interior wood floor PBR textures (public/textures/wood_floor/)
+
+Source: [Poly Haven — "Wood Floor"](https://polyhaven.com/a/wood_floor)
+
+- [CC0](https://polyhaven.com/license) — public domain, no attribution required. Diffuse, normal, and roughness maps used unmodified.
