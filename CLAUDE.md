@@ -9,6 +9,7 @@ A Three.js game set in Darla's backyard.
 ## Workflow
 - When building features, move fast: make all the requested changes first. Don't run builds, lint, or syntax checks after each individual edit.
 - Don't run `vite build` or any other build/lint/test command on your own initiative, even after finishing a feature. The user checks results themselves in the browser. Only build if explicitly asked to.
+- Dev server is pinned to a fixed port (7331, set via `server.port`/`strictPort` in vite.config.js, and mirrored in `.claude/launch.json`) so it never collides with other local web projects. The game is always at **http://localhost:7331/puppy-run/** — the user has this bookmarked.
 
 ## UI conventions
 - Always center skill icons: any new `.action-button` (or similar) whose content is an emoji/icon needs `align-items: center; justify-content: center;` on its own `#id` rule, not just `display: flex` from a `.miranda-mode`-style toggle.

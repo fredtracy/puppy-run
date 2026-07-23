@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Puppy Run</title>
+    <link rel="icon" id="favicon" type="image/png" />
     <style>
       html, body {
         margin: 0;
@@ -285,6 +286,44 @@
       #speech-bubble.visible {
         opacity: 1;
       }
+      #dialogue-menu {
+        position: fixed;
+        left: 50%;
+        bottom: 100px;
+        transform: translateX(-50%);
+        display: none;
+        flex-direction: column;
+        gap: 8px;
+        background: rgba(20, 20, 20, 0.85);
+        border-radius: 14px;
+        padding: 14px;
+        z-index: 16;
+        min-width: 260px;
+      }
+      #dialogue-menu.visible {
+        display: flex;
+      }
+      #dialogue-menu button {
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
+        border: none;
+        border-radius: 8px;
+        padding: 10px 14px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        font-size: 14px;
+        text-align: left;
+        cursor: pointer;
+      }
+      #dialogue-menu button:hover,
+      #dialogue-menu button:active {
+        background: rgba(255, 255, 255, 0.24);
+      }
+      #dialogue-menu button.cancel {
+        background: transparent;
+        color: #b7ab9a;
+        text-align: center;
+        font-size: 13px;
+      }
     </style>
   </head>
   <body>
@@ -319,6 +358,7 @@
     <button id="cheese-button" class="action-button">&#129472;</button>
     <button id="call-button" class="action-button">&#128227;</button>
     <div id="speech-bubble"></div>
+    <div id="dialogue-menu"></div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

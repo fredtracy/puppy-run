@@ -350,6 +350,14 @@ function drawMirandaPortrait(ctx, size) {
 drawDarlaPortrait(document.getElementById('portrait-darla').getContext('2d'), 128);
 drawMirandaPortrait(document.getElementById('portrait-miranda').getContext('2d'), 128);
 
+// Favicon: Darla's same hand-drawn portrait, just rendered small — reuses
+// the character-select artwork instead of needing a separate image asset.
+const faviconCanvas = document.createElement('canvas');
+faviconCanvas.width = 64;
+faviconCanvas.height = 64;
+drawDarlaPortrait(faviconCanvas.getContext('2d'), 64);
+document.getElementById('favicon').href = faviconCanvas.toDataURL('image/png');
+
 // Which character is currently being controlled — chosen on the select
 // screen below. Everything player-movement-related (WASD/click-to-move,
 // jump, camera follow, walk-cycle animation) reads from `player` rather
@@ -1173,7 +1181,18 @@ function pickPoop(clientX, clientY) {
 // Talking to another character: for now just Darla clicking on Miranda,
 // who gets a "Woof!" speech bubble and her bark sound — the speaking
 // character (not whoever got clicked) is who the bubble appears over.
+// Snaps both of them to face one another, so a conversation doesn't play
+// out with either of them still looking off in whatever direction they
+// happened to be facing when the click landed.
+function faceEachOther() {
+  const dx = darla.position.x - mom.position.x;
+  const dz = darla.position.z - mom.position.z;
+  mom.rotation.y = Math.atan2(dx, dz);
+  darla.rotation.y = Math.atan2(-dx, -dz);
+}
+
 function talkToMiranda() {
+  faceEachOther();
   playBarkSound();
   showSpeechBubble(darla, 'Woof!');
 }
@@ -1186,10 +1205,72 @@ function hitsDarla(clientX, clientY) {
   return raycaster.intersectObject(darla, true).length > 0;
 }
 
-// The reverse direction: Miranda clicking on Darla. No voice sample for
-// her yet (unlike Darla's bark), just the bubble.
-function talkToDarla() {
-  showSpeechBubble(mom, 'Hi Bubby');
+// The reverse direction: Miranda clicking on Darla brings up a menu of
+// things she can say. Each node pairs Miranda's question with Darla's
+// reply, plus an optional list of follow-up nodes — after her reply
+// plays, if there are follow-ups the menu reopens showing those instead
+// of closing, so a conversation can go several exchanges deep rather than
+// stopping after one reply. No voice sample for either yet (unlike
+// Darla's bark), just bubbles.
+const DIALOGUE_TREE = [
+  {
+    question: 'Hi Bubby',
+    response: 'Woof!',
+    followUps: [
+      {
+        question: 'Who’s a good girl?',
+        response: 'Woof! Woof!',
+        followUps: [{ question: 'Yes you are!', response: 'Woof! Woof! Woof!', followUps: [] }],
+      },
+    ],
+  },
+  {
+    question: 'What is best in life Darla?',
+    response: 'To crush your enemies, see them driven before you, and to hear the lamentations of their women!',
+    followUps: [{ question: "Cool."}],
+    end: true,
+  },
+];
+
+const dialogueMenuEl = document.getElementById('dialogue-menu');
+// True once any exchange has actually happened this conversation — just
+// changes the cancel button's wording (see openDialogueMenu below), reset
+// whenever Darla's clicked fresh (see the pointerup handler).
+let dialogueStarted = false;
+
+function openDialogueMenu(options) {
+  dialogueMenuEl.innerHTML = '';
+  options.forEach((node) => {
+    const btn = document.createElement('button');
+    btn.textContent = node.question;
+    btn.addEventListener('click', () => {
+      dialogueMenuEl.classList.remove('visible');
+      talkToDarla(node);
+    });
+    dialogueMenuEl.appendChild(btn);
+  });
+  const cancel = document.createElement('button');
+  cancel.className = 'cancel';
+  cancel.textContent = dialogueStarted ? 'End conversation' : 'Never mind';
+  cancel.addEventListener('click', () => dialogueMenuEl.classList.remove('visible'));
+  dialogueMenuEl.appendChild(cancel);
+  dialogueMenuEl.classList.add('visible');
+}
+
+// A node with no follow-ups falls back to the full top-level topic list
+// (so casual conversations never run out of things to say on their own),
+// UNLESS it's marked `end: true` — that's how a specific scripted
+// exchange gets a definite, written ending instead of looping back.
+function talkToDarla(node) {
+  dialogueStarted = true;
+  showSpeechBubble(mom, node.question);
+  window.setTimeout(() => {
+    playBarkSound();
+    showSpeechBubble(darla, node.response);
+    if (node.end) return;
+    const next = node.followUps && node.followUps.length > 0 ? node.followUps : DIALOGUE_TREE;
+    window.setTimeout(() => openDialogueMenu(next), 1700);
+  }, 1700);
 }
 
 function hitsHammock(clientX, clientY) {
@@ -1285,7 +1366,9 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   }
 
   if (playerKind === 'miranda' && hitsDarla(e.clientX, e.clientY)) {
-    talkToDarla();
+    dialogueStarted = false;
+    faceEachOther();
+    openDialogueMenu(DIALOGUE_TREE);
     return;
   }
 

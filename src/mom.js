@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 
 // A stylized, cartoon-proportioned figure in the spirit of Darla's own
-// low-poly build — not a likeness, just the same warm gothic-glam palette
-// (dark hair, black off-shoulder corset dress, pale tights, choker) that
-// makes her instantly read as "Darla's mom" standing in the yard.
+// low-poly build — not a likeness of anyone, just her own gothic-glam
+// palette (dark hair, black off-shoulder corset dress, pale tights,
+// choker) with a bit of a toned-fighter edge worked in: an asymmetric
+// side-swept fringe and fingerless gloves, rather than a delicate/purely
+// glam silhouette.
 const COLORS = {
   skin: 0xf0c9a8,
   hair: 0x1f1613,
@@ -26,7 +28,7 @@ function mesh(geometry, material) {
 // A simple handle + blade, held in the right hand once the poop backlog
 // gets big enough that picking up by hand stops looking sane. Hidden by
 // default; main.js toggles it on based on poop count.
-function buildShovel() {
+export function buildShovel() {
   const shovel = new THREE.Group();
   const handleMat = new THREE.MeshStandardMaterial({ color: 0x8a5a2f, roughness: 0.7 });
   const metalMat = new THREE.MeshStandardMaterial({
@@ -67,6 +69,7 @@ export function createMom() {
     roughness: 0.3,
     metalness: 0.6,
   });
+  const gloveMat = new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.55 });
   const lipMat = new THREE.MeshStandardMaterial({ color: COLORS.lips, roughness: 0.4 });
   const eyeMat = new THREE.MeshPhysicalMaterial({
     color: 0x2f7fd1,
@@ -177,6 +180,19 @@ export function createMom() {
     hand.position.set(side * 0.035, -0.43, 0.02);
     armPivot.add(hand);
 
+    // Fingerless glove: a short cuff wrapping the wrist just above the
+    // hand (leaving the palm/fingers themselves bare), plus a couple of
+    // small metal studs for a goth/punk accent.
+    const glove = mesh(new THREE.CylinderGeometry(0.034, 0.031, 0.09, 12), gloveMat);
+    glove.position.set(side * 0.033, -0.4, 0.018);
+    glove.rotation.x = 0.15;
+    armPivot.add(glove);
+    [-0.018, 0.018].forEach((dz) => {
+      const stud = mesh(new THREE.SphereGeometry(0.006, 8, 6), metalMat);
+      stud.position.set(side * 0.033 + side * 0.026, -0.4, 0.018 + dz);
+      armPivot.add(stud);
+    });
+
     armPivots[side] = armPivot;
 
     if (side === 1) {
@@ -196,6 +212,13 @@ export function createMom() {
   choker.rotation.x = Math.PI / 2;
   choker.position.y = 1.365;
   group.add(choker);
+  // A couple of small studs for a slightly tougher, punkier edge to the
+  // choker rather than a plain band.
+  [-0.03, 0.03].forEach((dx) => {
+    const stud = mesh(new THREE.SphereGeometry(0.007, 8, 6), metalMat);
+    stud.position.set(dx, 1.365, 0.049);
+    group.add(stud);
+  });
   const pendant = mesh(new THREE.SphereGeometry(0.014, 8, 8), metalMat);
   pendant.scale.set(1, 1.6, 0.6);
   pendant.position.set(0, 1.32, 0.05);
@@ -263,10 +286,20 @@ export function createMom() {
   const hairFlow = mesh(new THREE.CapsuleGeometry(0.075, 0.4, 8, 12), hairMat);
   hairFlow.position.set(0, 1.18, -0.1);
   group.add(hairFlow);
+  // Asymmetric side-swept fringe rather than a blunt, even one — a longer
+  // sweep of hair angles across the forehead toward one eye, tapering
+  // narrower on that side, for a more dramatic edge to her look.
   const bangs = mesh(new THREE.SphereGeometry(0.1, 16, 12), hairMat);
   bangs.scale.set(1, 0.24, 0.55);
-  bangs.position.set(0, 1.56, 0.08);
+  bangs.position.set(0.012, 1.558, 0.08);
+  bangs.rotation.z = -0.12;
   group.add(bangs);
+  const bangSweep = mesh(new THREE.ConeGeometry(0.045, 0.15, 10), hairMat);
+  bangSweep.scale.set(0.55, 1, 0.4);
+  bangSweep.position.set(-0.055, 1.51, 0.095);
+  bangSweep.rotation.z = 0.65;
+  bangSweep.rotation.x = 0.15;
+  group.add(bangSweep);
 
   const lockGeo = new THREE.CapsuleGeometry(0.026, 0.34, 6, 12);
   [-1, 1].forEach((side) => {
