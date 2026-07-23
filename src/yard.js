@@ -133,9 +133,18 @@ function makeSignTexture(text) {
   ctx.lineWidth = 8;
   ctx.strokeRect(4, 4, w - 8, h - 8);
   ctx.fillStyle = '#4a2f1a';
-  ctx.font = 'bold 64px Georgia, serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+  // Shrinks to fit rather than a fixed size, so a longer sign (e.g. "Under
+  // Construction") doesn't just run off the edges of the board the way a
+  // fixed 64px would for anything much longer than "FORT DARLA".
+  let fontSize = 64;
+  const maxWidth = w - 40;
+  ctx.font = `bold ${fontSize}px Georgia, serif`;
+  while (ctx.measureText(text).width > maxWidth && fontSize > 20) {
+    fontSize -= 2;
+    ctx.font = `bold ${fontSize}px Georgia, serif`;
+  }
   ctx.fillText(text, w / 2, h / 2 + 4);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -187,6 +196,109 @@ function buildFrenchDoors(totalW, h, trimMat, glassMat, rightOpen = false) {
   return group;
 }
 
+// A flat triangular slab (base at y=0, apex at (0, peakHeight), thin along
+// Z) — the brick gable-end pediment above the garage and front entry,
+// matching the reference house's front-facing gables.
+function buildGableEnd(width, peakHeight, thickness, material) {
+  const shape = new THREE.Shape();
+  shape.moveTo(-width / 2, 0);
+  shape.lineTo(width / 2, 0);
+  shape.lineTo(0, peakHeight);
+  shape.lineTo(-width / 2, 0);
+  const geo = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
+  geo.translate(0, 0, -thickness / 2);
+  return mesh(geo, material);
+}
+
+// Two tilted slabs meeting at a ridge running the full `runDepth` (plus
+// overhang) — a simple gable roof cap sized to sit over a `width`-wide
+// gable end below. Unlike buildHipRoof's single cone, this needs an actual
+// ridge *line* rather than a point, hence two flat rectangular slabs
+// instead of one radially-symmetric shape.
+function buildGableRoof(width, runDepth, peakHeight, thickness, overhangSide, overhangEnd, material) {
+  const group = new THREE.Group();
+  const halfSpan = width / 2 + overhangSide;
+  const angle = Math.atan2(peakHeight, halfSpan);
+  const slopeLength = Math.hypot(halfSpan, peakHeight);
+  [-1, 1].forEach((side) => {
+    const slab = mesh(
+      new THREE.BoxGeometry(slopeLength, thickness, runDepth + overhangEnd * 2),
+      material
+    );
+    slab.rotation.z = -side * angle;
+    slab.position.set((side * halfSpan) / 2, peakHeight / 2, 0);
+    group.add(slab);
+  });
+  return group;
+}
+
+// A flat semicircular cap sized to sit on top of a `width`-wide buildWindow
+// — a stylized approximation of the reference house's arched front windows
+// (a true curved arch doesn't read as anything different from a faceted
+// one at this camera distance, so this keeps the same flat-panel
+// construction style as the rest of the house).
+function buildArchCap(width, thickness, material) {
+  const radius = width / 2;
+  const segments = 12;
+  const shape = new THREE.Shape();
+  shape.moveTo(-radius, 0);
+  for (let i = 0; i <= segments; i++) {
+    const a = Math.PI - (Math.PI * i) / segments;
+    shape.lineTo(Math.cos(a) * radius, Math.sin(a) * radius);
+  }
+  shape.lineTo(-radius, 0);
+  const geo = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
+  geo.translate(0, 0, -thickness / 2);
+  return mesh(geo, material);
+}
+
+function buildArchedWindow(w, h, trimMat, glassMat) {
+  const group = new THREE.Group();
+  group.add(buildWindow(w, h, trimMat, glassMat));
+  const cap = buildArchCap(w, 0.06, trimMat);
+  cap.position.y = h / 2;
+  group.add(cap);
+  return group;
+}
+
+// Ground-to-cap brick chimney, standing proud of whatever wall it's placed
+// against.
+function buildChimney(width, depth, height, capMat, brickMat) {
+  const group = new THREE.Group();
+  const shaft = mesh(new THREE.BoxGeometry(width, height, depth), brickMat);
+  shaft.position.y = height / 2;
+  group.add(shaft);
+  const cap = mesh(new THREE.BoxGeometry(width + 0.08, 0.08, depth + 0.08), capMat);
+  cap.position.y = height + 0.04;
+  group.add(cap);
+  const flue = mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.18, 8), capMat);
+  flue.position.y = height + 0.17;
+  group.add(flue);
+  return group;
+}
+
+// A tilted yard sign on a stake, planted in the lawn near the front walk —
+// a livelier home for "FORT DARLA" than a wall plaque, closer to a kid's
+// clubhouse sign than a house number.
+function buildYardSign(text) {
+  const group = new THREE.Group();
+  const postMat = new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 0.85 });
+  const post = mesh(new THREE.CylinderGeometry(0.035, 0.045, 1.1, 8), postMat);
+  post.position.y = 0.55;
+  group.add(post);
+  const signMat = new THREE.MeshBasicMaterial({
+    map: makeSignTexture(text),
+    toneMapped: false,
+    side: THREE.DoubleSide,
+  });
+  const board = mesh(new THREE.PlaneGeometry(1.5, 0.42), signMat);
+  board.position.set(0, 0.95, 0.02);
+  board.rotation.y = 0.2;
+  group.add(board);
+  group.rotation.z = -0.04;
+  return group;
+}
+
 export function createHouse() {
   const group = new THREE.Group();
   const width = 11;
@@ -211,6 +323,13 @@ export function createHouse() {
   const trimMat = new THREE.MeshStandardMaterial({
     map: makeSpeckleTexture('#e8e2d1', 20, 6, 2),
     roughness: 0.75,
+  });
+  // The wall under the deep patio overhang is sided rather than brick in
+  // the reference photos — everything else on the exterior stays brick,
+  // this is the one wall that isn't.
+  const sidingMat = new THREE.MeshStandardMaterial({
+    map: makeSpeckleTexture('#f1ede2', 14, 10, 3),
+    roughness: 0.7,
   });
   const glassMat = new THREE.MeshPhysicalMaterial({
     color: 0x1b2b33,
@@ -272,7 +391,12 @@ export function createHouse() {
   const sideEndCapMat = scaledBrickMat(wallThickness, wallHeight);
 
   // BoxGeometry material order: [+x, -x, +y, -y, +z, -z]
-  const frontMats = [brickMat, brickMat, brickMat, brickMat, brickMat, interiorWallMat];
+  // This "front" wall (with the doorway) is the one under the covered
+  // patio outside — sided, not brick, matching the reference photos. The
+  // solid "back" wall is the actual street-facing front of the house
+  // (garage, entry, chimney all attach to its outward -z face below), and
+  // stays brick.
+  const frontMats = [sidingMat, sidingMat, sidingMat, sidingMat, sidingMat, interiorWallMat];
   const backMats = [brickMat, brickMat, brickMat, brickMat, interiorWallMat, brickMat];
   const leftMats = [
     interiorWallMat,
@@ -313,21 +437,9 @@ export function createHouse() {
   );
   group.add(frontRight);
 
-  // The lintel is much smaller than the wall sections around it, so mapping
-  // it with the same brick texture repeat (tuned for a much bigger surface)
-  // would squeeze in far too many brick courses, both horizontally and
-  // vertically — a distorted, dense pattern instead of matching brick.
   const lintelWidth = doorway.xMax - doorway.xMin;
   const lintelHeight = wallHeight - doorway.yMax;
-  const lintelBrickMat = scaledBrickMat(lintelWidth, lintelHeight);
-  const lintelMats = [
-    lintelBrickMat,
-    lintelBrickMat,
-    lintelBrickMat,
-    lintelBrickMat,
-    lintelBrickMat,
-    interiorWallMat,
-  ];
+  const lintelMats = [sidingMat, sidingMat, sidingMat, sidingMat, sidingMat, interiorWallMat];
 
   const lintel = mesh(
     new THREE.BoxGeometry(lintelWidth, lintelHeight, wallThickness),
@@ -485,27 +597,163 @@ export function createHouse() {
   patioRoofPanel.position.set(0, wallHeight + 0.02, depth / 2 + patioDepth / 2);
   group.add(patioRoofPanel);
 
-  const winL = buildWindow(1.3, 1.5, trimMat, glassMat);
-  winL.position.set(-width * 0.3, wallHeight * 0.6, depth / 2 + 0.01);
-  group.add(winL);
-
-  const winR = buildWindow(1.3, 1.5, trimMat, glassMat);
-  winR.position.set(width * 0.3, wallHeight * 0.6, depth / 2 + 0.01);
-  group.add(winR);
-
+  // Two sets of French doors plus one window along the patio wall, matching
+  // the reference photos' composition. `doors` is the walkable pair (its
+  // right leaf is the actual doorway gap in the wall above); `doorsSecondary`
+  // is purely decorative.
   const doors = buildFrenchDoors(2.2, 2.0, trimMat, glassMat, true);
   doors.position.set(0, wallHeight * 0.42, depth / 2 + 0.01);
   group.add(doors);
 
-  // "FORT DARLA" sign on the back wall, facing the doorway so it's the
-  // first thing you see walking in
-  const signMat = new THREE.MeshBasicMaterial({
-    map: makeSignTexture('FORT DARLA'),
-    toneMapped: false,
+  const doorsSecondary = buildFrenchDoors(2.0, 2.0, trimMat, glassMat, false);
+  doorsSecondary.position.set(-2.6, wallHeight * 0.42, depth / 2 + 0.01);
+  group.add(doorsSecondary);
+
+  const patioWin = buildWindow(1.1, 1.3, trimMat, glassMat);
+  patioWin.position.set(2.7, wallHeight * 0.55, depth / 2 + 0.01);
+  group.add(patioWin);
+
+  // AC condenser unit, tucked against the wall just outside the patio.
+  const acMat = new THREE.MeshStandardMaterial({ color: 0xd6d6d2, roughness: 0.6 });
+  const acUnit = mesh(new THREE.BoxGeometry(0.5, 0.45, 0.5), acMat);
+  acUnit.position.set(patioWidth / 2 + 0.5, 0.225, depth / 2 + 0.3);
+  group.add(acUnit);
+
+  // --- Front of the house (the solid "back" wall above, -z) -------------
+  // Garage, gabled entry, arched windows, and chimney, matching the
+  // reference photos' street-facing side. Everything below attaches to the
+  // outward face of `backWall`, at local z = -depth / 2.
+
+  const garageWidth = 4.4;
+  const garageDepth = 3.0;
+  const garageCenterX = 2.6;
+  const garageFrontZ = -depth / 2 - garageDepth;
+  const garageBrickMat = scaledBrickMat(garageWidth, wallHeight);
+  const garageSideBrickMat = scaledBrickMat(garageDepth, wallHeight);
+
+  const garageBox = mesh(new THREE.BoxGeometry(garageWidth, wallHeight, garageDepth), [
+    garageSideBrickMat,
+    garageSideBrickMat,
+    garageBrickMat,
+    garageBrickMat,
+    garageBrickMat,
+    garageBrickMat,
+  ]);
+  garageBox.position.set(garageCenterX, wallHeight / 2, -depth / 2 - garageDepth / 2);
+  group.add(garageBox);
+
+  const garageDoorMat = new THREE.MeshStandardMaterial({ color: 0xf0efe9, roughness: 0.55 });
+  const garageDoorGrooveMat = new THREE.MeshStandardMaterial({ color: 0xd8d6cd, roughness: 0.6 });
+  const garageDoorHeight = wallHeight * 0.72;
+  const garageDoor = mesh(
+    new THREE.BoxGeometry(garageWidth - 1, garageDoorHeight, 0.05),
+    garageDoorMat
+  );
+  garageDoor.position.set(garageCenterX, garageDoorHeight / 2, garageFrontZ - 0.03);
+  group.add(garageDoor);
+  for (let i = 1; i < 4; i++) {
+    const groove = mesh(
+      new THREE.BoxGeometry((garageWidth - 1) * 0.92, 0.02, 0.01),
+      garageDoorGrooveMat
+    );
+    groove.position.set(garageCenterX, (garageDoorHeight * i) / 4, garageFrontZ - 0.06);
+    group.add(groove);
+  }
+
+  // Driveway, leading away from the garage door.
+  const drivewayWidth = garageWidth - 0.2;
+  const drivewayLength = 6;
+  const driveway = mesh(new THREE.BoxGeometry(drivewayWidth, 0.06, drivewayLength), concreteMat);
+  driveway.position.set(garageCenterX, 0.03, garageFrontZ - drivewayLength / 2);
+  group.add(driveway);
+
+  // Brick gable pediment over the garage, with a round louvered vent — this
+  // is what makes the garage read as its own gabled volume rather than just
+  // a box tucked under the main hip roof.
+  const garageGablePeak = 1.7;
+  const gableEnd = buildGableEnd(garageWidth, garageGablePeak, 0.1, garageBrickMat);
+  gableEnd.position.set(garageCenterX, wallHeight, garageFrontZ);
+  group.add(gableEnd);
+
+  const ventOuter = mesh(new THREE.CircleGeometry(0.24, 16), trimMat);
+  ventOuter.rotation.y = Math.PI;
+  ventOuter.position.set(garageCenterX, wallHeight + garageGablePeak * 0.5, garageFrontZ - 0.061);
+  group.add(ventOuter);
+  const ventInner = mesh(new THREE.CircleGeometry(0.16, 16), fireboxMat);
+  ventInner.rotation.y = Math.PI;
+  ventInner.position.set(garageCenterX, wallHeight + garageGablePeak * 0.5, garageFrontZ - 0.062);
+  group.add(ventInner);
+
+  const garageRoof = buildGableRoof(
+    garageWidth,
+    garageDepth,
+    garageGablePeak,
+    0.12,
+    0.35,
+    0.35,
+    roofMat
+  );
+  garageRoof.position.set(garageCenterX, wallHeight, -depth / 2 - garageDepth / 2);
+  group.add(garageRoof);
+
+  // Front entry: oval-glass door under a small gabled hood, on a slim
+  // brick support column.
+  const frontDoorX = -1.1;
+  const frontDoorMat = new THREE.MeshStandardMaterial({ color: 0xefe7d8, roughness: 0.55 });
+  const frontDoor = mesh(new THREE.BoxGeometry(0.85, 2.0, 0.06), frontDoorMat);
+  frontDoor.position.set(frontDoorX, 1.0, -depth / 2 - 0.03);
+  group.add(frontDoor);
+
+  const ovalMat = new THREE.MeshPhysicalMaterial({
+    color: 0xbcd4e0,
+    roughness: 0.2,
+    metalness: 0.05,
+    clearcoat: 0.5,
   });
-  const sign = mesh(new THREE.PlaneGeometry(2.4, 0.66), signMat);
-  sign.position.set(0, wallHeight * 0.55, -depth / 2 + wallThickness + 0.02);
-  group.add(sign);
+  const oval = mesh(new THREE.CircleGeometry(0.16, 20), ovalMat);
+  oval.scale.set(1, 1.7, 1);
+  oval.rotation.y = Math.PI;
+  oval.position.set(frontDoorX, 1.35, -depth / 2 - 0.061);
+  group.add(oval);
+
+  const entryRoof = buildGableRoof(1.3, 0.9, 0.55, 0.08, 0.15, 0.15, roofMat);
+  entryRoof.position.set(frontDoorX, wallHeight, -depth / 2 - 0.45);
+  group.add(entryRoof);
+
+  const entryColumnHeight = wallHeight * 0.62;
+  const entryColumnMat = scaledBrickMat(0.18, entryColumnHeight);
+  const entryColumn = mesh(
+    new THREE.BoxGeometry(0.18, entryColumnHeight, 0.18),
+    entryColumnMat
+  );
+  entryColumn.position.set(frontDoorX - 0.75, entryColumnHeight / 2, -depth / 2 - 0.85);
+  group.add(entryColumn);
+
+  // Arched front windows.
+  const archWinBig = buildArchedWindow(1.3, 1.4, trimMat, glassMat);
+  archWinBig.position.set(-3.3, 1.15, -depth / 2 - 0.03);
+  group.add(archWinBig);
+
+  const archWinSmall = buildArchedWindow(0.8, 1.1, trimMat, glassMat);
+  archWinSmall.position.set(-4.5, 1.0, -depth / 2 - 0.03);
+  group.add(archWinSmall);
+
+  // Chimney, standing proud of the wall roughly mid-way along the side
+  // opposite the garage (not tucked into the far corner).
+  const chimneyHeight = wallHeight + roofHeight * 0.85;
+  const chimneyBrickMat = scaledBrickMat(0.55, chimneyHeight);
+  const chimney = buildChimney(0.55, 0.5, chimneyHeight, trimMat, chimneyBrickMat);
+  chimney.position.set(-4.6, 0, -depth / 2 - 0.35);
+  group.add(chimney);
+
+  // "FORT DARLA" — a tilted yard sign staked in the lawn by the front walk,
+  // rather than a wall plaque. Default board orientation faces back toward
+  // the house, so this needs the +PI flip to actually greet someone
+  // approaching from the street instead of showing them the mirrored back.
+  const yardSign = buildYardSign('FORT DARLA');
+  yardSign.position.set(-2.2, 0, -depth / 2 - 2.5);
+  yardSign.rotation.y = Math.PI + 0.3;
+  group.add(yardSign);
 
   return group;
 }
@@ -609,7 +857,10 @@ const TREE_SPACING = 3.6;
 // footprint — shared between the tree chunks (which exclude both) and the
 // grass field (which only grows in the clearing, minus the house).
 const inOpenArea = (x, z) => x > -9.5 && x < 9.5 && z > -4.5 && z < 14.5;
-const inHouse = (x, z) => x > -8.7 && x < 8.7 && z > -17.3 && z < -3.8;
+// z lower bound extends well past the old plain-box house to clear the
+// garage and its driveway, which now project out past the main hip roof's
+// footprint.
+const inHouse = (x, z) => x > -8.7 && x < 8.7 && z > -24.2 && z < -3.8;
 
 // Matches firePit's own placement in createYard() below — kept separate so
 // grass tufts (createGrassField) can skip it without needing the actual
@@ -1060,6 +1311,14 @@ export function createYard() {
   hammock.rotation.y = 0.4;
   group.add(hammock);
   group.userData.hammock = hammock;
+
+  // A little developer joke, staked out in the open lawn away from the
+  // fire pit and hammock — facing back toward the middle of the yard so
+  // it's actually readable as you wander past.
+  const underConstructionSign = buildYardSign('Under Construction');
+  underConstructionSign.position.set(-7, 0, 11);
+  underConstructionSign.rotation.y = Math.PI * 0.75;
+  group.add(underConstructionSign);
 
   return group;
 }

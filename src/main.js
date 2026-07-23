@@ -27,6 +27,7 @@ import {
   playBiteSound,
   playCallDarlaSound,
 } from './audio.js';
+import * as net from './net.js';
 
 // Browsers block audio until a user gesture — kick it off on the first
 // keypress or tap/click, whichever comes first.
@@ -369,16 +370,148 @@ let player = darla;
 let playerKind = 'darla'; // 'darla' | 'miranda'
 let gameStarted = false;
 
+// Two-player mode: each browser fully simulates only the character it's
+// been assigned (100% the same single-player code as below — no separate
+// networked movement path), and mirrors whatever the peer sends for the
+// *other* character instead of running her AI. See applyRemoteState /
+// sendNetworkState further down for the actual sync.
+let isMultiplayer = false;
+let isHost = false;
+
 function startGame(kind) {
   playerKind = kind;
   player = kind === 'darla' ? darla : mom;
   gameStarted = true;
   document.body.classList.toggle('miranda-mode', kind === 'miranda');
+  document.body.classList.toggle('multiplayer-mode', isMultiplayer);
+  document.getElementById('mp-menu').classList.add('hidden');
   document.getElementById('character-select').classList.add('hidden');
 }
 
-document.getElementById('pick-darla').addEventListener('click', () => startGame('darla'));
-document.getElementById('pick-miranda').addEventListener('click', () => startGame('miranda'));
+document.getElementById('pick-darla').addEventListener('click', () => {
+  startGame('darla');
+  if (isHost) net.send({ t: 'assign', hostKind: 'darla' });
+});
+document.getElementById('pick-miranda').addEventListener('click', () => {
+  startGame('miranda');
+  if (isHost) net.send({ t: 'assign', hostKind: 'miranda' });
+});
+
+// --- Multiplayer lobby (mode-select screen, before character-select) ----
+const mpMenuEl = document.getElementById('mp-menu');
+const mpHostPanelEl = document.getElementById('mp-host-panel');
+const mpJoinPanelEl = document.getElementById('mp-join-panel');
+const mpHostCodeEl = document.getElementById('mp-host-code');
+const mpHostStatusEl = document.getElementById('mp-host-status');
+const mpJoinStatusEl = document.getElementById('mp-join-status');
+const mpJoinCodeInput = document.getElementById('mp-join-code');
+const characterSelectTitleEl = document.getElementById('character-select-title');
+
+function showLobbyChoices() {
+  net.disconnect();
+  isMultiplayer = false;
+  isHost = false;
+  mpHostPanelEl.classList.add('hidden');
+  mpJoinPanelEl.classList.add('hidden');
+  mpHostStatusEl.textContent = 'Generating code…';
+  mpJoinStatusEl.textContent = '';
+  mpJoinCodeInput.value = '';
+}
+
+function goToCharacterSelect(title) {
+  characterSelectTitleEl.textContent = title;
+  mpMenuEl.classList.add('hidden');
+  document.getElementById('character-select').classList.remove('hidden');
+}
+
+document.getElementById('mp-solo').addEventListener('click', () => {
+  isMultiplayer = false;
+  goToCharacterSelect('Who do you want to play as?');
+});
+
+document.getElementById('mp-host').addEventListener('click', () => {
+  mpHostPanelEl.classList.remove('hidden');
+  isHost = true;
+  net.hostGame();
+});
+
+document.getElementById('mp-host-cancel').addEventListener('click', showLobbyChoices);
+
+document.getElementById('mp-join').addEventListener('click', () => {
+  mpJoinPanelEl.classList.remove('hidden');
+});
+
+document.getElementById('mp-join-cancel').addEventListener('click', showLobbyChoices);
+
+document.getElementById('mp-join-connect').addEventListener('click', () => {
+  const code = mpJoinCodeInput.value.trim();
+  if (!code) return;
+  isHost = false;
+  mpJoinStatusEl.textContent = 'Connecting…';
+  net.joinGame(code);
+});
+
+net.onHostReady((id) => {
+  mpHostCodeEl.textContent = id;
+  mpHostStatusEl.textContent = 'Waiting for a friend to connect…';
+});
+
+net.onPeerConnected(() => {
+  isMultiplayer = true;
+  if (isHost) {
+    goToCharacterSelect("You're hosting! Pick your character — your friend gets the other one.");
+  } else {
+    mpJoinStatusEl.textContent = "Connected! Waiting for the host to pick a character…";
+  }
+});
+
+net.onPeerDisconnected(() => {
+  if (gameStarted) {
+    // Mid-game disconnect: simplest recovery is a reload back to the lobby
+    // rather than trying to gracefully hand the remote character back to
+    // AI control (which doesn't exist for a mid-match handoff).
+    window.location.reload();
+    return;
+  }
+  isMultiplayer = false;
+  mpJoinStatusEl.textContent = 'Connection lost.';
+  mpHostStatusEl.textContent = 'Connection lost.';
+});
+
+net.onPeerError((err) => {
+  console.error('Peer error:', err);
+  mpJoinStatusEl.textContent = "Couldn't connect — check the code and try again.";
+  mpHostStatusEl.textContent = 'Something went wrong — try again.';
+});
+
+net.onMessage((msg) => {
+  if (msg.t === 'assign') {
+    // Only the joiner ever receives this — the host is the one who sent
+    // it, right after picking their own character above.
+    const myKind = msg.hostKind === 'darla' ? 'miranda' : 'darla';
+    startGame(myKind);
+    return;
+  }
+  if (msg.t === 'state') {
+    applyRemoteState(msg);
+    return;
+  }
+  if (msg.t === 'daynight') {
+    applyRemoteDayNight(msg.isDay);
+    return;
+  }
+  if (msg.t === 'fx') {
+    applyRemoteFx(msg);
+  }
+});
+
+// Small one-shot cosmetic events (sounds, speech bubbles) — either side can
+// fire these when its own local player triggers something, so the peer's
+// screen plays/shows the same thing instead of going silent for the other
+// character's actions.
+function sendFx(name, extra) {
+  if (isMultiplayer) net.send({ t: 'fx', name, ...extra });
+}
 
 // Endless woods: trees stream in as chunks around Darla's current position
 // (each chunk seeded so revisiting it looks the same) and unload once far
@@ -735,6 +868,7 @@ const DAY_NIGHT_FADE_MS = 2500; // half of the 5s round trip: fade out, swap, fa
 function toggleDayNight() {
   dayNightButton.disabled = true;
   dayNightFade.style.opacity = '1';
+  if (isMultiplayer) net.send({ t: 'daynight', isDay: !isDay });
   setTimeout(() => {
     applyDayNight(!isDay);
     dayNightFade.style.opacity = '0';
@@ -816,6 +950,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Enter' && !e.repeat && playerKind === 'darla') {
     e.preventDefault();
     playMooSound();
+    sendFx('moo');
   }
   if (e.code === 'Backspace' && !e.repeat && playerKind === 'darla') {
     e.preventDefault();
@@ -829,6 +964,7 @@ window.addEventListener('keyup', (e) => {
 document.getElementById('moo-button').addEventListener('pointerdown', (e) => {
   e.preventDefault();
   playMooSound();
+  sendFx('moo');
 });
 
 let poopButtonHeld = false;
@@ -854,6 +990,7 @@ document.getElementById('dress-button').addEventListener('pointerdown', (e) => {
 document.getElementById('bark-button').addEventListener('pointerdown', (e) => {
   e.preventDefault();
   playBarkSound();
+  sendFx('bark');
 });
 
 // Bite: a prank rather than a useful skill — press the button and Darla
@@ -1060,6 +1197,15 @@ callButton.addEventListener('pointerdown', (e) => {
 let poopSpawnTimer = 0;
 const POOP_SPAWN_INTERVAL = 0.1;
 const poops = [];
+// Stable per-pile ids, assigned only on real creation (not on a merge into
+// an existing pile) — what lets a networked peer's poop snapshot diff
+// cleanly against its own locally-rendered copies each tick.
+let nextPoopId = 1;
+// Poops rendered on the *other* client's snapshot when I'm not the one
+// playing Darla — a parallel set of plain visual objects, never touched by
+// spawnPoop/totalPoopCount/momUsingShovel, since only whoever's playing
+// Darla owns the real `poops` array.
+const remotePoops = new Map();
 
 // Total individual poops across all piles — a pile that 5 poops merged
 // into still counts as 5 toward the shovel threshold, not 1.
@@ -1105,6 +1251,7 @@ function spawnPoop(spread = 1) {
 
   const poop = createPoop();
   poop.userData.growth = 0;
+  poop.userData.id = nextPoopId++;
   poop.position.set(x, 0, z);
   poop.rotation.y = Math.random() * Math.PI * 2;
   scene.add(poop);
@@ -1195,6 +1342,7 @@ function talkToMiranda() {
   faceEachOther();
   playBarkSound();
   showSpeechBubble(darla, 'Woof!');
+  sendFx('speechBark', { text: 'Woof!' });
 }
 
 function hitsDarla(clientX, clientY) {
@@ -1257,20 +1405,33 @@ function openDialogueMenu(options) {
   dialogueMenuEl.classList.add('visible');
 }
 
+// The actual two-stage bubble playback (question, then — after a beat —
+// bark + reply), shared between the local interactive flow below and the
+// non-interactive replay a networked peer runs for the same exchange (see
+// applyRemoteFx) — `onReplyShown` is where the local-only "reopen the menu"
+// follow-up hooks in, since a peer just watching the conversation play out
+// has no menu to reopen.
+function playDialogueBubbles(node, onReplyShown) {
+  showSpeechBubble(mom, node.question);
+  window.setTimeout(() => {
+    playBarkSound();
+    showSpeechBubble(darla, node.response);
+    if (onReplyShown) onReplyShown();
+  }, 1700);
+}
+
 // A node with no follow-ups falls back to the full top-level topic list
 // (so casual conversations never run out of things to say on their own),
 // UNLESS it's marked `end: true` — that's how a specific scripted
 // exchange gets a definite, written ending instead of looping back.
 function talkToDarla(node) {
   dialogueStarted = true;
-  showSpeechBubble(mom, node.question);
-  window.setTimeout(() => {
-    playBarkSound();
-    showSpeechBubble(darla, node.response);
+  sendFx('dialogue', { question: node.question, response: node.response });
+  playDialogueBubbles(node, () => {
     if (node.end) return;
     const next = node.followUps && node.followUps.length > 0 ? node.followUps : DIALOGUE_TREE;
     window.setTimeout(() => openDialogueMenu(next), 1700);
-  }, 1700);
+  });
 }
 
 function hitsHammock(clientX, clientY) {
@@ -1912,6 +2073,125 @@ function updateJump(delta) {
   return jumpHeight;
 }
 
+// --- Multiplayer sync ----------------------------------------------------
+// Each browser fully simulates only the character it's driving (100% the
+// same code above, completely unmodified) and mirrors whatever the peer
+// last reported for the *other* character — no host-side "simulate both"
+// step, no client-side prediction, just apply the latest snapshot.
+
+// Poops rendered from a peer's snapshot are plain visual copies, not real
+// entries in `poops` — this reconciles remotePoops (id -> mesh) against
+// whatever list just arrived: add meshes for new ids, drop ones no longer
+// present, update position/scale for the rest.
+function reconcileRemotePoops(list) {
+  const seen = new Set();
+  for (const p of list) {
+    seen.add(p.id);
+    let obj = remotePoops.get(p.id);
+    if (!obj) {
+      obj = createPoop();
+      obj.rotation.y = Math.random() * Math.PI * 2;
+      scene.add(obj);
+      remotePoops.set(p.id, obj);
+    }
+    obj.position.set(p.x, 0, p.z);
+    obj.scale.setScalar(1 + p.growth * POOP_GROWTH_PER_MERGE);
+  }
+  for (const [id, obj] of remotePoops) {
+    if (seen.has(id)) continue;
+    scene.remove(obj);
+    obj.traverse((child) => {
+      if (child.isMesh) child.geometry.dispose();
+    });
+    remotePoops.delete(id);
+  }
+}
+
+// Whether the *remote* Miranda was lounging as of the last snapshot — kept
+// separate from `mirandaLounging` (which only ever describes *my own*
+// locally-driven Mom) so the two can't stomp on each other depending on
+// who's playing which character.
+let remoteWasLounging = false;
+
+function applyRemoteState(msg) {
+  if (playerKind === 'darla') {
+    // The peer is playing Miranda/Mom.
+    if (msg.lounging !== remoteWasLounging) {
+      remoteWasLounging = msg.lounging;
+      if (msg.lounging) enterHammockLounge();
+      else exitHammockLounge();
+    }
+    // enterHammockLounge already set her exact pose from the hammock's own
+    // fixed transform — a plain x/y/z + yaw can't represent lying down, so
+    // this skips overwriting it with the sender's (frozen, pre-lounge) raw
+    // transform while she's actually in the hammock.
+    if (!msg.lounging) {
+      mom.position.set(msg.x, msg.y, msg.z);
+      mom.rotation.y = msg.ry;
+    }
+    updateMirandaWalkCycle(msg.moving);
+  } else {
+    // The peer is playing Darla.
+    darla.position.set(msg.x, msg.y, msg.z);
+    darla.rotation.y = msg.ry;
+    updateWalkCycle(msg.moving, msg.jumping, msg.jumping && msg.jumpHeld);
+    if (typeof msg.dress === 'boolean') darla.userData.dress.visible = msg.dress;
+    if (msg.poops) reconcileRemotePoops(msg.poops);
+  }
+}
+
+function applyRemoteDayNight(day) {
+  if (day === isDay) return;
+  dayNightButton.disabled = true;
+  dayNightFade.style.opacity = '1';
+  setTimeout(() => {
+    applyDayNight(day);
+    dayNightFade.style.opacity = '0';
+    setTimeout(() => {
+      dayNightButton.disabled = false;
+    }, DAY_NIGHT_FADE_MS);
+  }, DAY_NIGHT_FADE_MS);
+}
+
+function applyRemoteFx(msg) {
+  if (msg.name === 'bark') playBarkSound();
+  else if (msg.name === 'moo') playMooSound();
+  else if (msg.name === 'speechBark') {
+    faceEachOther();
+    playBarkSound();
+    showSpeechBubble(darla, msg.text);
+  } else if (msg.name === 'dialogue') {
+    faceEachOther();
+    playDialogueBubbles({ question: msg.question, response: msg.response });
+  }
+}
+
+function sendNetworkState(isMoving) {
+  if (!net.isConnected()) return;
+  const msg = {
+    t: 'state',
+    x: player.position.x,
+    y: player.position.y,
+    z: player.position.z,
+    ry: player.rotation.y,
+    moving: isMoving,
+    jumping: isJumping,
+    jumpHeld,
+  };
+  if (playerKind === 'darla') {
+    msg.dress = darla.userData.dress.visible;
+    msg.poops = poops.map((p) => ({
+      id: p.userData.id,
+      x: p.position.x,
+      z: p.position.z,
+      growth: p.userData.growth,
+    }));
+  } else {
+    msg.lounging = mirandaLounging;
+  }
+  net.send(msg);
+}
+
 function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
@@ -1929,7 +2209,10 @@ function animate() {
   elapsed += delta;
 
   if (gameStarted) {
-    updateBiteChase();
+    // Bite is an AI-chase mechanic (see updateBiteChase/triggerBite above)
+    // built around Mom being an NPC — hidden entirely in multiplayer (see
+    // the .multiplayer-mode CSS rule), so there's nothing to update either.
+    if (!isMultiplayer) updateBiteChase();
     const isMoving = updateMovement(delta);
     // While lounging her position/pose is fixed by enterHammockLounge — the
     // usual walk-cycle/jump-height math would otherwise stomp her y back
@@ -1942,6 +2225,7 @@ function animate() {
           : updateMirandaWalkCycle(isMoving);
       player.position.y = baseY + jumpY;
     }
+    if (isMultiplayer) sendNetworkState(isMoving);
   }
 
   // Darla's own idle tail wag + head sway run regardless of whether she's
@@ -1970,8 +2254,10 @@ function animate() {
   // Mom's own fire-pit AI (and the idle sway that goes with it) only runs
   // while she's an NPC — once she's the player, her limbs are driven by
   // updateMirandaWalkCycle above instead, and running both would fight
-  // over the same rotations every frame.
-  if (playerKind !== 'miranda') {
+  // over the same rotations every frame. In multiplayer she's never an
+  // NPC (a real second player drives her, whether local or over the
+  // network via applyRemoteState), so this is skipped there too.
+  if (!isMultiplayer && playerKind !== 'miranda') {
     updateMom(delta);
     if (momState === 'idle') {
       mom.userData.torso.rotation.y = Math.sin(elapsed * 0.4) * 0.04;
@@ -2042,8 +2328,12 @@ function animate() {
   // somewhere. Reuses her own (quadruped) walk cycle for the run, same as
   // the player-driven path does, just fed by whichever AI's isMoving
   // instead of WASD/click-to-move (only one of the two is ever active at
-  // once, per the guards in throwBallTo/throwCheeseTo).
-  if (playerKind === 'miranda') {
+  // once, per the guards in throwBallTo/throwCheeseTo). Fetch/cheese are
+  // both AI-companion mechanics — hidden and unreachable in multiplayer
+  // (see .multiplayer-mode), so this stays off there too, rather than
+  // fighting the network-applied position applyRemoteState sets on Darla
+  // every frame when she's the peer's character.
+  if (!isMultiplayer && playerKind === 'miranda') {
     const fetching = updateDarlaFetch(delta);
     const eatingCheese = updateDarlaCheese(delta);
     darla.position.y = updateWalkCycle(fetching || eatingCheese, false, false);
