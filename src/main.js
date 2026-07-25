@@ -6,6 +6,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { createDarla, createPoop } from './darla.js';
 import { createMom } from './mom.js';
 import {
@@ -26,6 +27,7 @@ import {
   playBarkSound,
   playBiteSound,
   playCallDarlaSound,
+  setMusicPsychedelic,
 } from './audio.js';
 import * as net from './net.js';
 
@@ -351,6 +353,12 @@ function drawMirandaPortrait(ctx, size) {
 drawDarlaPortrait(document.getElementById('portrait-darla').getContext('2d'), 128);
 drawMirandaPortrait(document.getElementById('portrait-miranda').getContext('2d'), 128);
 
+// Same two portraits, small and overlapping, standing in for a generic
+// "two players" icon on the multiplayer button — reuses the exact same
+// drawing functions rather than a separate composited image.
+drawMirandaPortrait(document.getElementById('mp-icon-miranda').getContext('2d'), 32);
+drawDarlaPortrait(document.getElementById('mp-icon-darla').getContext('2d'), 32);
+
 // Favicon: Darla's same hand-drawn portrait, just rendered small — reuses
 // the character-select artwork instead of needing a separate image asset.
 const faviconCanvas = document.createElement('canvas');
@@ -382,6 +390,7 @@ function startGame(kind) {
   playerKind = kind;
   player = kind === 'darla' ? darla : mom;
   gameStarted = true;
+  document.body.classList.add('game-started');
   document.body.classList.toggle('miranda-mode', kind === 'miranda');
   document.body.classList.toggle('multiplayer-mode', isMultiplayer);
   document.getElementById('mp-menu').classList.add('hidden');
@@ -402,10 +411,25 @@ const mpMenuEl = document.getElementById('mp-menu');
 const mpHostPanelEl = document.getElementById('mp-host-panel');
 const mpJoinPanelEl = document.getElementById('mp-join-panel');
 const mpHostCodeEl = document.getElementById('mp-host-code');
+const mpHostShareBtn = document.getElementById('mp-host-share');
 const mpHostStatusEl = document.getElementById('mp-host-status');
 const mpJoinStatusEl = document.getElementById('mp-join-status');
 const mpJoinCodeInput = document.getElementById('mp-join-code');
 const characterSelectTitleEl = document.getElementById('character-select-title');
+
+// Native OS share sheet (texting/AirDrop/Messenger/etc. right over the
+// game) instead of "copy the code, switch apps, paste it" — much less time
+// with the tab backgrounded, so much less chance of the signaling
+// connection getting suspended before your friend connects. Falls back to
+// the code just being plain selectable text (see #mp-host-code's
+// user-select: all) on browsers without the Web Share API, mainly desktop.
+if (navigator.share) {
+  mpHostShareBtn.addEventListener('click', () => {
+    navigator
+      .share({ title: 'Puppy Run', text: `Join my Puppy Run game! Code: ${mpHostCodeEl.textContent}` })
+      .catch(() => {}); // cancelling the share sheet isn't an error worth surfacing
+  });
+}
 
 function showLobbyChoices() {
   net.disconnect();
@@ -413,6 +437,7 @@ function showLobbyChoices() {
   isHost = false;
   mpHostPanelEl.classList.add('hidden');
   mpJoinPanelEl.classList.add('hidden');
+  mpHostShareBtn.style.display = 'none';
   mpHostStatusEl.textContent = 'Generating code…';
   mpJoinStatusEl.textContent = '';
   mpJoinCodeInput.value = '';
@@ -424,8 +449,15 @@ function goToCharacterSelect(title) {
   document.getElementById('character-select').classList.remove('hidden');
 }
 
-document.getElementById('mp-solo').addEventListener('click', () => {
-  isMultiplayer = false;
+// Character-select is the default first screen now (solo is the common
+// case); this corner button is the door into the host/join lobby instead
+// of multiplayer being the very first choice you have to get past.
+document.getElementById('mp-corner-button').addEventListener('click', () => {
+  document.getElementById('character-select').classList.add('hidden');
+  mpMenuEl.classList.remove('hidden');
+});
+
+document.getElementById('mp-choices-back').addEventListener('click', () => {
   goToCharacterSelect('Who do you want to play as?');
 });
 
@@ -453,7 +485,22 @@ document.getElementById('mp-join-connect').addEventListener('click', () => {
 
 net.onHostReady((id) => {
   mpHostCodeEl.textContent = id;
+  if (navigator.share) mpHostShareBtn.style.display = '';
   mpHostStatusEl.textContent = 'Waiting for a friend to connect…';
+});
+
+// The signaling link (not the eventual game connection itself) dropped —
+// almost always a backgrounded phone tab getting suspended while its code
+// was being shared elsewhere. net.js retries automatically the moment the
+// tab's visible again; this is purely the "hang on…" message while that
+// happens rather than a hard failure.
+net.onSignalingLost(() => {
+  if (!mpHostPanelEl.classList.contains('hidden')) {
+    mpHostStatusEl.textContent = 'Connection interrupted — reconnecting…';
+  }
+  if (!mpJoinPanelEl.classList.contains('hidden')) {
+    mpJoinStatusEl.textContent = 'Connection interrupted — reconnecting…';
+  }
 });
 
 net.onPeerConnected(() => {
@@ -502,6 +549,10 @@ net.onMessage((msg) => {
   }
   if (msg.t === 'fx') {
     applyRemoteFx(msg);
+    return;
+  }
+  if (msg.t === 'command') {
+    applyRemoteCommand(msg.name, msg.poopId);
   }
 });
 
@@ -511,6 +562,80 @@ net.onMessage((msg) => {
 // character's actions.
 function sendFx(name, extra) {
   if (isMultiplayer) net.send({ t: 'fx', name, ...extra });
+}
+
+// Unlike fx (pure cosmetic replay), commands actually drive state
+// transitions on whichever client receives them — see applyRemoteCommand.
+// Flows both ways: Miranda's client sends the "start" commands (fetch,
+// cheese, call, leash), Darla's client sends the matching "done" commands
+// back once her own local errand actually finishes, since only she knows
+// that (see updateDarlaFetch/updateDarlaCheese).
+function sendCommand(name, extra) {
+  if (isMultiplayer) net.send({ t: 'command', name, ...extra });
+}
+
+// Skills that used to just directly move `darla` (fetch, cheese, call,
+// leash) are built on "the other character is an AI companion" — with a
+// real second player driving Darla instead, only *her own* client can be
+// the one to actually move her (see the darlaCommandable gate in animate),
+// so these commands are what tells her client to start, using whatever
+// state (ball/cheese position, mom's position) is already kept in sync the
+// normal way. The "done" commands flow the opposite direction, so
+// Miranda's client knows to release its own button/guard state again —
+// it can't derive that on its own since it doesn't simulate Darla locally.
+function applyRemoteCommand(name, poopId) {
+  if (name === 'fetchStart') {
+    darlaFetchState = 'fetching';
+  } else if (name === 'cheeseStart') {
+    darlaCheeseState = 'going';
+  } else if (name === 'callDarla') {
+    darlaFetchState = 'returning';
+  } else if (name === 'leashOn') {
+    setDarlaLeashed(true);
+  } else if (name === 'leashOff') {
+    setDarlaLeashed(false);
+  } else if (name === 'ballGrabbed') {
+    // Fires the moment Darla's client reaches the ball (fetching ->
+    // returning), well before fetchDone — resetting Miranda's own local
+    // ball.visible here too so it actually stays hidden for the whole
+    // walk back, not just flash away and reappear on her next sync.
+    ball.visible = false;
+  } else if (name === 'fetchDone') {
+    darlaFetchState = 'idle';
+    ballState = 'idle';
+    // Miranda's client is what actually broadcasts ball.visible each tick
+    // (see sendNetworkState) — without resetting her own local copy here
+    // too, she'd keep insisting it's still visible on every subsequent
+    // sync, overwriting the false Darla's client already set the moment
+    // she grabbed it (see updateDarlaFetch) right back to true.
+    ball.visible = false;
+    ballButton.disabled = false;
+    ballButton.classList.remove('disabled');
+  } else if (name === 'cheeseDone') {
+    cheeseState = 'idle';
+    // Miranda's own local darlaCheeseState never got reset here before —
+    // it's what every skill's guard (throwBallTo, throwCheeseTo, call,
+    // leash) checks is 'idle' before allowing anything, so leaving it
+    // stuck at 'going' silently blocked all of them after just one throw.
+    // fetchDone (above) already did this correctly for darlaFetchState;
+    // this one was just missed.
+    darlaCheeseState = 'idle';
+    // Same reasoning as ball.visible above — this is what was making the
+    // cheese never actually disappear once Darla finished eating it.
+    cheese.visible = false;
+    cheeseButton.disabled = false;
+    cheeseButton.classList.remove('disabled');
+  } else if (name === 'poopPicked') {
+    // Only Darla's client holds the real `poops` array — Miranda clicking
+    // a poop she only has a remote-rendered copy of (see reconcileRemote
+    // Poops) already shrinks/removes *that* copy locally on her own
+    // client the instant she picks it up (updateMomPickup doesn't care
+    // which array a poop came from); this is what makes the *authoritative*
+    // copy actually shrink/disappear too, so it doesn't just reappear on
+    // the next sync.
+    const poop = poops.find((p) => p.userData.id === poopId);
+    if (poop) removeOrShrinkPoop(poop);
+  }
 }
 
 // Endless woods: trees stream in as chunks around Darla's current position
@@ -902,7 +1027,98 @@ const bloomPass = new UnrealBloomPass(
   0.85
 );
 composer.addPass(bloomPass);
+
+// Miranda's "trip" skill: a full-screen wiggle (UV displaced by layered
+// sine waves) plus a slow hue rotation and a little chromatic split, all
+// scaled by uIntensity so toggling it fades in/out instead of snapping —
+// see setPsychedelic below. Goes after bloom (so it distorts the already-
+// composited image) but before OutputPass (so OutputPass's color-space
+// conversion still happens last, same as any other pipeline).
+const psychedelicPass = new ShaderPass({
+  uniforms: {
+    tDiffuse: { value: null },
+    uTime: { value: 0 },
+    uIntensity: { value: 0 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float uTime;
+    uniform float uIntensity;
+    varying vec2 vUv;
+
+    // Standard NTSC-derived hue-rotation matrix (rotates RGB around the
+    // luma axis) — cheap enough to run per-pixel without a HSL round trip.
+    vec3 hueRotate(vec3 color, float angle) {
+      float c = cos(angle);
+      float s = sin(angle);
+      mat3 hueMat = mat3(
+        0.299 + 0.701 * c + 0.168 * s, 0.587 - 0.587 * c + 0.330 * s, 0.114 - 0.114 * c - 0.497 * s,
+        0.299 - 0.299 * c - 0.328 * s, 0.587 + 0.413 * c + 0.035 * s, 0.114 - 0.114 * c + 0.292 * s,
+        0.299 - 0.300 * c + 1.250 * s, 0.587 - 0.588 * c - 1.050 * s, 0.114 + 0.886 * c - 0.203 * s
+      );
+      return hueMat * color;
+    }
+
+    void main() {
+      vec2 uv = vUv;
+      float wiggle = 0.012 * uIntensity;
+      uv.x += sin(uv.y * 18.0 + uTime * 2.2) * wiggle;
+      uv.y += cos(uv.x * 14.0 + uTime * 1.7) * wiggle;
+
+      float split = 0.004 * uIntensity;
+      vec4 color = texture2D(tDiffuse, uv);
+      color.r = texture2D(tDiffuse, uv + vec2(split, 0.0)).r;
+      color.b = texture2D(tDiffuse, uv - vec2(split, 0.0)).b;
+
+      color.rgb = mix(color.rgb, hueRotate(color.rgb, uTime * 0.6), uIntensity);
+      gl_FragColor = color;
+    }
+  `,
+});
+composer.addPass(psychedelicPass);
+
 composer.addPass(new OutputPass());
+
+// A screen-space post-effect is inherently per-viewer (it's applied to
+// this browser's own composer, not the 3D scene itself), so — unlike the
+// other skills — this one stays purely local: it's what Miranda herself
+// is "seeing," not a change to shared world state, and there's nothing to
+// network-sync in multiplayer either way.
+let psychedelicActive = false;
+const psychedelicButton = document.getElementById('psychedelic-button');
+const PSYCHEDELIC_DURATION_MS = 20000;
+
+psychedelicButton.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  if (playerKind !== 'miranda' || psychedelicActive) return;
+  psychedelicActive = true;
+  psychedelicButton.classList.add('aiming');
+  setMusicPsychedelic(true);
+  setTimeout(() => {
+    psychedelicActive = false;
+    psychedelicButton.classList.remove('aiming');
+    setMusicPsychedelic(false);
+  }, PSYCHEDELIC_DURATION_MS);
+});
+
+// Fades uIntensity toward on/off (rather than snapping) so the effect
+// ramps in and out instead of just appearing/vanishing — called every
+// frame from animate() regardless of playerKind, so it fades back out
+// cleanly even if she stops playing Miranda mid-trip (can't currently
+// happen mid-session, but cheap enough not to bother special-casing).
+function updatePsychedelic(delta) {
+  const target = psychedelicActive ? 1 : 0;
+  const u = psychedelicPass.uniforms;
+  u.uIntensity.value += (target - u.uIntensity.value) * Math.min(1, delta * 2);
+  u.uTime.value = elapsed;
+}
 
 // Movement — WASD / arrow keys, relative to the camera so "forward" always
 // means "away from where you're looking," with Darla turning to face the
@@ -997,11 +1213,8 @@ document.getElementById('bark-button').addEventListener('pointerdown', (e) => {
 // chases Miranda down (re-targeting her every frame in case she's off on a
 // collection run, rather than a single fixed point) instead of just
 // biting from wherever she happens to be standing. Once she actually
-// reaches her, Miranda's fed up and won't collect any more poops for the
-// rest of the session (see the momAnnoyed guard in updateMom below); if
-// she was mid-run when caught, she abandons whatever she was headed for
-// and heads straight home instead of finishing the trip.
-let momAnnoyed = false;
+// reaches her, the leash comes off if she's currently wearing one —
+// otherwise it's just the reaction pulse, no other effect.
 let biteElapsed = 0;
 let biteActive = false;
 let biteChasing = false;
@@ -1010,12 +1223,16 @@ const BITE_ARRIVE_DIST = 0.55;
 
 function triggerBite() {
   playBiteSound();
-  momAnnoyed = true;
-  if (momState === 'walking') {
-    momTargetPoop = null;
+  if (darlaLeashed) {
+    setDarlaLeashed(false);
+    sendCommand('leashOff');
   }
   biteActive = true;
   biteElapsed = 0;
+  // The impact pulse itself (biteActive, driven in animate()) already
+  // runs unconditionally on whatever local darla/mom objects exist — this
+  // just makes sure it also fires on Mom's own screen, not only the biter's.
+  sendFx('bite');
 }
 
 function updateBiteChase() {
@@ -1077,7 +1294,7 @@ const ballThrowStart = new THREE.Vector3();
 const ballThrowTarget = new THREE.Vector3();
 
 function throwBallTo(x, z) {
-  if (ballState !== 'idle' || darlaCheeseState !== 'idle') return;
+  if (ballState !== 'idle' || darlaCheeseState !== 'idle' || darlaLeashed) return;
   ballState = 'flying';
   ballThrowElapsed = 0;
   ballButton.disabled = true;
@@ -1140,7 +1357,8 @@ const cheeseThrowStart = new THREE.Vector3();
 const cheeseThrowTarget = new THREE.Vector3();
 
 function throwCheeseTo(x, z) {
-  if (cheeseState !== 'idle' || darlaFetchState !== 'idle' || darlaCheeseState !== 'idle') return;
+  if (cheeseState !== 'idle' || darlaFetchState !== 'idle' || darlaCheeseState !== 'idle' || darlaLeashed)
+    return;
   cheeseState = 'flying';
   cheeseThrowElapsed = 0;
   cheeseButton.disabled = true;
@@ -1184,11 +1402,96 @@ cheeseButton.addEventListener('pointerdown', (e) => {
 const callButton = document.getElementById('call-button');
 callButton.addEventListener('pointerdown', (e) => {
   e.preventDefault();
-  if (playerKind !== 'miranda' || darlaFetchState !== 'idle' || darlaCheeseState !== 'idle') return;
+  if (
+    playerKind !== 'miranda' ||
+    darlaFetchState !== 'idle' ||
+    darlaCheeseState !== 'idle' ||
+    darlaLeashed
+  )
+    return;
   playCallDarlaSound();
   showSpeechBubble(mom, 'Darla!');
   darlaFetchState = 'returning';
+  sendCommand('callDarla');
+  sendFx('callBark');
 });
+
+// Leash: click to arm, then click Darla herself (not a ground point, like
+// fetch/cheese) to clip it on. Once leashed she's kept on a short tether
+// rather than free to wander — see updateDarlaLeash below — instead of
+// commanding her off on an errand the way the other skills do, so it's
+// gated against those the same way they're gated against each other.
+const leashButton = document.getElementById('leash-button');
+const leashMat = new THREE.MeshStandardMaterial({ color: 0x7a3b1e, roughness: 0.7 });
+const leash = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 1, 6), leashMat);
+leash.castShadow = true;
+leash.visible = false;
+scene.add(leash);
+const leashStart = new THREE.Vector3();
+const leashEnd = new THREE.Vector3();
+const leashDirVec = new THREE.Vector3();
+const LEASH_UP = new THREE.Vector3(0, 1, 0);
+
+let leashAiming = false;
+let darlaLeashed = false;
+
+function setDarlaLeashed(value) {
+  darlaLeashed = value;
+  leash.visible = value;
+  leashButton.classList.toggle('aiming', value || leashAiming);
+}
+
+leashButton.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  if (darlaLeashed) {
+    setDarlaLeashed(false);
+    sendCommand('leashOff');
+    return;
+  }
+  if (darlaFetchState !== 'idle' || darlaCheeseState !== 'idle') return;
+  leashAiming = !leashAiming;
+  leashButton.classList.toggle('aiming', leashAiming);
+});
+
+// Stretches the leash cylinder (default unit height along its local Y)
+// between roughly Miranda's hand and Darla's collar — same "billboard a
+// thin primitive between two live points" trick as everything else in
+// this codebase that connects two moving things, just with a quaternion
+// instead of a 2D rotation since this one isn't flat-on-the-ground.
+function updateLeashVisual() {
+  if (!darlaLeashed) return;
+  leashStart.set(mom.position.x, mom.position.y + 1.0, mom.position.z);
+  leashEnd.set(darla.position.x, darla.position.y + 0.22, darla.position.z);
+  leash.position.copy(leashStart).add(leashEnd).multiplyScalar(0.5);
+  leashDirVec.subVectors(leashEnd, leashStart);
+  const len = leashDirVec.length();
+  leash.scale.set(1, Math.max(len, 0.001), 1);
+  if (len > 0.0001) {
+    leash.quaternion.setFromUnitVectors(LEASH_UP, leashDirVec.normalize());
+  }
+}
+
+// Keeps her within DARLA_LEASH_DISTANCE of Miranda — slack (no movement)
+// once she's within it, walking to close the gap (capped so a single big
+// frame-time spike can't snap her straight past the leash length) once
+// she's not. Returns whether she moved, same isMoving-for-the-walk-cycle
+// contract as updateDarlaFetch/updateDarlaCheese below.
+const DARLA_LEASH_DISTANCE = 1.2;
+const darlaLeashDir = new THREE.Vector3();
+
+function updateDarlaLeash(delta) {
+  if (!darlaLeashed) return false;
+  darlaLeashDir.set(mom.position.x - darla.position.x, 0, mom.position.z - darla.position.z);
+  const dist = darlaLeashDir.length();
+  if (dist <= DARLA_LEASH_DISTANCE) return false;
+  darlaLeashDir.normalize();
+  const step = Math.min(dist - DARLA_LEASH_DISTANCE, WALK_SPEED * delta);
+  darla.position.x += darlaLeashDir.x * step;
+  darla.position.z += darlaLeashDir.z * step;
+  const targetAngle = Math.atan2(darlaLeashDir.x, darlaLeashDir.z);
+  darla.rotation.y += wrapAngle(targetAngle - darla.rotation.y) * Math.min(1, delta * 10);
+  return true;
+}
 
 // Poops are left behind in the world, permanently, rather than attached to
 // Darla, so she can walk away and leave them there — well, "permanently"
@@ -1210,7 +1513,15 @@ const remotePoops = new Map();
 // Total individual poops across all piles — a pile that 5 poops merged
 // into still counts as 5 toward the shovel threshold, not 1.
 function totalPoopCount() {
-  return poops.reduce((sum, p) => sum + p.userData.growth + 1, 0);
+  // `poops` is empty on Miranda's own client in multiplayer (Darla's
+  // client owns the real array) — her copies live in remotePoops instead,
+  // so the shovel threshold needs to count those there or it'd never
+  // trigger no matter how big the backlog actually is.
+  const remoteCount =
+    isMultiplayer && playerKind === 'miranda'
+      ? Array.from(remotePoops.values()).reduce((sum, p) => sum + p.userData.growth + 1, 0)
+      : 0;
+  return poops.reduce((sum, p) => sum + p.userData.growth + 1, 0) + remoteCount;
 }
 
 // Pooping in roughly the same spot repeatedly grows whatever's already
@@ -1254,6 +1565,13 @@ function spawnPoop(spread = 1) {
   poop.userData.id = nextPoopId++;
   poop.position.set(x, 0, z);
   poop.rotation.y = Math.random() * Math.PI * 2;
+  // Same hover-glow idiom as Mom/Darla/the hammock — a child of the poop
+  // itself (rather than one shared/reparented sprite) so it scales for
+  // free with the pile's own growth, and each pile can be independently
+  // hovered without tracking "which one" separately.
+  const poopGlow = createHoverGlow(0.4, 0.4, 0.15);
+  poop.add(poopGlow);
+  poop.userData.hoverGlow = poopGlow;
   scene.add(poop);
   poops.push(poop);
   playPoopSound();
@@ -1315,13 +1633,16 @@ function hitsMom(clientX, clientY) {
 
 // Returns the specific poop pile clicked (its own meshes are direct
 // children of the pile's group, so the first hit's parent is the pile
-// itself), or null.
+// itself), or null. Checks remotePoops too — on Miranda's own client in
+// multiplayer, `poops` is empty (Darla's client owns the real array) and
+// every pile she sees is a remote-rendered stand-in there instead.
 function pickPoop(clientX, clientY) {
   const rect = renderer.domElement.getBoundingClientRect();
   pointerNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
   pointerNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointerNDC, camera);
-  const hits = raycaster.intersectObjects(poops, true);
+  const targets = remotePoops.size > 0 ? [...poops, ...remotePoops.values()] : poops;
+  const hits = raycaster.intersectObjects(targets, true);
   return hits.length > 0 ? hits[0].object.parent : null;
 }
 
@@ -1371,12 +1692,6 @@ const DIALOGUE_TREE = [
         followUps: [{ question: 'Yes you are!', response: 'Woof! Woof! Woof!', followUps: [] }],
       },
     ],
-  },
-  {
-    question: 'What is best in life Darla?',
-    response: 'To crush your enemies, see them driven before you, and to hear the lamentations of their women!',
-    followUps: [{ question: "Cool."}],
-    end: true,
   },
 ];
 
@@ -1449,6 +1764,15 @@ function hitsHammock(clientX, clientY) {
 // on arrival rather than just clearing moveTarget like an ordinary click.
 let mirandaLounging = false;
 let mirandaLoungeTarget = false;
+// Same idiom, for "this particular walk ends in picking up a poop" —
+// clicking a poop as Miranda walks her over the normal click-to-move way,
+// then this tells updateMovement to hand off to the pickup animation on
+// arrival instead of just idling. See updateMomPickup below.
+let mirandaPoopTarget = false;
+// Same idiom again — clicking Darla while leashAiming walks Miranda over
+// to her first, rather than clipping the leash on from wherever Miranda
+// happened to be standing.
+let mirandaLeashTarget = false;
 
 function enterHammockLounge() {
   mirandaLounging = true;
@@ -1500,6 +1824,19 @@ function setHammockHover(hovered) {
   renderer.domElement.style.cursor = hovered ? 'pointer' : '';
 }
 
+// Poops don't get a single shared glow the way Mom/Darla/the hammock do —
+// there can be many of them, so this just tracks whichever *specific* pile
+// is currently under the pointer and toggles that one's own glow (see
+// spawnPoop) rather than one glow being reparented around.
+let hoveredPoop = null;
+function setPoopHover(poop) {
+  if (poop === hoveredPoop) return;
+  if (hoveredPoop) hoveredPoop.userData.hoverGlow.visible = false;
+  hoveredPoop = poop;
+  if (hoveredPoop) hoveredPoop.userData.hoverGlow.visible = true;
+  renderer.domElement.style.cursor = hoveredPoop ? 'pointer' : '';
+}
+
 // Hover highlight only makes sense with a mouse (no persistent "hover" on
 // touch); pointermove still fires harmlessly during a touch drag, it just
 // never matters since nothing reads momHovered/hammockHovered on mobile.
@@ -1508,6 +1845,11 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   setDarlaHover(gameStarted && playerKind === 'miranda' && hitsDarla(e.clientX, e.clientY));
   setHammockHover(
     gameStarted && playerKind === 'miranda' && !mirandaLounging && hitsHammock(e.clientX, e.clientY)
+  );
+  setPoopHover(
+    gameStarted && playerKind === 'miranda' && momState !== 'pickingUp'
+      ? pickPoop(e.clientX, e.clientY)
+      : null
   );
 });
 
@@ -1521,14 +1863,50 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   pointerDownPos = null;
   if (dragDist > 6) return; // was an orbit-camera drag, not a click
 
+  // Clicking anywhere else on the scene while the dialogue menu is open
+  // just dismisses it, same as the cancel button — without also acting on
+  // the click itself (moving, throwing, etc.), which is why this returns
+  // immediately rather than falling through to the rest of the handler.
+  if (dialogueMenuEl.classList.contains('visible')) {
+    dialogueMenuEl.classList.remove('visible');
+    return;
+  }
+
   if (playerKind === 'darla' && hitsMom(e.clientX, e.clientY)) {
     talkToMiranda();
+    return;
+  }
+
+  if (leashAiming && playerKind === 'miranda' && hitsDarla(e.clientX, e.clientY)) {
+    leashAiming = false;
+    leashButton.classList.remove('aiming');
+    if (mirandaLounging) exitHammockLounge();
+    mirandaLeashTarget = true;
+    // Aims for a point DARLA_LEASH_DISTANCE short of Darla along the line
+    // to her, rather than her exact position — walks up next to her
+    // instead of into her, and arrives at exactly the leash's own resting
+    // length so clipping it on doesn't need an immediate tug of slack.
+    const dx = darla.position.x - mom.position.x;
+    const dz = darla.position.z - mom.position.z;
+    const dist = Math.hypot(dx, dz);
+    const scale = dist > 0.001 ? Math.max(dist - DARLA_LEASH_DISTANCE, 0) / dist : 0;
+    moveTarget = new THREE.Vector3(mom.position.x + dx * scale, 0, mom.position.z + dz * scale);
+    clickMarker.position.set(moveTarget.x, 0.02, moveTarget.z);
+    clickMarker.visible = true;
     return;
   }
 
   if (playerKind === 'miranda' && hitsDarla(e.clientX, e.clientY)) {
     dialogueStarted = false;
     faceEachOther();
+    // faceEachOther only touches the local mom/darla objects — in
+    // multiplayer Darla is remote here, so her own client's copy of
+    // herself never actually turned to face Miranda. Without this, the
+    // very next position sync from her real client (still facing
+    // whichever way she originally was) overwrites the snap this just
+    // did, which is why it looked like a one-frame flash back to her old
+    // direction instead of sticking.
+    sendFx('faceMiranda');
     openDialogueMenu(DIALOGUE_TREE);
     return;
   }
@@ -1542,11 +1920,23 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     return;
   }
 
-  if (playerKind === 'miranda' && !momAnnoyed && momState !== 'pickingUp') {
+  // Clicking a poop as Miranda walks her over there the normal
+  // click-to-move way (not the AI's own MOM_WALK_SPEED pathing, which is
+  // only for when she's an NPC) — the arrival branch in updateMovement
+  // hands off to the actual pickup animation once she's there. Works in
+  // multiplayer too now: pickPoop checks remotePoops as well as the real
+  // `poops` array, and the eventual pickup sends a 'poopPicked' command so
+  // Darla's client (which owns the authoritative array) shrinks/removes
+  // the real one too — see updateMomPickup's onComplete in animate().
+  if (playerKind === 'miranda' && momState !== 'pickingUp') {
     const clickedPoop = pickPoop(e.clientX, e.clientY);
     if (clickedPoop) {
+      if (mirandaLounging) exitHammockLounge();
       momTargetPoop = clickedPoop;
-      momState = 'walking';
+      mirandaPoopTarget = true;
+      moveTarget = new THREE.Vector3(clickedPoop.position.x, 0, clickedPoop.position.z);
+      clickMarker.position.set(moveTarget.x, 0.02, moveTarget.z);
+      clickMarker.visible = true;
       return;
     }
   }
@@ -1711,44 +2101,72 @@ function updateDarlaFetch(delta) {
   if (darlaFetchState === 'idle') return false;
 
   const returning = darlaFetchState === 'returning';
-  const target = returning ? player.position : ball.position;
+  // Targets `mom` explicitly rather than `player` — in single-player this
+  // only ever runs while playerKind is 'miranda' (player === mom anyway),
+  // but in multiplayer it runs on Darla's own client, where player ===
+  // darla instead. `mom` is correct in both cases either way.
+  const target = returning ? mom.position : ball.position;
   darlaFetchDir.set(target.x - darla.position.x, 0, target.z - darla.position.z);
   const dist = darlaFetchDir.length();
   // Returning stops well short of Miranda's own position (unlike the 0.35
   // used for reaching the ball itself) so Darla ends up standing next to
   // her instead of walking into/through her — needs to clear both her
-  // skirt's radius and Darla's own body width.
-  const arriveDist = returning ? 0.6 : 0.35;
+  // skirt's radius (~0.22) and Darla's own body length. 0.6 wasn't quite
+  // enough in practice — she'd still visibly overlap Miranda's skirt on
+  // approach — so this is padded further out.
+  const arriveDist = returning ? 1.2 : 0.35;
   if (dist < arriveDist) {
     if (returning) {
       darlaFetchState = 'idle';
       ballState = 'idle';
       ballButton.disabled = false;
       ballButton.classList.remove('disabled');
+      // Same completion covers both fetch and call-Darla-over, since both
+      // end on this leg — in multiplayer, only Darla's own client reaches
+      // this (see the darlaCommandable gate in animate), so Miranda's
+      // client needs telling to release its own guard/button state too.
+      sendCommand('fetchDone');
     } else {
       ball.visible = false;
       playBarkSound();
       darlaFetchState = 'returning';
+      // Only hides it on Darla's own client (this only runs there in
+      // multiplayer) — Miranda's client is what actually broadcasts
+      // ball.visible each tick (see sendNetworkState), and her own local
+      // copy stayed true the whole way back until fetchDone reset it,
+      // overwriting this the moment her next sync arrived. This is what
+      // was making the ball look like it never got picked up at all.
+      sendCommand('ballGrabbed');
     }
     return false;
   }
 
   darlaFetchDir.normalize();
-  darla.position.x += darlaFetchDir.x * DARLA_FETCH_SPEED * delta;
-  darla.position.z += darlaFetchDir.z * DARLA_FETCH_SPEED * delta;
+  // Capped at the remaining distance so a large delta spike (a throttled/
+  // backgrounded tab catching up — plausible here specifically, since
+  // being called over or sent fetching doesn't need the Darla player's
+  // own input at all) can't overshoot straight past the target in one
+  // frame — without this, that read as her randomly snapping/teleporting
+  // rather than walking.
+  const step = Math.min(dist, DARLA_FETCH_SPEED * delta);
+  darla.position.x += darlaFetchDir.x * step;
+  darla.position.z += darlaFetchDir.z * step;
   const targetAngle = Math.atan2(darlaFetchDir.x, darlaFetchDir.z);
   darla.rotation.y += wrapAngle(targetAngle - darla.rotation.y) * Math.min(1, delta * 10);
   return true;
 }
 
 // Same idiom again for the cheese trick, except she doesn't bring
-// anything back — she eats it in place, then immediately poops (letting
-// Mom's own poop-collecting AI pick that up on its own), and just stays
-// put rather than trotting home to Miranda the way fetch does.
+// anything back — she eats it in place, then poops and takes a few steps
+// off (rather than trotting all the way home to Miranda the way fetch
+// does), so Miranda/Mom actually have room to reach the poop instead of
+// it landing right underneath her.
 const DARLA_CHEESE_EAT_DURATION = 0.5;
+const DARLA_CHEESE_WALKAWAY_DIST = 1.5;
 const darlaCheeseDir = new THREE.Vector3();
-let darlaCheeseState = 'idle'; // 'idle' | 'going' | 'eating'
+let darlaCheeseState = 'idle'; // 'idle' | 'going' | 'eating' | 'walkingAway'
 let darlaCheeseElapsed = 0;
+let darlaCheeseWalked = 0;
 
 function updateDarlaCheese(delta) {
   if (darlaCheeseState === 'idle') return false;
@@ -1762,28 +2180,53 @@ function updateDarlaCheese(delta) {
       return false;
     }
     darlaCheeseDir.normalize();
-    darla.position.x += darlaCheeseDir.x * DARLA_FETCH_SPEED * delta;
-    darla.position.z += darlaCheeseDir.z * DARLA_FETCH_SPEED * delta;
+    // Same overshoot cap as updateDarlaFetch above, same reason.
+    const step = Math.min(dist, DARLA_FETCH_SPEED * delta);
+    darla.position.x += darlaCheeseDir.x * step;
+    darla.position.z += darlaCheeseDir.z * step;
     const targetAngle = Math.atan2(darlaCheeseDir.x, darlaCheeseDir.z);
     darla.rotation.y += wrapAngle(targetAngle - darla.rotation.y) * Math.min(1, delta * 10);
     return true;
   }
 
-  // eating: a quick head-dip chomp, then she poops right where she's
-  // standing and the cheese/button reset for next time.
-  darlaCheeseElapsed += delta;
-  const t = Math.min(darlaCheeseElapsed / DARLA_CHEESE_EAT_DURATION, 1);
-  darla.userData.head.rotation.x = -Math.sin(t * Math.PI) * 0.3;
-  if (t >= 1) {
-    darla.userData.head.rotation.x = 0;
-    cheese.visible = false;
-    cheeseState = 'idle';
+  if (darlaCheeseState === 'eating') {
+    // a quick head-dip chomp, then she poops right where she's standing
+    // and heads off a few steps before the cheese/button reset for next
+    // time (see 'walkingAway' below).
+    darlaCheeseElapsed += delta;
+    const t = Math.min(darlaCheeseElapsed / DARLA_CHEESE_EAT_DURATION, 1);
+    darla.userData.head.rotation.x = -Math.sin(t * Math.PI) * 0.3;
+    if (t >= 1) {
+      darla.userData.head.rotation.x = 0;
+      cheese.visible = false;
+      cheeseState = 'idle';
+      spawnPoop();
+      // Continues in whatever direction she's already facing — no target
+      // object to steer toward here, just "put some distance between
+      // herself and the spot she just pooped on," captured once rather
+      // than recomputed every frame.
+      darlaCheeseDir.set(Math.sin(darla.rotation.y), 0, Math.cos(darla.rotation.y));
+      darlaCheeseWalked = 0;
+      darlaCheeseState = 'walkingAway';
+    }
+    return false;
+  }
+
+  // walkingAway: a short trot clear of the poop pile, then the actual
+  // cheese/button reset for next time — held off until now (rather than
+  // right after eating) so Miranda can't throw a second cheese while
+  // she's still standing on top of the first poop.
+  const step = Math.min(DARLA_CHEESE_WALKAWAY_DIST - darlaCheeseWalked, DARLA_FETCH_SPEED * delta);
+  darla.position.x += darlaCheeseDir.x * step;
+  darla.position.z += darlaCheeseDir.z * step;
+  darlaCheeseWalked += step;
+  if (darlaCheeseWalked >= DARLA_CHEESE_WALKAWAY_DIST - 0.001) {
     cheeseButton.disabled = false;
     cheeseButton.classList.remove('disabled');
-    spawnPoop();
     darlaCheeseState = 'idle';
+    sendCommand('cheeseDone');
   }
-  return false;
+  return true;
 }
 
 // Mom's tiny AI: stand by the fire, and whenever Darla leaves a poop
@@ -1810,19 +2253,77 @@ function resetMomLimbs() {
   mom.userData.arms.armR.rotation.x = 0;
 }
 
-function updateMom(delta) {
-  // Checked live every frame (rather than snapshotted once when a fetch
-  // starts) so the shovel reflects the current backlog even if more poops
-  // land while she's already out collecting an earlier one. Hysteresis:
-  // once she's grabbed the shovel she keeps using it down to the last
-  // poop, rather than swapping back to picking up by hand the instant the
-  // count dips back under the threshold.
+// Checked live every frame (rather than snapshotted once when a fetch
+// starts) so the shovel reflects the current backlog even if more poops
+// land while she's already out collecting an earlier one. Hysteresis: once
+// she's grabbed the shovel she keeps using it down to the last poop,
+// rather than swapping back to picking up by hand the instant the count
+// dips back under the threshold. Shared between the AI (updateMom below)
+// and Miranda's own player-triggered pickups, so a big backlog gets her
+// the shovel either way.
+function updateMomShovel() {
   momUsingShovel = momUsingShovel ? totalPoopCount() > 1 : totalPoopCount() >= MOM_SHOVEL_THRESHOLD;
   mom.userData.shovel.visible = momUsingShovel;
+}
+
+// The actual bend-down-and-shrink-the-poop animation, shared between the
+// AI walking herself over to the nearest one (updateMom) and Miranda
+// clicking a specific pile and walking over there herself
+// (updateMovement's mirandaPoopTarget handoff) — only *what happens next*
+// once she's done differs between those two callers, hence `onComplete`
+// instead of hardcoding a next momState here.
+// A merged pile only loses one poop per pickup, same as an unmerged one —
+// shrink it back down a growth step rather than clearing the whole pile in
+// one go, so a pile of 5 genuinely takes 5 pickups. Shared between the
+// local pickup animation (updateMomPickup, whichever poop it targets — a
+// real one or, on Miranda's client in multiplayer, a remote-rendered
+// stand-in) and applyRemoteCommand's 'poopPicked' handler, which applies
+// the exact same mutation to the *authoritative* copy on Darla's client.
+function removeOrShrinkPoop(poop) {
+  if (poop.userData.growth > 0) {
+    poop.userData.growth -= 1;
+    poop.scale.setScalar(1 + poop.userData.growth * POOP_GROWTH_PER_MERGE);
+  } else {
+    scene.remove(poop);
+    poop.traverse((child) => {
+      if (child.isMesh) child.geometry.dispose();
+    });
+    const idx = poops.indexOf(poop);
+    if (idx !== -1) poops.splice(idx, 1);
+  }
+}
+
+// onComplete receives the poop's id — needed by the Miranda-click-in-
+// multiplayer caller (animate) to tell Darla's client which one to also
+// remove/shrink on the authoritative side; the AI-mode caller (updateMom)
+// just ignores it.
+function updateMomPickup(delta, onComplete) {
+  resetMomLimbs();
+  momPickupElapsed += delta;
+  const t = Math.min(momPickupElapsed / MOM_PICKUP_DURATION, 1);
+  const bend = Math.sin(t * Math.PI) * (momUsingShovel ? 0.3 : 0.55);
+  mom.rotation.x = bend;
+  mom.position.y = -bend * 0.15;
+  if (momUsingShovel) {
+    mom.userData.arms.armR.rotation.x = Math.sin(t * Math.PI) * 0.9;
+  }
+  if (t >= 1) {
+    mom.rotation.x = 0;
+    mom.position.y = 0;
+    mom.userData.arms.armR.rotation.x = 0;
+    const poopId = momTargetPoop.userData.id;
+    removeOrShrinkPoop(momTargetPoop);
+    momTargetPoop = null;
+    onComplete(poopId);
+  }
+}
+
+function updateMom(delta) {
+  updateMomShovel();
 
   if (momState === 'idle') {
     resetMomLimbs();
-    if (momAnnoyed || poops.length === 0) return;
+    if (poops.length === 0) return;
     let nearest = poops[0];
     let nearestDist = mom.position.distanceTo(nearest.position);
     for (let i = 1; i < poops.length; i++) {
@@ -1883,43 +2384,42 @@ function updateMom(delta) {
   // — with the shovel out — a shallower bend plus a scoop-and-flick swing
   // of the right arm instead, since a full shovel scoop still only clears
   // one poop per swing, same as picking up by hand.
-  resetMomLimbs();
-  momPickupElapsed += delta;
-  const t = Math.min(momPickupElapsed / MOM_PICKUP_DURATION, 1);
-  const bend = Math.sin(t * Math.PI) * (momUsingShovel ? 0.3 : 0.55);
-  mom.rotation.x = bend;
-  mom.position.y = -bend * 0.15;
-  if (momUsingShovel) {
-    mom.userData.arms.armR.rotation.x = Math.sin(t * Math.PI) * 0.9;
-  }
-  if (t >= 1) {
-    mom.rotation.x = 0;
-    mom.position.y = 0;
-    mom.userData.arms.armR.rotation.x = 0;
-    // A merged pile only loses one poop per pickup, same as an unmerged
-    // one — shrink it back down a growth step rather than clearing the
-    // whole pile in one go, so a pile of 5 genuinely takes 5 pickups.
-    if (momTargetPoop.userData.growth > 0) {
-      momTargetPoop.userData.growth -= 1;
-      momTargetPoop.scale.setScalar(1 + momTargetPoop.userData.growth * POOP_GROWTH_PER_MERGE);
-    } else {
-      scene.remove(momTargetPoop);
-      momTargetPoop.traverse((child) => {
-        if (child.isMesh) child.geometry.dispose();
-      });
-      const idx = poops.indexOf(momTargetPoop);
-      if (idx !== -1) poops.splice(idx, 1);
-    }
-    momTargetPoop = null;
+  updateMomPickup(delta, () => {
     // If there's another poop waiting, go idle so the branch above picks
     // the nearest one immediately next frame instead of detouring home
     // first — only actually heads back to MOM_HOME once there's nothing
     // left to clean up.
     momState = poops.length > 0 ? 'idle' : 'walking';
-  }
+  });
 }
 
 function updateMovement(delta) {
+  // In multiplayer, Miranda can temporarily force Darla's movement (fetch,
+  // cheese, being called over, the leash) — the same "AI takes over" idiom
+  // single-player already uses, just driven by network commands instead
+  // of local AI decisions on the same client. WASD/click-to-move are
+  // locked out on Darla's own client for as long as one of those is
+  // active, the same way mirandaLounging already locks out Miranda's own
+  // movement below. The leash specifically doesn't lock out an active bite
+  // chase, though — biting is how she gets free of it (see triggerBite),
+  // so she needs to be able to close the last bit of distance herself
+  // rather than being stuck exactly at the leash's own resting length,
+  // just out of bite range.
+  if (
+    isMultiplayer &&
+    playerKind === 'darla' &&
+    (darlaFetchState !== 'idle' || darlaCheeseState !== 'idle' || (darlaLeashed && !biteChasing))
+  ) {
+    // Clears out any click-to-move target she already had queued up
+    // rather than just leaving it sitting there — otherwise the moment
+    // the command ends and this guard stops firing, she'd resume walking
+    // toward wherever that stale target was, which looks exactly like
+    // randomly taking off right after finishing the errand.
+    moveTarget = null;
+    clickMarker.visible = false;
+    return false;
+  }
+
   const keyUp = pressedKeys.has('KeyW') || pressedKeys.has('ArrowUp');
   const keyDown = pressedKeys.has('KeyS') || pressedKeys.has('ArrowDown');
   const keyRight = pressedKeys.has('KeyD') || pressedKeys.has('ArrowRight');
@@ -1960,6 +2460,14 @@ function updateMovement(delta) {
       if (mirandaLoungeTarget) {
         mirandaLoungeTarget = false;
         enterHammockLounge();
+      } else if (mirandaPoopTarget) {
+        mirandaPoopTarget = false;
+        momState = 'pickingUp';
+        momPickupElapsed = 0;
+      } else if (mirandaLeashTarget) {
+        mirandaLeashTarget = false;
+        setDarlaLeashed(true);
+        sendCommand('leashOn');
       }
     }
   }
@@ -2090,11 +2598,20 @@ function reconcileRemotePoops(list) {
     let obj = remotePoops.get(p.id);
     if (!obj) {
       obj = createPoop();
+      obj.userData.id = p.id;
       obj.rotation.y = Math.random() * Math.PI * 2;
+      // spawnPoop gives every real poop its own hover glow (see there) —
+      // remote-rendered stand-ins need the same, since setPoopHover
+      // toggles .userData.hoverGlow.visible on whatever pickPoop finds,
+      // real or remote, and this was the one place that never attached it.
+      const poopGlow = createHoverGlow(0.4, 0.4, 0.15);
+      obj.add(poopGlow);
+      obj.userData.hoverGlow = poopGlow;
       scene.add(obj);
       remotePoops.set(p.id, obj);
     }
     obj.position.set(p.x, 0, p.z);
+    obj.userData.growth = p.growth;
     obj.scale.setScalar(1 + p.growth * POOP_GROWTH_PER_MERGE);
   }
   for (const [id, obj] of remotePoops) {
@@ -2130,6 +2647,18 @@ function applyRemoteState(msg) {
       mom.rotation.y = msg.ry;
     }
     updateMirandaWalkCycle(msg.moving);
+    // Mirrors Miranda's own ball/cheese physics so updateDarlaFetch/
+    // updateDarlaCheese (running locally on this — Darla's — client once
+    // a fetchStart/cheeseStart command arrives) have a live target,
+    // without ever simulating the arc itself here.
+    if (msg.ball) {
+      ball.position.set(msg.ball.x, msg.ball.y, msg.ball.z);
+      ball.visible = msg.ball.visible;
+    }
+    if (msg.cheese) {
+      cheese.position.set(msg.cheese.x, msg.cheese.y, msg.cheese.z);
+      cheese.visible = msg.cheese.visible;
+    }
   } else {
     // The peer is playing Darla.
     darla.position.set(msg.x, msg.y, msg.z);
@@ -2137,6 +2666,11 @@ function applyRemoteState(msg) {
     updateWalkCycle(msg.moving, msg.jumping, msg.jumping && msg.jumpHeld);
     if (typeof msg.dress === 'boolean') darla.userData.dress.visible = msg.dress;
     if (msg.poops) reconcileRemotePoops(msg.poops);
+    // Same head-dip math as updateDarlaCheese's own local animation,
+    // replayed here from the synced progress value instead of a local
+    // timer — cheap enough (and low-stakes enough looking slightly off by
+    // a network round-trip) not to need real interpolation.
+    darla.userData.head.rotation.x = -Math.sin((msg.eating || 0) * Math.PI) * 0.3;
   }
 }
 
@@ -2163,6 +2697,19 @@ function applyRemoteFx(msg) {
   } else if (msg.name === 'dialogue') {
     faceEachOther();
     playDialogueBubbles({ question: msg.question, response: msg.response });
+  } else if (msg.name === 'bite') {
+    playBiteSound();
+    biteActive = true;
+    biteElapsed = 0;
+  } else if (msg.name === 'callBark') {
+    playCallDarlaSound();
+    showSpeechBubble(mom, 'Darla!');
+  } else if (msg.name === 'faceMiranda') {
+    // Turns Darla's own client's copy of herself to match what Miranda's
+    // client already snapped to locally when she opened the dialogue menu
+    // — without this it just gets overwritten by Darla's next position
+    // sync, since her real client never actually turned.
+    faceEachOther();
   }
 }
 
@@ -2186,8 +2733,25 @@ function sendNetworkState(isMoving) {
       z: p.position.z,
       growth: p.userData.growth,
     }));
+    // The head-dip chomp itself is only ever set directly on darla's own
+    // client (see updateDarlaCheese) — this is what lets Miranda's screen
+    // replay the same motion instead of just seeing the cheese vanish and
+    // a poop appear with no animation in between.
+    msg.eating = darlaCheeseState === 'eating' ? Math.min(darlaCheeseElapsed / DARLA_CHEESE_EAT_DURATION, 1) : 0;
   } else {
     msg.lounging = mirandaLounging;
+    // Ball/cheese physics stay entirely local to Miranda's client (she's
+    // the one throwing them) — Darla's client never runs that arc math
+    // itself, just renders whatever position/visibility arrives here, so
+    // updateDarlaFetch/updateDarlaCheese always have something current to
+    // walk toward.
+    msg.ball = { visible: ball.visible, x: ball.position.x, y: ball.position.y, z: ball.position.z };
+    msg.cheese = {
+      visible: cheese.visible,
+      x: cheese.position.x,
+      y: cheese.position.y,
+      z: cheese.position.z,
+    };
   }
   net.send(msg);
 }
@@ -2208,12 +2772,19 @@ function animate() {
   const delta = clock.getDelta();
   elapsed += delta;
 
+  // Sent to the peer once, at the very end of this function, once every
+  // way Darla or Miranda might have moved this frame — WASD/click-to-move
+  // below, and (for whichever client is actually simulating Darla) the
+  // fetch/cheese/leash commands further down — has had its say.
+  let localIsMoving = false;
+
   if (gameStarted) {
-    // Bite is an AI-chase mechanic (see updateBiteChase/triggerBite above)
-    // built around Mom being an NPC — hidden entirely in multiplayer (see
-    // the .multiplayer-mode CSS rule), so there's nothing to update either.
-    if (!isMultiplayer) updateBiteChase();
-    const isMoving = updateMovement(delta);
+    // Darla chasing Mom down to bite her already works unmodified in
+    // multiplayer — it just sets the normal moveTarget on Darla's own
+    // client and reads mom.position, which is kept in sync the regular
+    // way whether Mom's local or over the network.
+    updateBiteChase();
+    localIsMoving = updateMovement(delta);
     // While lounging her position/pose is fixed by enterHammockLounge — the
     // usual walk-cycle/jump-height math would otherwise stomp her y back
     // toward 0 every frame.
@@ -2221,11 +2792,10 @@ function animate() {
       const jumpY = updateJump(delta);
       const baseY =
         playerKind === 'darla'
-          ? updateWalkCycle(isMoving, isJumping, isJumping && jumpHeld)
-          : updateMirandaWalkCycle(isMoving);
+          ? updateWalkCycle(localIsMoving, isJumping, isJumping && jumpHeld)
+          : updateMirandaWalkCycle(localIsMoving);
       player.position.y = baseY + jumpY;
     }
-    if (isMultiplayer) sendNetworkState(isMoving);
   }
 
   // Darla's own idle tail wag + head sway run regardless of whether she's
@@ -2263,6 +2833,22 @@ function animate() {
       mom.userData.torso.rotation.y = Math.sin(elapsed * 0.4) * 0.04;
       mom.userData.head.rotation.y = Math.sin(elapsed * 0.55 + 1) * 0.06;
       mom.userData.hairBack.rotation.z = Math.sin(elapsed * 0.9) * 0.02;
+    }
+  } else if (playerKind === 'miranda') {
+    // Mirrors just the two bits of updateMom that still apply once she's
+    // player-controlled: keeping the shovel prop in sync with the current
+    // backlog, and running the actual pickup animation on arrival (see the
+    // mirandaPoopTarget handoff in updateMovement) — never the idle/
+    // walking AI branches, since WASD/click-to-move already own her
+    // movement in this mode. Works the same in multiplayer now too — just
+    // needs telling Darla's client which poop to also remove/shrink on
+    // her authoritative copy once the pickup actually finishes.
+    updateMomShovel();
+    if (momState === 'pickingUp') {
+      updateMomPickup(delta, (poopId) => {
+        momState = 'idle';
+        if (isMultiplayer) sendCommand('poopPicked', { poopId });
+      });
     }
   }
 
@@ -2307,6 +2893,10 @@ function animate() {
     if (t >= 1) {
       ballState = 'thrown';
       darlaFetchState = 'fetching';
+      // In multiplayer this only sets state on Miranda's own (guard-only)
+      // copy — Darla's client needs telling separately, since it's the
+      // one that'll actually run updateDarlaFetch.
+      sendCommand('fetchStart');
     }
   }
 
@@ -2320,24 +2910,59 @@ function animate() {
     if (t >= 1) {
       cheeseState = 'landed';
       darlaCheeseState = 'going';
+      sendCommand('cheeseStart');
     }
   }
 
-  // Darla's fetch/cheese AI only runs while Miranda is the one being
-  // played — it's what makes a thrown ball or cheese actually go
-  // somewhere. Reuses her own (quadruped) walk cycle for the run, same as
-  // the player-driven path does, just fed by whichever AI's isMoving
-  // instead of WASD/click-to-move (only one of the two is ever active at
-  // once, per the guards in throwBallTo/throwCheeseTo). Fetch/cheese are
-  // both AI-companion mechanics — hidden and unreachable in multiplayer
-  // (see .multiplayer-mode), so this stays off there too, rather than
-  // fighting the network-applied position applyRemoteState sets on Darla
-  // every frame when she's the peer's character.
-  if (!isMultiplayer && playerKind === 'miranda') {
+  // Fetch/cheese/leash all move Darla directly, so they can only ever run
+  // on whichever client actually simulates her: in single-player that's
+  // the one and only client, while playerKind is 'miranda' (Darla's the
+  // AI there); in multiplayer it's Darla's own client instead (playerKind
+  // 'darla' there, driven by commands from Miranda's client rather than
+  // local AI decisions — see sendCommand/applyRemoteCommand above).
+  // Reuses her own (quadruped) walk cycle for the run, same as the
+  // player-driven path does, just fed by whichever of these is currently
+  // moving her instead of WASD/click-to-move (mutually exclusive with it
+  // via the updateMovement guard above, and with each other via the
+  // guards in throwBallTo/throwCheeseTo/the leash/call handlers).
+  const darlaCommandable =
+    (!isMultiplayer && playerKind === 'miranda') || (isMultiplayer && playerKind === 'darla');
+  if (darlaCommandable) {
     const fetching = updateDarlaFetch(delta);
     const eatingCheese = updateDarlaCheese(delta);
-    darla.position.y = updateWalkCycle(fetching || eatingCheese, false, false);
+    const onLeash = updateDarlaLeash(delta);
+    const commandedMoving = fetching || eatingCheese || onLeash;
+    const darlaCommandActive = darlaFetchState !== 'idle' || darlaCheeseState !== 'idle' || darlaLeashed;
+    // In multiplayer this runs on Darla's own client, which is *also*
+    // already driving her via WASD/click-to-move up in updateMovement
+    // whenever she's not under one of these commands — skipping the
+    // write-out here in that case, or this would stomp the walk cycle
+    // WASD already set this same frame back to idle, every single frame,
+    // which is what was silently killing her walk animation. No such
+    // conflict in single-player: this whole block only ever runs there on
+    // Miranda's own client, driving *herself*, not Darla.
+    if (!isMultiplayer || darlaCommandActive) {
+      // Only in the multiplayer case does jumpHeight/isJumping/jumpHeld
+      // actually describe *Darla's own* jump — in single-player this
+      // whole block runs on Miranda's client, where those same globals
+      // describe her jump instead, which has nothing to do with AI-Darla
+      // and always stayed grounded during fetch/cheese before this
+      // feature existed.
+      const darlaOwnsJump = isMultiplayer && playerKind === 'darla';
+      const bob = updateWalkCycle(
+        commandedMoving,
+        darlaOwnsJump && isJumping,
+        darlaOwnsJump && isJumping && jumpHeld
+      );
+      darla.position.y = bob + (darlaOwnsJump ? jumpHeight : 0);
+      if (darlaOwnsJump) localIsMoving = localIsMoving || commandedMoving;
+    }
   }
+  // Pure rendering, not authoritative state — safe (and necessary) to run
+  // on both clients independently, each using its own local mom/darla
+  // references (one locally simulated, one network-synced, but both
+  // correct either way).
+  updateLeashVisual();
 
   // camera follows whichever character is being played, keeping the same
   // relative angle/distance the player has set up via orbit controls —
@@ -2395,6 +3020,13 @@ function animate() {
 
   starfield.position.set(player.position.x, 0, player.position.z);
   starfield.userData.material.uniforms.uTime.value = elapsed;
+
+  // Sent last, now that localIsMoving reflects everything that could have
+  // moved the local player this frame — WASD/click-to-move, and (on
+  // whichever client is simulating Darla) fetch/cheese/leash too.
+  if (isMultiplayer && gameStarted) sendNetworkState(localIsMoving);
+
+  updatePsychedelic(delta);
 
   controls.update();
   composer.render();

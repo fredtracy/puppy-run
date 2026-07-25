@@ -2,6 +2,24 @@ let audioCtx = null;
 let musicGain = null;
 let musicPlaying = false;
 let musicTimer = null;
+let musicEchoWet = null;
+
+// Slower and a little lower-pitched, like a tape running down — read once
+// per loop start in scheduleDayLoop/scheduleNightLoop (same "takes effect
+// at the next natural boundary" idiom setMusicMode already uses below),
+// rather than warping a note that's already mid-flight.
+const PSYCHEDELIC_TEMPO_SCALE = 1.35;
+const PSYCHEDELIC_PITCH_SCALE = 0.85;
+let musicPsychedelic = false;
+
+export function setMusicPsychedelic(active) {
+  musicPsychedelic = active;
+  if (!musicEchoWet || !audioCtx) return;
+  const now = audioCtx.currentTime;
+  musicEchoWet.gain.cancelScheduledValues(now);
+  musicEchoWet.gain.setValueAtTime(musicEchoWet.gain.value, now);
+  musicEchoWet.gain.linearRampToValueAtTime(active ? 0.4 : 0, now + 1.2);
+}
 
 // Browsers block audio until a user gesture, so this is called from the
 // first keydown/pointerdown rather than at module load.
@@ -11,6 +29,26 @@ export function initAudio() {
   musicGain = audioCtx.createGain();
   musicGain.gain.value = 0.1;
   musicGain.connect(audioCtx.destination);
+
+  // A feedback delay mixed in parallel with the dry signal above — silent
+  // (wet gain 0) normally, ramped up by setMusicPsychedelic while
+  // Miranda's psychedelic skill is active, for the "spacey" half of that
+  // effect. The tempo/pitch drop that goes with it lives in
+  // scheduleDayLoop/scheduleNightLoop below instead, since a synthesized,
+  // scheduled melody doesn't have a single buffer's playbackRate to just
+  // turn down.
+  const musicDelay = audioCtx.createDelay(1.0);
+  musicDelay.delayTime.value = 0.38;
+  const musicFeedback = audioCtx.createGain();
+  musicFeedback.gain.value = 0.42;
+  musicEchoWet = audioCtx.createGain();
+  musicEchoWet.gain.value = 0;
+  musicGain.connect(musicDelay);
+  musicDelay.connect(musicFeedback);
+  musicFeedback.connect(musicDelay);
+  musicDelay.connect(musicEchoWet);
+  musicEchoWet.connect(audioCtx.destination);
+
   loadMooBuffer();
   loadBarkBuffer();
   loadCallDarlaBuffer();
@@ -287,6 +325,11 @@ function scheduleLoop() {
 }
 
 function scheduleNightLoop() {
+  const tempoScale = musicPsychedelic ? PSYCHEDELIC_TEMPO_SCALE : 1;
+  const pitchScale = musicPsychedelic ? PSYCHEDELIC_PITCH_SCALE : 1;
+  const beatSeconds = NIGHT_BEAT_SECONDS * tempoScale;
+  const variantBeatSeconds = NIGHT_VARIANT_BEAT_SECONDS * tempoScale;
+
   const phase = nightPhase;
   const repeats = NIGHT_PHASE_REPEATS[phase];
   let t = audioCtx.currentTime + 0.05;
@@ -296,27 +339,33 @@ function scheduleNightLoop() {
     if (phase === 0) {
       const loopStart = t;
       NIGHT_MELODY.forEach(([freq, beats]) => {
-        const duration = beats * NIGHT_BEAT_SECONDS;
-        tone(freq, t, duration * 0.85, 'sine', 0.06, musicGain);
+        const duration = beats * beatSeconds;
+        tone(freq * pitchScale, t, duration * 0.85, 'sine', 0.06, musicGain);
         t += duration;
       });
-      tone(NIGHT_DRONE_FREQ, loopStart, t - loopStart, 'sine', 0.02, musicGain);
+      tone(NIGHT_DRONE_FREQ * pitchScale, loopStart, t - loopStart, 'sine', 0.02, musicGain);
     } else {
       const melody = phase === 1 ? NIGHT_VARIANT_LIGHT : NIGHT_VARIANT_FULL;
       const chords = phase === 1 ? NIGHT_VARIANT_LIGHT_CHORDS : NIGHT_VARIANT_FULL_CHORDS;
       const padGain = phase === 1 ? 0.03 : 0.055;
       let phraseBeats = 0;
       melody.forEach(([freq, beats]) => {
-        const duration = beats * NIGHT_VARIANT_BEAT_SECONDS;
-        tone(freq, t, duration * 0.85, 'sine', 0.06, musicGain);
+        const duration = beats * variantBeatSeconds;
+        tone(freq * pitchScale, t, duration * 0.85, 'sine', 0.06, musicGain);
         t += duration;
         phraseBeats += beats;
       });
       chords.forEach((chord, i) => {
-        const chordStart = repeatStart + chord.atBeat * NIGHT_VARIANT_BEAT_SECONDS;
+        const chordStart = repeatStart + chord.atBeat * variantBeatSeconds;
         const nextAtBeat = chords[i + 1] ? chords[i + 1].atBeat : phraseBeats;
-        const chordDuration = (nextAtBeat - chord.atBeat) * NIGHT_VARIANT_BEAT_SECONDS;
-        stringPad(chord.freqs, chordStart, chordDuration, padGain, musicGain);
+        const chordDuration = (nextAtBeat - chord.atBeat) * variantBeatSeconds;
+        stringPad(
+          chord.freqs.map((f) => f * pitchScale),
+          chordStart,
+          chordDuration,
+          padGain,
+          musicGain
+        );
       });
     }
   }
@@ -333,6 +382,11 @@ function scheduleNightLoop() {
 // so the sequence keeps advancing rather than restarting at the intro
 // every time.
 function scheduleDayLoop() {
+  const tempoScale = musicPsychedelic ? PSYCHEDELIC_TEMPO_SCALE : 1;
+  const pitchScale = musicPsychedelic ? PSYCHEDELIC_PITCH_SCALE : 1;
+  const beatSeconds = DAY_BEAT_SECONDS * tempoScale;
+  const variantBeatSeconds = DAY_VARIANT_BEAT_SECONDS * tempoScale;
+
   const phase = dayPhase;
   const repeats = DAY_PHASE_REPEATS[phase];
   let t = audioCtx.currentTime + 0.05;
@@ -341,8 +395,8 @@ function scheduleDayLoop() {
     const repeatStart = t;
     if (phase === 0) {
       DAY_MELODY.forEach(([freq, beats]) => {
-        const duration = beats * DAY_BEAT_SECONDS;
-        tone(freq, t, duration * 0.85, 'triangle', 0.08, musicGain);
+        const duration = beats * beatSeconds;
+        tone(freq * pitchScale, t, duration * 0.85, 'triangle', 0.08, musicGain);
         t += duration;
       });
     } else {
@@ -351,16 +405,22 @@ function scheduleDayLoop() {
       const padGain = phase === 1 ? 0.035 : 0.07;
       let phraseBeats = 0;
       melody.forEach(([freq, beats]) => {
-        const duration = beats * DAY_VARIANT_BEAT_SECONDS;
-        tone(freq, t, duration * 0.85, 'triangle', 0.08, musicGain);
+        const duration = beats * variantBeatSeconds;
+        tone(freq * pitchScale, t, duration * 0.85, 'triangle', 0.08, musicGain);
         t += duration;
         phraseBeats += beats;
       });
       chords.forEach((chord, i) => {
-        const chordStart = repeatStart + chord.atBeat * DAY_VARIANT_BEAT_SECONDS;
+        const chordStart = repeatStart + chord.atBeat * variantBeatSeconds;
         const nextAtBeat = chords[i + 1] ? chords[i + 1].atBeat : phraseBeats;
-        const chordDuration = (nextAtBeat - chord.atBeat) * DAY_VARIANT_BEAT_SECONDS;
-        stringPad(chord.freqs, chordStart, chordDuration, padGain, musicGain);
+        const chordDuration = (nextAtBeat - chord.atBeat) * variantBeatSeconds;
+        stringPad(
+          chord.freqs.map((f) => f * pitchScale),
+          chordStart,
+          chordDuration,
+          padGain,
+          musicGain
+        );
       });
     }
   }

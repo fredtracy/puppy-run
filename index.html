@@ -102,6 +102,74 @@
       #daynight-button:disabled {
         opacity: 0.5;
       }
+      #mp-corner-button {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border: none;
+        border-radius: 999px;
+        background: rgba(20, 20, 20, 0.55);
+        color: #fff;
+        padding: 10px 20px 10px 14px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        font-size: 15px;
+        font-weight: 700;
+        cursor: pointer;
+        touch-action: manipulation;
+        user-select: none;
+        -webkit-tap-highlight-color: transparent;
+        box-shadow: 0 0 0 2px rgba(255, 213, 74, 0.7);
+        animation: mp-corner-pulse 2.2s ease-in-out infinite;
+      }
+      .mp-corner-avatars {
+        position: relative;
+        width: 46px;
+        height: 32px;
+        flex-shrink: 0;
+      }
+      .mp-corner-avatars canvas {
+        position: absolute;
+        top: 0;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.95);
+        box-shadow: 0 0 0 2px rgba(20, 20, 20, 0.55);
+      }
+      #mp-icon-miranda {
+        left: 0;
+        z-index: 1;
+      }
+      #mp-icon-darla {
+        left: 16px;
+        z-index: 2;
+      }
+      #mp-corner-button:hover,
+      #mp-corner-button:active {
+        background: rgba(20, 20, 20, 0.8);
+      }
+      @keyframes mp-corner-pulse {
+        0%,
+        100% {
+          box-shadow: 0 0 0 2px rgba(255, 213, 74, 0.7), 0 0 0 0 rgba(255, 213, 74, 0.5);
+        }
+        50% {
+          box-shadow: 0 0 0 2px rgba(255, 213, 74, 0.9), 0 0 0 9px rgba(255, 213, 74, 0);
+        }
+      }
+      /* Everything but the character-select cards and the multiplayer
+         button stays hidden until a character's actually been picked —
+         otherwise the day/night toggle and the full row of skill buttons
+         (styled for constant on-screen use during play) clutter the intro
+         screen and bury the one button that matters there. */
+      body:not(.game-started) #touch-controls,
+      body:not(.game-started) #daynight-button,
+      body:not(.game-started) .action-button {
+        display: none !important;
+      }
       #daynight-fade {
         position: fixed;
         inset: 0;
@@ -180,10 +248,25 @@
         align-items: center;
         justify-content: center;
       }
-      /* Fetch, cheese, and calling Darla over are all Miranda-only:
-         everyone else's skills hide when she's playing, and only these
-         show up for her. */
-      .miranda-mode .action-button:not(#ball-button):not(#cheese-button):not(#call-button) {
+      #leash-button {
+        bottom: 242px;
+        display: none;
+        align-items: center;
+        justify-content: center;
+      }
+      #psychedelic-button {
+        bottom: 316px;
+        display: none;
+        align-items: center;
+        justify-content: center;
+      }
+      /* Fetch, cheese, calling Darla over, the leash, and the psychedelic
+         trip are all Miranda-only: everyone else's skills hide when she's
+         playing, and only these show up for her. */
+      .miranda-mode
+        .action-button:not(#ball-button):not(#cheese-button):not(#call-button):not(#leash-button):not(
+          #psychedelic-button
+        ) {
         display: none;
       }
       .miranda-mode #ball-button {
@@ -195,15 +278,11 @@
       .miranda-mode #call-button {
         display: flex;
       }
-      /* Fetch, cheese, calling Darla over, and biting are all built around
-         "the other character is an AI companion" — with a real second
-         player driving them instead, these are hidden for now rather than
-         fighting the network-applied position every frame. */
-      .multiplayer-mode #ball-button,
-      .multiplayer-mode #cheese-button,
-      .multiplayer-mode #call-button,
-      .multiplayer-mode #bite-button {
-        display: none !important;
+      .miranda-mode #leash-button {
+        display: flex;
+      }
+      .miranda-mode #psychedelic-button {
+        display: flex;
       }
       #mp-menu,
       #character-select {
@@ -407,16 +486,17 @@
     </style>
   </head>
   <body>
-    <div id="mp-menu">
-      <h1>Puppy Run</h1>
+    <div id="mp-menu" class="hidden">
+      <h1>Play with a friend</h1>
       <div class="mp-choices">
-        <button id="mp-solo" type="button">Play Solo</button>
         <button id="mp-host" type="button">Host a Game</button>
         <button id="mp-join" type="button">Join a Game</button>
+        <button id="mp-choices-back" type="button" class="mp-back">Back</button>
       </div>
       <div id="mp-host-panel" class="mp-panel hidden">
         <p>Share this code with your friend:</p>
         <div id="mp-host-code">…</div>
+        <button id="mp-host-share" type="button" style="display: none">Share code</button>
         <p id="mp-host-status">Generating code…</p>
         <button id="mp-host-cancel" type="button" class="mp-back">Back</button>
       </div>
@@ -428,7 +508,14 @@
         <button id="mp-join-cancel" type="button" class="mp-back">Back</button>
       </div>
     </div>
-    <div id="character-select" class="hidden">
+    <div id="character-select">
+      <button id="mp-corner-button" type="button" title="Play with a friend">
+        <span class="mp-corner-avatars">
+          <canvas id="mp-icon-miranda" width="32" height="32"></canvas>
+          <canvas id="mp-icon-darla" width="32" height="32"></canvas>
+        </span>
+        <span>Multiplayer</span>
+      </button>
       <h1 id="character-select-title">Who do you want to play as?</h1>
       <div class="cards">
         <button class="character-card" id="pick-miranda" type="button">
@@ -458,6 +545,8 @@
     <button id="ball-button" class="action-button"></button>
     <button id="cheese-button" class="action-button">&#129472;</button>
     <button id="call-button" class="action-button">&#128227;</button>
+    <button id="leash-button" class="action-button">&#129454;</button>
+    <button id="psychedelic-button" class="action-button">&#127812;</button>
     <div id="speech-bubble"></div>
     <div id="dialogue-menu"></div>
     <script type="module" src="/src/main.js"></script>
