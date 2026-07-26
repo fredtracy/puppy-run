@@ -4,12 +4,44 @@ let musicPlaying = false;
 let musicTimer = null;
 let musicEchoWet = null;
 
-// Slower and a little lower-pitched, like a tape running down — read once
-// per loop start in scheduleDayLoop/scheduleNightLoop (same "takes effect
-// at the next natural boundary" idiom setMusicMode already uses below),
-// rather than warping a note that's already mid-flight.
-const PSYCHEDELIC_TEMPO_SCALE = 1.35;
-const PSYCHEDELIC_PITCH_SCALE = 0.85;
+// Every oscillator currently scheduled by tone()/stringPad() (the only two
+// things that ever generate music, never other SFX — see below) — tracked
+// so setMusicPsychedelic can cut a whole in-flight phrase short and
+// reschedule immediately at the new tempo/pitch, instead of only taking
+// effect once that phrase finishes on its own.
+let activeMusicOscillators = [];
+
+function trackMusicOscillator(osc, gain) {
+  const entry = { osc, gain };
+  activeMusicOscillators.push(entry);
+  osc.addEventListener('ended', () => {
+    const idx = activeMusicOscillators.indexOf(entry);
+    if (idx !== -1) activeMusicOscillators.splice(idx, 1);
+  });
+}
+
+// Fades out and stops everything currently scheduled, right now, rather
+// than letting it play out — the fade (not an abrupt stop) is what keeps
+// this from producing an audible click/pop.
+function cutMusicShort() {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  activeMusicOscillators.forEach(({ osc, gain }) => {
+    gain.gain.cancelScheduledValues(now);
+    gain.gain.setValueAtTime(gain.gain.value, now);
+    gain.gain.linearRampToValueAtTime(0.0001, now + 0.015);
+    osc.stop(now + 0.02);
+  });
+  activeMusicOscillators = [];
+}
+
+// Half speed, one octave down (frequency halved) — like a tape running
+// down at half its normal speed. Read once per loop start in
+// scheduleDayLoop/scheduleNightLoop (same "takes effect at the next
+// natural boundary" idiom setMusicMode already uses below), rather than
+// warping a note that's already mid-flight.
+const PSYCHEDELIC_TEMPO_SCALE = 2;
+const PSYCHEDELIC_PITCH_SCALE = 0.5;
 let musicPsychedelic = false;
 
 export function setMusicPsychedelic(active) {
@@ -19,6 +51,21 @@ export function setMusicPsychedelic(active) {
   musicEchoWet.gain.cancelScheduledValues(now);
   musicEchoWet.gain.setValueAtTime(musicEchoWet.gain.value, now);
   musicEchoWet.gain.linearRampToValueAtTime(active ? 0.4 : 0, now + 1.2);
+
+  // Whatever phrase is currently mid-flight was scheduled entirely in
+  // advance at the *old* tempo/pitch (see scheduleDayLoop/scheduleNightLoop)
+  // — normally that just plays out and the new value only kicks in once it
+  // finishes on its own. Cutting it short and rescheduling immediately is
+  // what makes the switch line up with the moment the skill actually
+  // toggles instead of lagging behind it.
+  if (musicPlaying) {
+    if (musicTimer) {
+      clearTimeout(musicTimer);
+      musicTimer = null;
+    }
+    cutMusicShort();
+    scheduleLoop();
+  }
 }
 
 // Browsers block audio until a user gesture, so this is called from the
@@ -93,6 +140,10 @@ function tone(freq, startTime, duration, type, gainValue, destination) {
   gain.connect(destination || audioCtx.destination);
   osc.start(startTime);
   osc.stop(startTime + duration + 0.02);
+  // Only music (see scheduleDayLoop/scheduleNightLoop) ever calls tone()
+  // — SFX like the jump/bite/poop sounds each build their own oscillator
+  // inline instead — so unconditionally tracking every call here is safe.
+  trackMusicOscillator(osc, gain);
 }
 
 // Sustained "strings" underneath a melody — a few sine oscillators per
@@ -115,6 +166,7 @@ function stringPad(freqs, startTime, duration, peakGain, destination) {
       gain.connect(destination || audioCtx.destination);
       osc.start(startTime);
       osc.stop(startTime + duration + 0.05);
+      trackMusicOscillator(osc, gain);
     });
   });
 }
