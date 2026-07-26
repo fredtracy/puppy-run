@@ -1093,7 +1093,17 @@ composer.addPass(new OutputPass());
 // network-sync in multiplayer either way.
 let psychedelicActive = false;
 const psychedelicButton = document.getElementById('psychedelic-button');
-const PSYCHEDELIC_DURATION_MS = 20000;
+const PSYCHEDELIC_DURATION_MS = 15000;
+
+// Darla's own reaction to Miranda taking off — plays locally and
+// broadcasts, same as the other one-shot cosmetic events (bark, moo,
+// callBark, etc.), so both screens see/hear it regardless of who
+// triggered it.
+function darlaShoutAtMiranda() {
+  playBarkSound();
+  showSpeechBubble(darla, 'Get down here!');
+  sendFx('darlaShout');
+}
 
 psychedelicButton.addEventListener('pointerdown', (e) => {
   e.preventDefault();
@@ -1101,10 +1111,14 @@ psychedelicButton.addEventListener('pointerdown', (e) => {
   psychedelicActive = true;
   psychedelicButton.classList.add('aiming');
   setMusicPsychedelic(true);
+  enterFlight();
+  setTimeout(darlaShoutAtMiranda, 5000);
+  setTimeout(darlaShoutAtMiranda, 10000);
   setTimeout(() => {
     psychedelicActive = false;
     psychedelicButton.classList.remove('aiming');
     setMusicPsychedelic(false);
+    exitFlight();
   }, PSYCHEDELIC_DURATION_MS);
 });
 
@@ -1118,6 +1132,160 @@ function updatePsychedelic(delta) {
   const u = psychedelicPass.uniforms;
   u.uIntensity.value += (target - u.uIntensity.value) * Math.min(1, delta * 2);
   u.uTime.value = elapsed;
+}
+
+// Mushroom skill, part 2: pointer-lock first-person flying, for the same
+// window as the wiggle/color shader and slowed music. WASD + mouse-look
+// move her freely in full 3D instead of the usual ground-relative walk,
+// and the camera sits at her own eye height instead of following from
+// behind. Purely local, same as the shader/music: a first-person camera
+// is inherently per-viewer, so this only changes what Miranda's own
+// player sees/controls — her position still syncs to the other player
+// completely normally either way, whatever put it there.
+let flightActive = false;
+let flightYaw = 0;
+let flightPitch = 0;
+const FLIGHT_SPEED = 8;
+const FLIGHT_EYE_HEIGHT = 1.5;
+const flightForward = new THREE.Vector3();
+const flightRight = new THREE.Vector3();
+const flightDir = new THREE.Vector3();
+
+function enterFlight() {
+  flightActive = true;
+  flightYaw = camera.rotation.y;
+  flightPitch = 0;
+  // Fresh treading-water baseline each trip, rather than picking up
+  // wherever the smoothed tilt happened to leave off last time.
+  mirandaSwimTilt = 0.15;
+  controls.enabled = false;
+  mom.visible = false;
+  renderer.domElement.requestPointerLock();
+}
+
+function exitFlight() {
+  if (!flightActive) return;
+  flightActive = false;
+  mom.visible = true;
+  // Undoes the swim pose — updateMirandaWalkCycle takes over her arms'
+  // rotation.x again next frame regardless, but it never touches
+  // rotation.z at all (only the stroke does), so without resetting that
+  // here explicitly her arms would stay stuck rotated outward at whatever
+  // angle the last stroke left them, forever.
+  mom.rotation.x = 0;
+  mom.userData.arms.armL.rotation.z = 0;
+  mom.userData.arms.armR.rotation.z = 0;
+  // "Lands" her — flight ignores the ground entirely, so without this
+  // she'd just be left floating wherever she happened to stop.
+  mom.position.y = 0;
+  // OrbitControls recomputes its own spherical state from wherever
+  // camera.position/target actually are the next time it runs (rather
+  // than some stale pre-flight snapshot), so just pointing target back at
+  // her is enough for it to pick up cleanly — no manual camera reposition
+  // needed here.
+  controls.target.set(mom.position.x, 0.5, mom.position.z);
+  controls.enabled = true;
+  if (document.pointerLockElement === renderer.domElement) {
+    document.exitPointerLock();
+  }
+}
+
+document.addEventListener('mousemove', (e) => {
+  if (!flightActive || document.pointerLockElement !== renderer.domElement) return;
+  const sensitivity = 0.0022;
+  flightYaw -= e.movementX * sensitivity;
+  flightPitch -= e.movementY * sensitivity;
+  flightPitch = THREE.MathUtils.clamp(flightPitch, -1.5, 1.5);
+});
+
+// Escape (or anything else that drops pointer lock — alt-tab, etc.) ends
+// the flying specifically, rather than leaving her stuck mid-air with
+// working WASD but no way to look around anymore. The wiggle/color shader
+// and slowed music keep running on their own 20s timer regardless — only
+// the flying part is tied to having the lock.
+document.addEventListener('pointerlockchange', () => {
+  if (flightActive && document.pointerLockElement !== renderer.domElement) {
+    exitFlight();
+  }
+});
+document.addEventListener('pointerlockerror', () => {
+  console.error('Pointer lock failed — ending the flying part of the trip.');
+  exitFlight();
+});
+
+// Full 3D movement in whatever direction the camera's actually looking —
+// forward/back climbs or dives if you're looking up/down, not the flat-
+// ground strafing WASD normally does. Space/Shift add pure vertical
+// regardless of pitch, for finer altitude control while looking level.
+function updateFlight(delta) {
+  camera.rotation.set(flightPitch, flightYaw, 0, 'YXZ');
+  flightForward.set(0, 0, -1).applyEuler(camera.rotation);
+  flightRight.set(1, 0, 0).applyEuler(camera.rotation);
+  flightDir.set(0, 0, 0);
+  if (pressedKeys.has('KeyW') || pressedKeys.has('ArrowUp')) flightDir.add(flightForward);
+  if (pressedKeys.has('KeyS') || pressedKeys.has('ArrowDown')) flightDir.sub(flightForward);
+  if (pressedKeys.has('KeyD') || pressedKeys.has('ArrowRight')) flightDir.add(flightRight);
+  if (pressedKeys.has('KeyA') || pressedKeys.has('ArrowLeft')) flightDir.sub(flightRight);
+  if (pressedKeys.has('Space')) flightDir.y += 1;
+  if (pressedKeys.has('ShiftLeft') || pressedKeys.has('ShiftRight')) flightDir.y -= 1;
+
+  const isMoving = flightDir.lengthSq() > 0.0001;
+  if (isMoving) {
+    flightDir.normalize();
+    mom.position.x += flightDir.x * FLIGHT_SPEED * delta;
+    mom.position.y += flightDir.y * FLIGHT_SPEED * delta;
+    mom.position.z += flightDir.z * FLIGHT_SPEED * delta;
+    // Generous but finite bounds — well past the yard so it still feels
+    // free, without letting her drift off into the woods forever during
+    // what's meant to be a brief, contained trip.
+    mom.position.x = THREE.MathUtils.clamp(mom.position.x, YARD_BOUNDS.xMin - 15, YARD_BOUNDS.xMax + 15);
+    mom.position.z = THREE.MathUtils.clamp(mom.position.z, YARD_BOUNDS.zMin - 15, YARD_BOUNDS.zMax + 15);
+    mom.position.y = THREE.MathUtils.clamp(mom.position.y, 0.1, 25);
+  }
+  mom.rotation.y = flightYaw;
+  camera.position.set(mom.position.x, mom.position.y + FLIGHT_EYE_HEIGHT, mom.position.z);
+  // Purely cosmetic on her own client (mom.visible is false here — she
+  // can't see herself in first person) but kept in sync anyway rather
+  // than skipped, since it's the same call applyRemoteState makes for the
+  // *other* player's view of her, and there's no reason for the two to
+  // diverge.
+  updateMirandaSwim(elapsed, isMoving);
+  return isMoving;
+}
+
+// Body tilt eases toward its target rather than snapping, so starting/
+// stopping mid-air doesn't whip her upright/horizontal instantly — module-
+// level since it needs to persist and smooth across calls, same idea as
+// psychedelicPass's uIntensity fade.
+let mirandaSwimTilt = 0.15;
+
+// A freestyle-stroke pose for flying, responsive to whether she's actually
+// moving: near-upright with a slow, gentle stroke when stationary (reads
+// as treading water in place), tilted forward toward horizontal with a
+// bigger, faster stroke and kick when she's actually flying somewhere
+// (reads as swimming forward) — a constant tilt regardless of movement
+// just looked like treading water the whole time, moving or not. Driven
+// by a shared time value (elapsed) rather than each client's own delta-
+// summed state, so the two clients' strokes land in approximately the
+// same phase instead of drifting apart over the trip.
+function updateMirandaSwim(t, isMoving) {
+  const targetTilt = isMoving ? 1.3 : 0.15;
+  mirandaSwimTilt += (targetTilt - mirandaSwimTilt) * 0.12;
+  mom.rotation.x = mirandaSwimTilt;
+
+  const strokeSpeed = isMoving ? 5 : 2;
+  const armSwing = isMoving ? 1.3 : 0.5;
+  const stroke = t * strokeSpeed;
+  mom.userData.arms.armL.rotation.x = Math.sin(stroke) * armSwing - 0.3;
+  mom.userData.arms.armR.rotation.x = Math.sin(stroke + Math.PI) * armSwing - 0.3;
+  mom.userData.arms.armL.rotation.z = Math.cos(stroke) * 0.3;
+  mom.userData.arms.armR.rotation.z = -Math.cos(stroke + Math.PI) * 0.3;
+
+  const kickSpeed = isMoving ? 9 : 4;
+  const kickAmount = isMoving ? 0.35 : 0.15;
+  const kick = t * kickSpeed;
+  mom.userData.legs.legL.rotation.x = Math.sin(kick) * kickAmount;
+  mom.userData.legs.legR.rotation.x = Math.sin(kick + Math.PI) * kickAmount;
 }
 
 // Movement — WASD / arrow keys, relative to the camera so "forward" always
@@ -1160,6 +1328,8 @@ jumpButtonEl.addEventListener('pointerdown', (e) => {
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Space') {
     e.preventDefault();
+    // Space is "ascend" during flight instead — see updateFlight.
+    if (flightActive) return;
     jumpHeld = true;
     if (!e.repeat) triggerJump();
   }
@@ -1858,6 +2028,12 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   pointerDownPos = { x: e.clientX, y: e.clientY };
 });
 renderer.domElement.addEventListener('pointerup', (e) => {
+  // Under pointer lock, clientX/clientY go stale (frozen wherever the
+  // cursor was when lock engaged) instead of tracking real position — the
+  // normal click-to-act handling below would misfire off that stale
+  // point, so this bails out entirely while flying (which owns WASD/mouse
+  // itself already).
+  if (flightActive) return;
   if (e.button !== 0 || !pointerDownPos) return;
   const dragDist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
   pointerDownPos = null;
@@ -2646,7 +2822,18 @@ function applyRemoteState(msg) {
       mom.position.set(msg.x, msg.y, msg.z);
       mom.rotation.y = msg.ry;
     }
-    updateMirandaWalkCycle(msg.moving);
+    if (msg.flying) {
+      updateMirandaSwim(elapsed, msg.moving);
+    } else {
+      // Same reset exitFlight does locally for the flying player herself —
+      // updateMirandaWalkCycle only ever touches the arms' rotation.x,
+      // never rotation.z, so without resetting that here too her arms
+      // would stay stuck rotated outward from the last swim stroke.
+      mom.rotation.x = 0;
+      mom.userData.arms.armL.rotation.z = 0;
+      mom.userData.arms.armR.rotation.z = 0;
+      updateMirandaWalkCycle(msg.moving);
+    }
     // Mirrors Miranda's own ball/cheese physics so updateDarlaFetch/
     // updateDarlaCheese (running locally on this — Darla's — client once
     // a fetchStart/cheeseStart command arrives) have a live target,
@@ -2710,6 +2897,9 @@ function applyRemoteFx(msg) {
     // — without this it just gets overwritten by Darla's next position
     // sync, since her real client never actually turned.
     faceEachOther();
+  } else if (msg.name === 'darlaShout') {
+    playBarkSound();
+    showSpeechBubble(darla, 'Get down here!');
   }
 }
 
@@ -2740,6 +2930,7 @@ function sendNetworkState(isMoving) {
     msg.eating = darlaCheeseState === 'eating' ? Math.min(darlaCheeseElapsed / DARLA_CHEESE_EAT_DURATION, 1) : 0;
   } else {
     msg.lounging = mirandaLounging;
+    msg.flying = flightActive;
     // Ball/cheese physics stay entirely local to Miranda's client (she's
     // the one throwing them) — Darla's client never runs that arc math
     // itself, just renders whatever position/visibility arrives here, so
@@ -2784,17 +2975,23 @@ function animate() {
     // client and reads mom.position, which is kept in sync the regular
     // way whether Mom's local or over the network.
     updateBiteChase();
-    localIsMoving = updateMovement(delta);
-    // While lounging her position/pose is fixed by enterHammockLounge — the
-    // usual walk-cycle/jump-height math would otherwise stomp her y back
-    // toward 0 every frame.
-    if (!mirandaLounging) {
-      const jumpY = updateJump(delta);
-      const baseY =
-        playerKind === 'darla'
-          ? updateWalkCycle(localIsMoving, isJumping, isJumping && jumpHeld)
-          : updateMirandaWalkCycle(localIsMoving);
-      player.position.y = baseY + jumpY;
+    if (flightActive) {
+      // Flying owns her position/camera entirely on its own terms — the
+      // usual ground-relative walk/jump math doesn't apply mid-air.
+      localIsMoving = updateFlight(delta);
+    } else {
+      localIsMoving = updateMovement(delta);
+      // While lounging her position/pose is fixed by enterHammockLounge —
+      // the usual walk-cycle/jump-height math would otherwise stomp her y
+      // back toward 0 every frame.
+      if (!mirandaLounging) {
+        const jumpY = updateJump(delta);
+        const baseY =
+          playerKind === 'darla'
+            ? updateWalkCycle(localIsMoving, isJumping, isJumping && jumpHeld)
+            : updateMirandaWalkCycle(localIsMoving);
+        player.position.y = baseY + jumpY;
+      }
     }
   }
 
@@ -2967,7 +3164,9 @@ function animate() {
   // camera follows whichever character is being played, keeping the same
   // relative angle/distance the player has set up via orbit controls —
   // held still at its starting shot until a character is actually chosen.
-  if (gameStarted) {
+  // Skipped while flying, since updateFlight already places the camera
+  // itself every frame — this would just fight it.
+  if (gameStarted && !flightActive) {
     followOffset
       .set(player.position.x, 0.5, player.position.z)
       .sub(controls.target)
@@ -3028,7 +3227,11 @@ function animate() {
 
   updatePsychedelic(delta);
 
-  controls.update();
+  // Skipped while flying — controls.enabled=false already stops it
+  // reacting to input, but .update() still recomputes camera.position
+  // from its own internal state every call regardless, which would
+  // undo updateFlight's manual positioning this same frame.
+  if (!flightActive) controls.update();
   composer.render();
 }
 
