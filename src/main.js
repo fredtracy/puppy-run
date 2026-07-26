@@ -638,47 +638,37 @@ function applyRemoteCommand(name, poopId) {
   }
 }
 
-// Endless woods: trees stream in as chunks around Darla's current position
-// (each chunk seeded so revisiting it looks the same) and unload once far
-// behind her, so she can walk in any direction indefinitely without the
-// tree count growing forever.
-const CHUNK_LOAD_RADIUS = 3;
-const CHUNK_UNLOAD_RADIUS = 4;
-const loadedChunks = new Map();
+// A finite world: the yard, then a bounded ring of woods reaching out to
+// roughly where the fog already hides everything (see scene.fog/DAY_FOG/
+// NIGHT_FOG's far values below — 55 is comfortably past the longer of the
+// two, so the tree line never visibly stops short in either lighting
+// state) — walking to the edge reads as wandering into the fog, not
+// hitting an arbitrary wall. Generated once, here, rather than streamed in
+// and disposed as she moves, which is what actually frees up the budget
+// spent on denser grass below (see createGrassField/createChunkGrass) —
+// a fixed, known total tree/grass count instead of an ever-growing one.
+const WORLD_RADIUS = 55;
+// Chunks are generated on the same CHUNK_SIZE grid either way; this just
+// picks how far out on that grid to even consider before filtering by the
+// actual circular WORLD_RADIUS below — corner chunks of the square grid
+// that fall outside that circle are skipped entirely, since nothing can
+// ever walk out to them anyway (see the movement clamp near
+// clampToWalkable).
+const CHUNK_GRID_RADIUS = Math.ceil(WORLD_RADIUS / CHUNK_SIZE) + 1;
 
-function updateTreeChunks() {
-  const currentCx = Math.floor(player.position.x / CHUNK_SIZE);
-  const currentCz = Math.floor(player.position.z / CHUNK_SIZE);
-
-  for (let dx = -CHUNK_LOAD_RADIUS; dx <= CHUNK_LOAD_RADIUS; dx++) {
-    for (let dz = -CHUNK_LOAD_RADIUS; dz <= CHUNK_LOAD_RADIUS; dz++) {
-      const cx = currentCx + dx;
-      const cz = currentCz + dz;
-      const key = `${cx},${cz}`;
-      if (!loadedChunks.has(key)) {
-        const chunk = createTreeChunk(cx, cz);
-        scene.add(chunk);
-        loadedChunks.set(key, chunk);
-      }
-    }
-  }
-
-  for (const [key, chunk] of loadedChunks) {
-    const [cx, cz] = key.split(',').map(Number);
-    if (
-      Math.abs(cx - currentCx) > CHUNK_UNLOAD_RADIUS ||
-      Math.abs(cz - currentCz) > CHUNK_UNLOAD_RADIUS
-    ) {
-      scene.remove(chunk);
-      chunk.traverse((child) => {
-        if (child.isMesh) child.geometry.dispose();
-      });
-      loadedChunks.delete(key);
+function generateWorld() {
+  for (let cx = -CHUNK_GRID_RADIUS; cx <= CHUNK_GRID_RADIUS; cx++) {
+    for (let cz = -CHUNK_GRID_RADIUS; cz <= CHUNK_GRID_RADIUS; cz++) {
+      const centerX = cx * CHUNK_SIZE + CHUNK_SIZE / 2;
+      const centerZ = cz * CHUNK_SIZE + CHUNK_SIZE / 2;
+      if (Math.hypot(centerX, centerZ) > WORLD_RADIUS) continue;
+      const chunk = createTreeChunk(cx, cz);
+      scene.add(chunk);
     }
   }
 }
 
-updateTreeChunks();
+generateWorld();
 
 // A surprised little moon, hand-drawn onto a canvas texture and billboarded
 // so it always faces the camera. Pale and soft-edged with a gentle glow
@@ -1020,13 +1010,62 @@ ssaoPass.minDistance = 0.0008;
 ssaoPass.maxDistance = 0.05;
 composer.addPass(ssaoPass);
 
+// Up from the original 0.25/0.6/0.85 (strength/radius/threshold) for the
+// soft glow of a painted scene rather than a tight realistic
+// highlight-only bloom — but the threshold pulled back up from an earlier
+// 0.65, which was low enough that the house's near-white siding cleared it
+// and the walls visibly glowed. Bright things (sun, fire, sky) should
+// bloom; a painted wall shouldn't.
 const bloomPass = new UnrealBloomPass(
   new THREE.Vector2(window.innerWidth, window.innerHeight),
-  0.25,
-  0.6,
-  0.85
+  0.32,
+  0.7,
+  0.82
 );
 composer.addPass(bloomPass);
+
+// A permanent, always-on painterly grade — unlike psychedelicPass below
+// (a temporary skill effect), this is meant to be the game's actual
+// baseline look: a warm color push, a soft vignette (illustrated scenes
+// read as focused/composed rather than flat-lit like a photo), and light
+// grain standing in for canvas texture rather than a perfectly clean
+// digital gradient.
+const painterlyPass = new ShaderPass({
+  uniforms: {
+    tDiffuse: { value: null },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    varying vec2 vUv;
+
+    float grainNoise(vec2 uv) {
+      return fract(sin(dot(uv, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+
+    void main() {
+      vec4 color = texture2D(tDiffuse, vUv);
+
+      color.rgb *= vec3(1.06, 1.03, 0.92);
+
+      vec2 centered = vUv - 0.5;
+      float vignette = 1.0 - dot(centered, centered) * 0.55;
+      color.rgb *= vignette;
+
+      float grain = (grainNoise(vUv * 500.0) - 0.5) * 0.02;
+      color.rgb += grain;
+
+      gl_FragColor = color;
+    }
+  `,
+});
+composer.addPass(painterlyPass);
 
 // Miranda's "trip" skill: a full-screen wiggle (UV displaced by layered
 // sine waves) plus a slow hue rotation and a little chromatic split, all
@@ -1119,6 +1158,10 @@ psychedelicButton.addEventListener('pointerdown', (e) => {
     psychedelicButton.classList.remove('aiming');
     setMusicPsychedelic(false);
     exitFlight();
+    // Coming down — plays locally and broadcasts, same as darlaShoutAt
+    // Miranda above, so both screens see it regardless of who was flying.
+    showSpeechBubble(mom, 'Whoa..');
+    sendFx('mirandaComeDown');
   }, PSYCHEDELIC_DURATION_MS);
 });
 
@@ -2198,6 +2241,19 @@ function nearestPointOutsideHouse(x, z) {
   return { x: HOUSE_SOLID.xMax, z };
 }
 
+// Keeps her within the generated world (see generateWorld/WORLD_RADIUS
+// above) — pulled in a bit short of the actual generation radius, so she
+// always stays comfortably inside real trees/fog rather than able to walk
+// out to the literal edge of what got generated and see it stop.
+const MOVEMENT_RADIUS = WORLD_RADIUS - 5;
+
+function clampToWorldRadius(x, z) {
+  const dist = Math.hypot(x, z);
+  if (dist <= MOVEMENT_RADIUS) return { x, z };
+  const scale = MOVEMENT_RADIUS / dist;
+  return { x: x * scale, z: z * scale };
+}
+
 // Used for the per-frame movement step: has side effects (flips
 // insideHouse) since it tracks Darla's actual physical journey through
 // the doorway, in either direction.
@@ -2227,9 +2283,11 @@ function clampToWalkable(prevX, prevZ, x, z) {
     };
   }
 
-  // No outer boundary anymore — she can walk endlessly in any direction;
-  // the house is the only obstacle out here.
-  return pushOutOfHouse(prevX, prevZ, x, z);
+  // The house is the only obstacle out here besides the world's own
+  // edge — pushOutOfHouse handles walking around it, clampToWorldRadius
+  // keeps her inside the generated world.
+  const pushed = pushOutOfHouse(prevX, prevZ, x, z);
+  return clampToWorldRadius(pushed.x, pushed.z);
 }
 
 // Used for picking a click-to-move destination: a stateless best-guess
@@ -2242,7 +2300,8 @@ function clampTargetPoint(x, z) {
       z: THREE.MathUtils.clamp(z, INTERIOR_BOUNDS.zMin, INTERIOR_BOUNDS.zMax),
     };
   }
-  return nearestPointOutsideHouse(x, z);
+  const outside = nearestPointOutsideHouse(x, z);
+  return clampToWorldRadius(outside.x, outside.z);
 }
 
 const cameraForward = new THREE.Vector3();
@@ -2900,6 +2959,8 @@ function applyRemoteFx(msg) {
   } else if (msg.name === 'darlaShout') {
     playBarkSound();
     showSpeechBubble(darla, 'Get down here!');
+  } else if (msg.name === 'mirandaComeDown') {
+    showSpeechBubble(mom, 'Whoa..');
   }
 }
 
@@ -3203,8 +3264,6 @@ function animate() {
     0.85 + Math.sin(elapsed * 18) * 0.15 + Math.random() * 0.12;
 
   grassMaterial.uniforms.uTime.value = elapsed;
-
-  updateTreeChunks();
 
   // The lawn is a large-but-finite plane (its texture tiles seamlessly via
   // RepeatWrapping) so it can just follow whoever's playing around instead

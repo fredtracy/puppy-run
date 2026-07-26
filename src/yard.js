@@ -108,12 +108,79 @@ function loadConcreteTextures() {
   return loadPbrTextures('concrete_floor', 'diff', 3, 2);
 }
 
-// Negative Y repeat compensates for how the lawn plane gets rotated flat
-// (rotation.x = -PI/2) — without it, the offset compensation in
-// updateLawnTexture below would scroll the texture backwards on the Z
-// axis relative to how it scrolls correctly on X.
-function loadLawnTextures() {
-  return loadPbrTextures('leafy_grass', 'diff', 25, -25);
+// A painted-grass texture instead of a photo — thousands of short, thinly
+// stroked "blades" baked directly into the map, standing in for real
+// geometry everywhere the real instanced blades (see createChunkGrass)
+// have thinned out with distance or already shrunk below a pixel at
+// range. Real geometry still does the up-close work (it casts shadows,
+// bends in the wind, and reads as individual blades close to the camera);
+// this is what keeps the ground from ever looking bare in between and at
+// range, without paying more per-instance GPU cost to get there — the
+// same "fake it as a texture, not more geometry" idea the reference image
+// (Twitter, Claude Opus 5's Ghibli demo) is actually built on, just via a
+// baked canvas here instead of a live shader.
+function createPaintedGrassTexture() {
+  const size = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = '#4c8a3a';
+  ctx.fillRect(0, 0, size, size);
+
+  // Big soft blotches first, for the rolling light/dark patches real
+  // fields show (like clouds' shadows drifting across a hillside) —
+  // painted underneath the fine blade strokes so they still show through.
+  for (let i = 0; i < 45; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const r = 35 + Math.random() * 100;
+    const dark = Math.random() < 0.5;
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+    grad.addColorStop(0, dark ? 'rgba(45,110,35,0.5)' : 'rgba(120,190,90,0.45)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Thousands of short, thin, randomly angled strokes — this is the part
+  // that actually reads as "grass" rather than a flat tinted color, at any
+  // distance, since it's resolution baked into the texture rather than
+  // real geometry that can shrink below a pixel and disappear.
+  const strokeCount = 9000;
+  ctx.lineWidth = 1;
+  for (let i = 0; i < strokeCount; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const len = 3 + Math.random() * 6;
+    const angle = Math.random() * Math.PI * 2;
+    const lightness = 0.55 + Math.random() * 0.55;
+    const r = Math.floor(40 * lightness);
+    const g = Math.floor(115 * lightness);
+    const b = Math.floor(30 * lightness);
+    ctx.strokeStyle = `rgba(${r},${g},${b},0.55)`;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + Math.cos(angle) * len, y - Math.sin(angle) * len);
+    ctx.stroke();
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  // Negative Y repeat compensates for how the lawn plane gets rotated flat
+  // (rotation.x = -PI/2) — without it, the offset compensation in
+  // updateLawnTexture below would scroll the texture backwards on the Z
+  // axis relative to how it scrolls correctly on X. Same repeat count the
+  // old photo texture used, so the existing tiling/scroll math in
+  // updateLawnTexture (LAWN_TILE_WORLD_SIZE) still lines up unchanged.
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(25, -25);
+  texture.anisotropy = 16;
+  return texture;
 }
 
 function loadWoodFloorTextures() {
@@ -328,8 +395,11 @@ export function createHouse() {
   // the reference photos — everything else on the exterior stays brick,
   // this is the one wall that isn't.
   const sidingMat = new THREE.MeshStandardMaterial({
-    map: makeSpeckleTexture('#f1ede2', 14, 10, 3),
-    roughness: 0.7,
+    // Warm off-white rather than the near-white #f1ede2 it was, and fully
+    // matte — between them the walls stop reading as glossy and stop
+    // sitting right at the bloom threshold.
+    map: makeSpeckleTexture('#e2ddd0', 14, 10, 3),
+    roughness: 0.95,
   });
   const glassMat = new THREE.MeshPhysicalMaterial({
     color: 0x1b2b33,
@@ -845,7 +915,13 @@ function mulberry32(seed) {
 }
 
 export const CHUNK_SIZE = 18;
-const TREE_SPACING = 3.6;
+// Tightened from 3.6 (and the thinning below eased off) for a denser
+// forest — kept more conservative than the grass density changes though,
+// since each tree is its own handful of individual meshes/draw calls
+// (see createTree — trunk + several foliage pieces, not instanced the way
+// grass blades are), so tree count is a noticeably more expensive lever
+// to pull than blade count.
+const TREE_SPACING = 3.0;
 
 // Trees fill a regular grid (with jitter, so it doesn't look mechanical)
 // everywhere outside the walkable lawn and the house footprint — the
@@ -856,15 +932,20 @@ const TREE_SPACING = 3.6;
 // The backyard clearing (open lawn, no trees) and the house's own
 // footprint — shared between the tree chunks (which exclude both) and the
 // grass field (which only grows in the clearing, minus the house).
-const inOpenArea = (x, z) => x > -9.5 && x < 9.5 && z > -4.5 && z < 14.5;
+// Widened to wrap the whole house — front yard/driveway and both sides,
+// not just the backyard clearing behind it — since this is what both
+// createTreeChunk (keeps trees out of it) and createChunkGrass (keeps
+// forest-floor tufts out of it, so they don't double up with the yard's
+// own denser grass below) key off of.
+const inOpenArea = (x, z) => x > -13 && x < 13 && z > -24 && z < 18;
 // z lower bound extends well past the old plain-box house to clear the
 // garage and its driveway, which now project out past the main hip roof's
 // footprint.
 const inHouse = (x, z) => x > -8.7 && x < 8.7 && z > -24.2 && z < -3.8;
 
 // Matches firePit's own placement in createYard() below — kept separate so
-// grass tufts (createGrassField) can skip it without needing the actual
-// fire pit object to exist yet.
+// grass (createChunkGrass) can skip it without needing the actual fire pit
+// object to exist yet.
 export const FIRE_PIT = { x: -1, z: 5, radius: 0.7 };
 const inFirePit = (x, z) => Math.hypot(x - FIRE_PIT.x, z - FIRE_PIT.z) < FIRE_PIT.radius;
 
@@ -880,7 +961,7 @@ export function createTreeChunk(cx, cz) {
       const x = originX + lx + (rand() - 0.5) * TREE_SPACING * 0.8;
       const z = originZ + lz + (rand() - 0.5) * TREE_SPACING * 0.8;
       if (inOpenArea(x, z) || inHouse(x, z)) continue;
-      if (rand() < 0.15) continue; // thin out a bit so it reads as a forest, not a wall
+      if (rand() < 0.1) continue; // thin out a bit so it reads as a forest, not a wall
 
       const kind = rand() < 0.3 ? 'pine' : 'round';
       const tree = createTree(kind, rand);
@@ -1061,23 +1142,22 @@ function createHammock() {
 const LAWN_TILE_WORLD_SIZE = 100 / 25;
 
 function createLawn() {
-  const lawnTextures = loadLawnTextures();
+  // No normalMap/roughnessMap here — those came from the old photo
+  // texture, and painted-on strokes don't have a matching bump/gloss
+  // pattern to go with them the way a real photo does; a flat roughness
+  // suits the painterly look better anyway.
+  const map = createPaintedGrassTexture();
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(100, 100),
     new THREE.MeshStandardMaterial({
-      map: lawnTextures.map,
-      normalMap: lawnTextures.normalMap,
-      roughnessMap: lawnTextures.roughnessMap,
-      // The raw photo reads a bit dry/brown for a cartoon backyard lawn —
-      // a green tint (multiplied against the map) pushes it back toward
-      // the same lush green as the grass-blade tufts planted on top of it.
+      map,
       color: 0x8fcf72,
       roughness: 1,
     })
   );
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
-  ground.userData.textures = [lawnTextures.map, lawnTextures.normalMap, lawnTextures.roughnessMap];
+  ground.userData.textures = [map];
   return ground;
 }
 
@@ -1097,28 +1177,53 @@ export function updateLawnTexture(lawn, worldX, worldZ) {
   });
 }
 
-const GRASS_BLADE_HEIGHT = 0.35;
+// A mowed lawn, not a meadow — 0.55 read as knee-high field grass and
+// swallowed the yard sign. Still up from the original 0.35 x 0.05 on the
+// width axis though: a very thin blade shrinks below a pixel at distance
+// and stops being drawn at all, which was part of why bare ground showed
+// through.
+const GRASS_BLADE_HEIGHT = 0.32;
 
-// A single tapered blade (base pinned at y=0, tip at y=BLADE_HEIGHT) with
-// several height segments so the wind shader below can bend it smoothly
-// like it's actually rooted in the ground, instead of hinging at one point.
+// A single tapered, forward-arcing blade (base pinned at y=0, tip at
+// y=BLADE_HEIGHT) with several height segments so the wind shader below
+// can bend it smoothly like it's actually rooted in the ground, instead of
+// hinging at one point.
 function createGrassBladeGeometry() {
-  const bladeWidth = 0.05;
-  const geo = new THREE.PlaneGeometry(bladeWidth, GRASS_BLADE_HEIGHT, 1, 4);
+  // Thin and needle-like rather than a broad leaf — going too wide reads
+  // as reeds. Distance readability (where thin blades shrink below a pixel)
+  // is the painted ground texture's job now, not this geometry's.
+  const bladeWidth = 0.06;
+  const geo = new THREE.PlaneGeometry(bladeWidth, GRASS_BLADE_HEIGHT, 1, 5);
   geo.translate(0, GRASS_BLADE_HEIGHT / 2, 0);
   const pos = geo.attributes.position;
   for (let i = 0; i < pos.count; i++) {
     const t = pos.getY(i) / GRASS_BLADE_HEIGHT;
-    pos.setX(i, pos.getX(i) * (1 - t * 0.7));
+    // Keeps a bit more width toward the tip than the old 0.7 taper, which
+    // pinched almost to a point — a blade that still has some width up top
+    // survives being drawn at distance instead of thinning into nothing.
+    pos.setX(i, pos.getX(i) * (1 - t * 0.55));
+    // Arc forward, quadratically so the bend accumulates toward the tip
+    // rather than leaning uniformly from the root. Baked into local space
+    // (unlike the wind, which is deliberately applied in world space after
+    // the instance rotation) precisely so each blade's arc points whichever
+    // way that blade happens to be rotated — real grass leans every which
+    // way, and that variation is most of what stops a dense field reading
+    // as a flat bristly carpet.
+    pos.setZ(i, pos.getZ(i) + t * t * GRASS_BLADE_HEIGHT * 0.18);
   }
   geo.computeVertexNormals();
   return geo;
 }
 
-// Cheap per-blade shading: a fixed vertical color gradient (dark at the
-// root, bright toward the tip) plus per-instance tint variation, rather
-// than a real lit response — the sun never moves in this scene, so a real
-// lighting calculation here would just reproduce the same gradient anyway.
+// Per-blade shading: a vertical color gradient (dark at the root, bright
+// toward the tip) and per-instance tint variation, plus a real light
+// response against a fixed sun direction. That last part used to be
+// skipped on the reasoning that a static sun makes lighting redundant with
+// the gradient — but that missed that every blade carries its own random
+// Y rotation, so lighting is exactly what makes some blades catch the sun
+// while their neighbours fall into shadow. Without it a dense field reads
+// as one flat green mass; with it, it reads as thousands of separate
+// blades.
 // The wind itself is a sine wave offset by world position (so it ripples
 // across the field instead of every blade moving in lockstep) and by a
 // per-instance random phase (so they don't all ripple in perfect unison),
@@ -1137,10 +1242,16 @@ function createGrassMaterial() {
       varying float vHeightT;
       varying float vRandom;
       varying float vFogDepth;
+      varying vec3 vNormalW;
 
       void main() {
         vHeightT = position.y / ${GRASS_BLADE_HEIGHT.toFixed(3)};
         vRandom = instanceRandom;
+
+        // Instances only ever get a uniform scale and a Y rotation (see
+        // buildGrassMesh), so the plain upper 3x3 is a correct normal
+        // transform here — no inverse-transpose needed.
+        vNormalW = normalize(mat3(instanceMatrix) * normal);
 
         // Each blade's own random per-instance rotation (baked into
         // instanceMatrix) is for visual variety of its resting shape only.
@@ -1151,9 +1262,26 @@ function createGrassMaterial() {
         // wriggling rather than a field leaning together in the wind.
         vec4 restPos = instanceMatrix * vec4(position, 1.0);
 
-        vec2 windDir = normalize(vec2(1.0, 0.35));
-        float wave = sin(uTime * 1.6 + restPos.x * 0.3 + restPos.z * 0.3 + instanceRandom * 6.2831);
-        float bendAmount = wave * 0.16 * pow(vHeightT, 1.6);
+        // Layered sine waves rather than one uniform sway: a slow, large-
+        // wavelength wave modulates overall intensity (so gusts roll
+        // through instead of a constant sway everywhere at once), a
+        // faster fine wave adds flutter on top of the main directional
+        // lean, and the direction itself wobbles slowly and unevenly
+        // across the field rather than staying perfectly fixed. Still
+        // just sin() (cheap per-vertex GPU work, same as before) rather
+        // than real noise — enough to read as an actual wind field
+        // passing through without the extra complexity of hand-rolling
+        // simplex noise for it.
+        float dirWobble = sin(uTime * 0.12 + restPos.x * 0.02 - restPos.z * 0.02) * 0.3;
+        vec2 windDir = normalize(vec2(1.0 + dirWobble, 0.35 - dirWobble * 0.5));
+
+        float leanWave = sin(uTime * 1.6 + restPos.x * 0.3 + restPos.z * 0.3 + instanceRandom * 6.2831);
+        float flutterWave = sin(uTime * 3.4 + restPos.x * 0.8 - restPos.z * 0.6 + instanceRandom * 6.2831);
+        float wave = leanWave * 0.75 + flutterWave * 0.25;
+
+        float gust = 0.4 + 0.6 * sin(uTime * 0.35 + restPos.x * 0.045 + restPos.z * 0.045);
+
+        float bendAmount = wave * gust * 0.16 * pow(vHeightT, 1.6);
         restPos.x += windDir.x * bendAmount;
         restPos.z += windDir.y * bendAmount;
 
@@ -1167,15 +1295,42 @@ function createGrassMaterial() {
       varying float vHeightT;
       varying float vRandom;
       varying float vFogDepth;
+      varying vec3 vNormalW;
       uniform vec3 fogColor;
       uniform float fogNear;
       uniform float fogFar;
 
       void main() {
-        vec3 baseColor = vec3(0.08, 0.28, 0.09);
-        vec3 tipColor = vec3(0.24, 0.62, 0.2);
-        vec3 color = mix(baseColor, tipColor, vHeightT);
-        color *= 0.8 + vRandom * 0.35;
+        // Deep shadowed green at the root climbing to a bright sunlit
+        // green at the tip — a wider spread than the old muted mid-green
+        // pair, which read as uniformly dark. Deliberately still green
+        // rather than the reference's dry golden chartreuse: this yard is
+        // meant to be high summer, not a late-season meadow.
+        vec3 baseColor = vec3(0.05, 0.18, 0.07);
+        vec3 tipWarm = vec3(0.46, 0.82, 0.30);
+        vec3 tipCool = vec3(0.24, 0.60, 0.24);
+        // Per-instance hue variety, not just brightness — a real field is
+        // never one single green.
+        vec3 tipColor = mix(tipCool, tipWarm, vRandom);
+        vec3 color = mix(baseColor, tipColor, vHeightT * vHeightT);
+
+        // Blades are thin and translucent, so abs() lets one lit from
+        // behind glow rather than going black, and the wrap (0.5 + 0.5x)
+        // keeps unlit sides soft instead of harshly dark.
+        vec3 lightDir = normalize(vec3(0.45, 0.75, 0.35));
+        float ndl = abs(dot(normalize(vNormalW), lightDir));
+        // Centred near 1.0 (~0.83 unlit to ~1.10 fully lit) rather than
+        // only ever brightening — this is meant to add contrast *between*
+        // blades, and a term that just scales everything up would blow the
+        // whole field out once bloom gets hold of it.
+        float light = 0.55 + 0.55 * (ndl * 0.5 + 0.5);
+        color *= light;
+
+        // Sun catching the very tips, which is most of the sparkle in a
+        // backlit field.
+        color += tipWarm * pow(vHeightT, 4.0) * 0.18 * ndl;
+
+        color *= 0.85 + vRandom * 0.3;
 
         float fogFactor = smoothstep(fogNear, fogFar, vFogDepth);
         color = mix(color, fogColor, fogFactor);
@@ -1195,27 +1350,6 @@ function createGrassMaterial() {
 // down every other field that happens to reuse the same blade shape.
 export const grassMaterial = createGrassMaterial();
 
-// Scatters blades in sparse, dense tufts rather than blanketing an area
-// evenly — most of the ground stays plain, and every so often there's a
-// cute little clump. `exclude(x, z)` skips spots that shouldn't get grass
-// (the house footprint, or — for wooded chunks — the open clearing, which
-// already gets its own denser tufts from createGrassField). Linear radius
-// sampling naturally packs more blades near a tuft's center than its edge.
-function scatterTuftPositions(tuftCenters, tuftRadius, bladesPerTuft, rand, exclude) {
-  const positions = [];
-  tuftCenters.forEach(({ cx, cz }) => {
-    for (let i = 0; i < bladesPerTuft; i++) {
-      const angle = rand() * Math.PI * 2;
-      const r = rand() * tuftRadius;
-      const x = cx + Math.cos(angle) * r;
-      const z = cz + Math.sin(angle) * r;
-      if (exclude(x, z)) continue;
-      positions.push([x, z]);
-    }
-  });
-  return positions;
-}
-
 function buildGrassMesh(positions, rand) {
   const geometry = createGrassBladeGeometry();
   const field = new THREE.InstancedMesh(geometry, grassMaterial, positions.length);
@@ -1224,7 +1358,13 @@ function buildGrassMesh(positions, rand) {
   positions.forEach(([x, z], i) => {
     dummy.position.set(x, 0, z);
     dummy.rotation.y = rand() * Math.PI * 2;
-    const scale = 0.8 + rand() * 0.5;
+    // Some unevenness so it doesn't read as bristles on a brush, but a
+    // tighter spread than a wild field would have — this is a mowed lawn,
+    // so blades top out at roughly a common height. Deliberately kept
+    // *uniform* (not a taller-but-not-wider stretch): the vertex shader's
+    // normal transform above takes the plain upper 3x3 of instanceMatrix,
+    // which is only correct for uniform scale.
+    const scale = 0.78 + rand() * 0.44;
     dummy.scale.set(scale, scale, scale);
     dummy.updateMatrix();
     field.setMatrixAt(i, dummy.matrix);
@@ -1235,49 +1375,60 @@ function buildGrassMesh(positions, rand) {
   return field;
 }
 
-function createGrassField() {
-  const tuftCount = 24;
-  const bladesPerTuft = 80;
-  const tuftRadius = 0.8;
-  const exclude = (x, z) => inHouse(x, z) || inFirePit(x, z);
+// Grass used to come from two separate systems — a dense grid over a
+// hardcoded rectangle for the yard, and a handful of sparse scattered
+// tufts per wooded chunk — which left an obvious hard-edged rectangle of
+// lawn sitting in an otherwise nearly bare world. This is one system
+// instead: the same even grid everywhere, at a density that simply fades
+// out with distance from the house, so there's no boundary to see.
+//
+// Kept per-chunk (rather than one huge mesh for the whole world) so each
+// piece frustum-culls independently — a single combined InstancedMesh
+// would have to vertex-process every blade in the world every frame no
+// matter where the camera was pointing.
+const GRASS_SPACING = 0.12;
+// Full density out to FULL_RADIUS, then thinning linearly to nothing by
+// FADE_RADIUS. FULL_RADIUS is set to clear the whole yard clearing (whose
+// far corners sit at radius ~22-27, see inOpenArea) so the lawn itself is
+// never the thing being thinned — the fade happens out among the trees,
+// where sparser grass just reads as forest floor rather than as a
+// boundary.
+const GRASS_FULL_RADIUS = 24;
+const GRASS_FADE_RADIUS = 34;
 
-  const tufts = [];
-  let attempts = 0;
-  while (tufts.length < tuftCount && attempts < tuftCount * 20) {
-    attempts++;
-    const cx = -9.5 + Math.random() * 19;
-    const cz = -4.5 + Math.random() * 19;
-    if (exclude(cx, cz)) continue;
-    tufts.push({ cx, cz });
-  }
-
-  const positions = scatterTuftPositions(tufts, tuftRadius, bladesPerTuft, Math.random, exclude);
-  return buildGrassMesh(positions, Math.random);
-}
-
-// Sparser forest-floor tufts for a wooded chunk — deep shade under a
-// canopy has a different, patchier character than the open lawn. Seeded
-// from the same per-chunk RNG as the trees so a chunk always looks the
-// same on every visit, and skips both the house and the open clearing
-// (which already has its own denser grass) in case a chunk happens to
-// straddle either.
 function createChunkGrass(cx, cz, rand) {
   const originX = cx * CHUNK_SIZE;
   const originZ = cz * CHUNK_SIZE;
-  const tuftCount = 8;
-  const bladesPerTuft = 60;
-  const tuftRadius = 0.7;
-  const exclude = (x, z) => inOpenArea(x, z) || inHouse(x, z);
 
-  const tufts = [];
-  for (let i = 0; i < tuftCount; i++) {
-    const tx = originX + rand() * CHUNK_SIZE;
-    const tz = originZ + rand() * CHUNK_SIZE;
-    if (exclude(tx, tz)) continue;
-    tufts.push({ cx: tx, cz: tz });
+  // Cheap early-out for chunks entirely past the fade — skips ~26k inner
+  // loop iterations each for the outer ring of the world, which is most
+  // of the chunks generateWorld builds.
+  const nearestX = Math.max(originX, Math.min(0, originX + CHUNK_SIZE));
+  const nearestZ = Math.max(originZ, Math.min(0, originZ + CHUNK_SIZE));
+  if (Math.hypot(nearestX, nearestZ) > GRASS_FADE_RADIUS) return null;
+
+  const exclude = (x, z) => inHouse(x, z) || inFirePit(x, z);
+  const jitter = GRASS_SPACING * 0.9;
+  const positions = [];
+
+  for (let lx = 0; lx < CHUNK_SIZE; lx += GRASS_SPACING) {
+    for (let lz = 0; lz < CHUNK_SIZE; lz += GRASS_SPACING) {
+      const x = originX + lx + (rand() - 0.5) * jitter;
+      const z = originZ + lz + (rand() - 0.5) * jitter;
+      if (exclude(x, z)) continue;
+
+      const dist = Math.hypot(x, z);
+      if (dist > GRASS_FADE_RADIUS) continue;
+      if (dist > GRASS_FULL_RADIUS) {
+        const keep =
+          1 - (dist - GRASS_FULL_RADIUS) / (GRASS_FADE_RADIUS - GRASS_FULL_RADIUS);
+        if (rand() > keep) continue;
+      }
+
+      positions.push([x, z]);
+    }
   }
 
-  const positions = scatterTuftPositions(tufts, tuftRadius, bladesPerTuft, rand, exclude);
   if (positions.length === 0) return null;
   return buildGrassMesh(positions, rand);
 }
@@ -1287,9 +1438,6 @@ export function createYard() {
   const lawn = createLawn();
   group.add(lawn);
   group.userData.lawn = lawn;
-
-  const grassField = createGrassField();
-  group.add(grassField);
 
   const house = createHouse();
   house.position.set(0, 0, -11);
