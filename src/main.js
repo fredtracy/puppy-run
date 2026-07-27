@@ -3,7 +3,6 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
@@ -13,9 +12,11 @@ import {
   createYard,
   createTreeChunk,
   CHUNK_SIZE,
-  grassMaterial,
   FIRE_PIT,
-  updateLawnTexture,
+  terrainHeight,
+  updateGrassAngularSize,
+  setGrassFog,
+  setGrassTime,
 } from './yard.js';
 import {
   initAudio,
@@ -30,6 +31,21 @@ import {
   setMusicPsychedelic,
 } from './audio.js';
 import * as net from './net.js';
+
+// Debug mode: add ?debug to the URL. Skips straight past the mode-select
+// and character-select screens and parks the camera in a fixed bird's-eye
+// view over DEBUG_FOCUS instead of chasing the player around — meant for
+// quickly eyeballing a placement/geometry change on reload (chimney
+// position, driveway alignment, whatever's being worked on) without
+// walking there every time. Reusable for whatever's next: just move
+// DEBUG_FOCUS. Grass is also skipped while this is on (see yard.js's own
+// GRASS_ENABLED, which checks the same query param) purely for faster
+// reloads while iterating — normal loads still get grass as usual.
+const DEBUG_MODE = new URLSearchParams(window.location.search).has('debug');
+// Currently the chimney (see createHouse in yard.js): the house group
+// sits at world (0, *, -11), and the chimney's local (x, 0, z) there is
+// currently (-3.0, 0, 0.8) -> world (-3.0, ~5 [roof height], -10.2).
+const DEBUG_FOCUS = new THREE.Vector3(-3.0, 5, -10.2);
 
 // Browsers block audio until a user gesture — kick it off on the first
 // keypress or tap/click, whichever comes first.
@@ -68,6 +84,16 @@ controls.target.set(0, 0.5, 0);
 controls.enableDamping = true;
 controls.minDistance = 0.8;
 controls.maxDistance = 26;
+
+if (DEBUG_MODE) {
+  // Steep-but-not-quite-vertical (OrbitControls doesn't like sitting
+  // exactly at the polar singularity) so it still reads as a 3D view
+  // rather than a flat map. maxDistance raised since eyeballing a whole
+  // roof from up here needs more room than the normal follow-cam ever did.
+  controls.maxDistance = 60;
+  controls.target.copy(DEBUG_FOCUS);
+  camera.position.set(DEBUG_FOCUS.x, DEBUG_FOCUS.y + 14, DEBUG_FOCUS.z + 9);
+}
 
 // Image-based lighting from a real photographed sky (CC0, polyhaven.com) —
 // gives every reflective/PBR material realistic ambient light and
@@ -405,6 +431,9 @@ document.getElementById('pick-miranda').addEventListener('click', () => {
   startGame('miranda');
   if (isHost) net.send({ t: 'assign', hostKind: 'miranda' });
 });
+
+// Debug mode skips both menus entirely — see DEBUG_MODE above.
+if (DEBUG_MODE) startGame('darla');
 
 // --- Multiplayer lobby (mode-select screen, before character-select) ----
 const mpMenuEl = document.getElementById('mp-menu');
@@ -945,9 +974,7 @@ function applyDayNight(day) {
   // uniforms (it can't read scene.fog directly), so those need to be kept
   // in sync by hand or distant grass would stay fogged to whichever mode
   // was active when the material was first created.
-  grassMaterial.uniforms.fogColor.value.set(cfg.fogColor);
-  grassMaterial.uniforms.fogNear.value = cfg.fogNear;
-  grassMaterial.uniforms.fogFar.value = cfg.fogFar;
+  setGrassFog(cfg.fogColor, cfg.fogNear, cfg.fogFar);
 
   sunMoonLight.color.set(cfg.sun.color);
   sunMoonLight.intensity = cfg.sun.intensity;
@@ -996,19 +1023,46 @@ function toggleDayNight() {
 dayNightButton.addEventListener('click', toggleDayNight);
 applyDayNight(true);
 
-const composer = new EffectComposer(renderer);
+// The renderer's own `antialias: true` only ever applies to the default
+// framebuffer. Everything here is drawn into the composer's render targets
+// instead, which don't inherit it — so with post-processing in the chain
+// the scene was being rendered with no MSAA at all. That's survivable for
+// big flat surfaces and brutal for a third of a million hair-thin grass
+// blades, which is exactly the geometry that aliases worst. Handing the
+// composer an explicitly multisampled target is what actually turns it on.
+const composerTargetSize = renderer.getDrawingBufferSize(new THREE.Vector2());
+// Samples only — deliberately NOT HalfFloatType. The composer's targets
+// were 8-bit before, which clamped every colour at 1.0; half-float doesn't,
+// so genuinely HDR values (the emissive patio lights, the fire, the sun
+// sprite, the grass's transmission term) suddenly reached the bloom pass at
+// full strength rather than capped. Bloom is tuned against the clamped
+// range, so those blew out and flared white as they crossed its threshold.
+// Antialiasing was the point here; the wider colour range was not.
+const composerTarget = new THREE.WebGLRenderTarget(
+  composerTargetSize.width,
+  composerTargetSize.height,
+  { samples: 4 }
+);
+const composer = new EffectComposer(renderer, composerTarget);
 composer.addPass(new RenderPass(scene, camera));
 
-// Ambient occlusion for contact shadows — grounds objects against the
-// lawn/floor and darkens tight corners (under the roof overhang, where the
-// columns meet the patio floor) that direct lighting alone leaves flat.
-// Tuned way down from the defaults (which assume a much larger scene scale)
-// since Darla and the house are only a few units across.
-const ssaoPass = new SSAOPass(scene, camera, window.innerWidth, window.innerHeight);
-ssaoPass.kernelRadius = 0.3;
-ssaoPass.minDistance = 0.0008;
-ssaoPass.maxDistance = 0.05;
-composer.addPass(ssaoPass);
+// Screen-space ambient occlusion is DISABLED, deliberately.
+//
+// It was added for contact shadows — grounding the house against the lawn,
+// darkening the corners under the roof overhang — and tuned for that: a
+// 0.3 unit kernel radius, on a scene whose objects are a few units across.
+//
+// That tuning is fundamentally incompatible with the grass. Blades are
+// 0.024 wide and sit 0.065 apart, so a 0.3 radius spans four or five
+// neighbours: every blade pixel is surrounded by other blade geometry and
+// the pass returns near-total occlusion across the whole sward. The result
+// was black grass over bright unoccluded ground, getting steadily worse
+// with every density increase. Shrinking the radius below blade spacing
+// would stop it eating the lawn but leaves it too small to do the job it
+// was there for, so it earns nothing either way now that grass is the
+// dominant surface in the scene. The blades do their own occlusion in the
+// fragment shader instead, which is both cheaper and actually aware of
+// what it's shading.
 
 // Up from the original 0.25/0.6/0.85 (strength/radius/threshold) for the
 // soft glow of a painted scene rather than a tight realistic
@@ -1219,8 +1273,9 @@ function exitFlight() {
   mom.userData.arms.armL.rotation.z = 0;
   mom.userData.arms.armR.rotation.z = 0;
   // "Lands" her — flight ignores the ground entirely, so without this
-  // she'd just be left floating wherever she happened to stop.
-  mom.position.y = 0;
+  // she'd just be left floating wherever she happened to stop. Onto the
+  // terrain, not y=0, or she'd sink into the hill.
+  mom.position.y = terrainHeight(mom.position.x, mom.position.z);
   // OrbitControls recomputes its own spherical state from wherever
   // camera.position/target actually are the next time it runs (rather
   // than some stale pre-flight snapshot), so just pointing target back at
@@ -1283,7 +1338,10 @@ function updateFlight(delta) {
     // what's meant to be a brief, contained trip.
     mom.position.x = THREE.MathUtils.clamp(mom.position.x, YARD_BOUNDS.xMin - 15, YARD_BOUNDS.xMax + 15);
     mom.position.z = THREE.MathUtils.clamp(mom.position.z, YARD_BOUNDS.zMin - 15, YARD_BOUNDS.zMax + 15);
-    mom.position.y = THREE.MathUtils.clamp(mom.position.y, 0.1, 25);
+    // Floor is the ground under her, not zero — otherwise she can fly
+    // straight into the hillside.
+    const groundY = terrainHeight(mom.position.x, mom.position.z);
+    mom.position.y = THREE.MathUtils.clamp(mom.position.y, groundY + 0.1, groundY + 25);
   }
   mom.rotation.y = flightYaw;
   camera.position.set(mom.position.x, mom.position.y + FLIGHT_EYE_HEIGHT, mom.position.z);
@@ -1337,6 +1395,33 @@ function updateMirandaSwim(t, isMoving) {
 const pressedKeys = new Set();
 window.addEventListener('keydown', (e) => pressedKeys.add(e.code));
 window.addEventListener('keyup', (e) => pressedKeys.delete(e.code));
+
+// Debug-mode free-fly: WASD/arrows translate the camera along whatever
+// direction it's actually facing, Space/Shift add pure vertical — mouse
+// drag/scroll to look around and zoom is just OrbitControls' own normal
+// input, untouched. Moves controls.target by the same amount as
+// camera.position each frame so controls.update() (still running
+// normally every frame) reconstructs the same position instead of
+// snapping the camera back to orbit around a stale target.
+const debugFlyDir = new THREE.Vector3();
+const debugFlyForward = new THREE.Vector3();
+const debugFlyRight = new THREE.Vector3();
+const DEBUG_FLY_SPEED = 14;
+function updateDebugFly(delta) {
+  camera.getWorldDirection(debugFlyForward);
+  debugFlyRight.crossVectors(debugFlyForward, camera.up).normalize();
+  debugFlyDir.set(0, 0, 0);
+  if (pressedKeys.has('KeyW') || pressedKeys.has('ArrowUp')) debugFlyDir.add(debugFlyForward);
+  if (pressedKeys.has('KeyS') || pressedKeys.has('ArrowDown')) debugFlyDir.sub(debugFlyForward);
+  if (pressedKeys.has('KeyD') || pressedKeys.has('ArrowRight')) debugFlyDir.add(debugFlyRight);
+  if (pressedKeys.has('KeyA') || pressedKeys.has('ArrowLeft')) debugFlyDir.sub(debugFlyRight);
+  if (pressedKeys.has('Space')) debugFlyDir.y += 1;
+  if (pressedKeys.has('ShiftLeft') || pressedKeys.has('ShiftRight')) debugFlyDir.y -= 1;
+  if (debugFlyDir.lengthSq() < 0.0001) return;
+  debugFlyDir.normalize().multiplyScalar(DEBUG_FLY_SPEED * delta);
+  camera.position.add(debugFlyDir);
+  controls.target.add(debugFlyDir);
+}
 
 // On-screen D-pad for touch devices, feeding the same pressedKeys set
 document.querySelectorAll('#touch-controls button[data-key]').forEach((button) => {
@@ -1535,8 +1620,8 @@ function throwBallTo(x, z) {
   const throwDist = Math.hypot(tx - player.position.x, tz - player.position.z);
   ballThrowDuration = THREE.MathUtils.clamp(throwDist / 11, 0.35, 0.9);
   ballArcHeight = THREE.MathUtils.clamp(throwDist * 0.22, 0.8, 3);
-  ballThrowStart.set(player.position.x, 1.1, player.position.z);
-  ballThrowTarget.set(tx, 0.06, tz);
+  ballThrowStart.set(player.position.x, player.position.y + 1.1, player.position.z);
+  ballThrowTarget.set(tx, terrainHeight(tx, tz) + 0.06, tz);
   ball.visible = true;
   ball.position.copy(ballThrowStart);
 }
@@ -1595,8 +1680,8 @@ function throwCheeseTo(x, z) {
   const throwDist = Math.hypot(tx - player.position.x, tz - player.position.z);
   cheeseThrowDuration = THREE.MathUtils.clamp(throwDist / 11, 0.35, 0.9);
   cheeseArcHeight = THREE.MathUtils.clamp(throwDist * 0.22, 0.8, 3);
-  cheeseThrowStart.set(player.position.x, 1.1, player.position.z);
-  cheeseThrowTarget.set(tx, 0.06, tz);
+  cheeseThrowStart.set(player.position.x, player.position.y + 1.1, player.position.z);
+  cheeseThrowTarget.set(tx, terrainHeight(tx, tz) + 0.06, tz);
   cheese.visible = true;
   cheese.position.copy(cheeseThrowStart);
 }
@@ -1776,7 +1861,7 @@ function spawnPoop(spread = 1) {
   const poop = createPoop();
   poop.userData.growth = 0;
   poop.userData.id = nextPoopId++;
-  poop.position.set(x, 0, z);
+  poop.position.set(x, terrainHeight(x, z), z);
   poop.rotation.y = Math.random() * Math.PI * 2;
   // Same hover-glow idiom as Mom/Darla/the hammock — a child of the poop
   // itself (rather than one shared/reparented sprite) so it scales for
@@ -1817,6 +1902,20 @@ function getGroundPoint(clientX, clientY) {
   pointerNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
   pointerNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointerNDC, camera);
+
+  // Hit the actual ground mesh, not a mathematical plane at y=0. That plane
+  // was correct while the world was flat, but the terrain now stands up to
+  // 2.4 units above it — so a ray aimed at a visible patch of hillside
+  // passed straight through it and carried on until it finally reached
+  // y=0 somewhere far beyond, at a shallow angle that could put it hundreds
+  // of units out. clampToWorldRadius then hauled that overshoot back to the
+  // 50-unit ring, which is why every distant click ended up at much the
+  // same spot instead of where it was aimed.
+  const hits = raycaster.intersectObject(yard.userData.lawn, false);
+  if (hits.length > 0) return hits[0].point;
+
+  // Fallback for rays that miss the lawn entirely — over the horizon, or
+  // past its edge. Keeps the old behaviour rather than swallowing the click.
   const point = new THREE.Vector3();
   return raycaster.ray.intersectPlane(groundPlaneMath, point) ? point : null;
 }
@@ -2110,7 +2209,11 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     const dist = Math.hypot(dx, dz);
     const scale = dist > 0.001 ? Math.max(dist - DARLA_LEASH_DISTANCE, 0) / dist : 0;
     moveTarget = new THREE.Vector3(mom.position.x + dx * scale, 0, mom.position.z + dz * scale);
-    clickMarker.position.set(moveTarget.x, 0.02, moveTarget.z);
+    clickMarker.position.set(
+      moveTarget.x,
+      terrainHeight(moveTarget.x, moveTarget.z) + 0.02,
+      moveTarget.z
+    );
     clickMarker.visible = true;
     return;
   }
@@ -2134,7 +2237,11 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     const hammock = yard.userData.hammock;
     mirandaLoungeTarget = true;
     moveTarget = new THREE.Vector3(hammock.position.x, 0, hammock.position.z);
-    clickMarker.position.set(moveTarget.x, 0.02, moveTarget.z);
+    clickMarker.position.set(
+      moveTarget.x,
+      terrainHeight(moveTarget.x, moveTarget.z) + 0.02,
+      moveTarget.z
+    );
     clickMarker.visible = true;
     return;
   }
@@ -2154,7 +2261,11 @@ renderer.domElement.addEventListener('pointerup', (e) => {
       momTargetPoop = clickedPoop;
       mirandaPoopTarget = true;
       moveTarget = new THREE.Vector3(clickedPoop.position.x, 0, clickedPoop.position.z);
-      clickMarker.position.set(moveTarget.x, 0.02, moveTarget.z);
+      clickMarker.position.set(
+      moveTarget.x,
+      terrainHeight(moveTarget.x, moveTarget.z) + 0.02,
+      moveTarget.z
+    );
       clickMarker.visible = true;
       return;
     }
@@ -2180,25 +2291,22 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   if (mirandaLounging) exitHammockLounge();
   const clamped = clampTargetPoint(point.x, point.z);
   moveTarget = new THREE.Vector3(clamped.x, 0, clamped.z);
-  clickMarker.position.set(moveTarget.x, 0.02, moveTarget.z);
+  clickMarker.position.set(
+      moveTarget.x,
+      terrainHeight(moveTarget.x, moveTarget.z) + 0.02,
+      moveTarget.z
+    );
   clickMarker.visible = true;
 });
 
 const WALK_SPEED = 4.2;
 const YARD_BOUNDS = { xMin: -9, xMax: 9, zMin: -4, zMax: 14 };
 
-// The house is a solid obstacle you walk around, except through the
-// doorway, which leads to the free-roam interior. INTERIOR_BOUNDS covers
-// the whole interior floor (not just the doorway's width) so she isn't
-// funneled back out the moment she steps sideways once inside — that's
-// tracked with the `insideHouse` flag below rather than being inferred
-// from position each frame, since "am I inside" and "is this point inside
-// the wall footprint" are different questions.
-const DOORWAY_X = { min: -0.3, max: 1.7 };
-const INTERIOR_BOUNDS = { xMin: -5.2, xMax: 5.2, zMin: -14.1, zMax: -7.5 };
+// The house is a solid obstacle you walk around — it used to have a
+// walkable doorway leading to a free-roam interior, but the back door is
+// closed now and the interior's gone (see createHouse in yard.js), so
+// this is just a plain box.
 const HOUSE_SOLID = { xMin: -6.3, xMax: 6.3, zMin: -14.9, zMax: -7.5 };
-
-let insideHouse = false;
 
 function isInHouseFootprint(x, z) {
   return (
@@ -2254,52 +2362,16 @@ function clampToWorldRadius(x, z) {
   return { x: x * scale, z: z * scale };
 }
 
-// Used for the per-frame movement step: has side effects (flips
-// insideHouse) since it tracks Darla's actual physical journey through
-// the doorway, in either direction.
+// Used for the per-frame movement step.
 function clampToWalkable(prevX, prevZ, x, z) {
-  if (insideHouse) {
-    const exiting =
-      z > INTERIOR_BOUNDS.zMax && x >= DOORWAY_X.min && x <= DOORWAY_X.max;
-    if (!exiting) {
-      return {
-        x: THREE.MathUtils.clamp(x, INTERIOR_BOUNDS.xMin, INTERIOR_BOUNDS.xMax),
-        z: THREE.MathUtils.clamp(z, INTERIOR_BOUNDS.zMin, INTERIOR_BOUNDS.zMax),
-      };
-    }
-    insideHouse = false;
-  }
-
-  if (
-    z <= HOUSE_SOLID.zMax &&
-    z > HOUSE_SOLID.zMin &&
-    x >= DOORWAY_X.min &&
-    x <= DOORWAY_X.max
-  ) {
-    insideHouse = true;
-    return {
-      x: THREE.MathUtils.clamp(x, INTERIOR_BOUNDS.xMin, INTERIOR_BOUNDS.xMax),
-      z: THREE.MathUtils.clamp(z, INTERIOR_BOUNDS.zMin, INTERIOR_BOUNDS.zMax),
-    };
-  }
-
-  // The house is the only obstacle out here besides the world's own
-  // edge — pushOutOfHouse handles walking around it, clampToWorldRadius
-  // keeps her inside the generated world.
   const pushed = pushOutOfHouse(prevX, prevZ, x, z);
   return clampToWorldRadius(pushed.x, pushed.z);
 }
 
-// Used for picking a click-to-move destination: a stateless best-guess
-// clamp (no insideHouse side effects) — the actual per-frame walk there
-// still enforces the doorway properly as she physically approaches it.
+// Used for picking a click-to-move destination — a stateless best-guess
+// clamp, same idea as clampToWalkable but with no previous position to
+// slide from.
 function clampTargetPoint(x, z) {
-  if (isInHouseFootprint(x, z)) {
-    return {
-      x: THREE.MathUtils.clamp(x, INTERIOR_BOUNDS.xMin, INTERIOR_BOUNDS.xMax),
-      z: THREE.MathUtils.clamp(z, INTERIOR_BOUNDS.zMin, INTERIOR_BOUNDS.zMax),
-    };
-  }
   const outside = nearestPointOutsideHouse(x, z);
   return clampToWorldRadius(outside.x, outside.z);
 }
@@ -2538,13 +2610,13 @@ function updateMomPickup(delta, onComplete) {
   const t = Math.min(momPickupElapsed / MOM_PICKUP_DURATION, 1);
   const bend = Math.sin(t * Math.PI) * (momUsingShovel ? 0.3 : 0.55);
   mom.rotation.x = bend;
-  mom.position.y = -bend * 0.15;
+  mom.position.y = terrainHeight(mom.position.x, mom.position.z) - bend * 0.15;
   if (momUsingShovel) {
     mom.userData.arms.armR.rotation.x = Math.sin(t * Math.PI) * 0.9;
   }
   if (t >= 1) {
     mom.rotation.x = 0;
-    mom.position.y = 0;
+    mom.position.y = terrainHeight(mom.position.x, mom.position.z);
     mom.userData.arms.armR.rotation.x = 0;
     const poopId = momTargetPoop.userData.id;
     removeOrShrinkPoop(momTargetPoop);
@@ -2603,7 +2675,8 @@ function updateMom(delta) {
     momMoveDir.normalize();
     mom.position.x += momMoveDir.x * MOM_WALK_SPEED * delta;
     mom.position.z += momMoveDir.z * MOM_WALK_SPEED * delta;
-    mom.position.y = Math.abs(Math.sin(elapsed * 9)) * 0.02;
+    mom.position.y =
+      terrainHeight(mom.position.x, mom.position.z) + Math.abs(Math.sin(elapsed * 9)) * 0.02;
     const targetAngle = Math.atan2(momMoveDir.x, momMoveDir.z);
     mom.rotation.y += wrapAngle(targetAngle - mom.rotation.y) * Math.min(1, delta * 8);
 
@@ -2845,7 +2918,7 @@ function reconcileRemotePoops(list) {
       scene.add(obj);
       remotePoops.set(p.id, obj);
     }
-    obj.position.set(p.x, 0, p.z);
+    obj.position.set(p.x, terrainHeight(p.x, p.z), p.z);
     obj.userData.growth = p.growth;
     obj.scale.setScalar(1 + p.growth * POOP_GROWTH_PER_MERGE);
   }
@@ -3013,8 +3086,12 @@ function onResize() {
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
   composer.setSize(window.innerWidth, window.innerHeight);
+  // The grass's minimum on-screen blade width is measured in pixels, so it
+  // depends on how many pixels tall the viewport is.
+  updateGrassAngularSize(camera, window.innerHeight);
 }
 window.addEventListener('resize', onResize);
+updateGrassAngularSize(camera, window.innerHeight);
 
 const clock = new THREE.Clock();
 let elapsed = 0;
@@ -3029,6 +3106,8 @@ function animate() {
   // below, and (for whichever client is actually simulating Darla) the
   // fetch/cheese/leash commands further down — has had its say.
   let localIsMoving = false;
+
+  if (DEBUG_MODE) updateDebugFly(delta);
 
   if (gameStarted) {
     // Darla chasing Mom down to bite her already works unmodified in
@@ -3051,7 +3130,7 @@ function animate() {
           playerKind === 'darla'
             ? updateWalkCycle(localIsMoving, isJumping, isJumping && jumpHeld)
             : updateMirandaWalkCycle(localIsMoving);
-        player.position.y = baseY + jumpY;
+        player.position.y = baseY + jumpY + terrainHeight(player.position.x, player.position.z);
       }
     }
   }
@@ -3212,7 +3291,8 @@ function animate() {
         darlaOwnsJump && isJumping,
         darlaOwnsJump && isJumping && jumpHeld
       );
-      darla.position.y = bob + (darlaOwnsJump ? jumpHeight : 0);
+      darla.position.y =
+        bob + (darlaOwnsJump ? jumpHeight : 0) + terrainHeight(darla.position.x, darla.position.z);
       if (darlaOwnsJump) localIsMoving = localIsMoving || commandedMoving;
     }
   }
@@ -3226,10 +3306,16 @@ function animate() {
   // relative angle/distance the player has set up via orbit controls —
   // held still at its starting shot until a character is actually chosen.
   // Skipped while flying, since updateFlight already places the camera
-  // itself every frame — this would just fight it.
-  if (gameStarted && !flightActive) {
+  // itself every frame — this would just fight it. Also skipped in debug
+  // mode, which wants the camera to stay parked over DEBUG_FOCUS rather
+  // than drift toward wherever the player wanders off to.
+  if (gameStarted && !flightActive && !DEBUG_MODE) {
+    // Aim just above the player's feet, wherever those actually are. This
+    // used to be a flat 0.5 — fine on level ground, but with the hill in
+    // place that's an absolute world height, so standing on the crown the
+    // camera would have been staring at a point two metres below her.
     followOffset
-      .set(player.position.x, 0.5, player.position.z)
+      .set(player.position.x, player.position.y + 0.5, player.position.z)
       .sub(controls.target)
       .multiplyScalar(0.08);
     controls.target.add(followOffset);
@@ -3253,28 +3339,14 @@ function animate() {
   });
   firePit.userData.light.intensity = 1.1 + Math.sin(elapsed * 17) * 0.2 + Math.random() * 0.15;
 
-  yard.userData.fanBlades.rotation.y = elapsed * 6;
+  setGrassTime(elapsed);
 
-  // interior fireplace flicker
-  yard.userData.fireplaceFlames.children.forEach((flame, i) => {
-    const flicker = Math.sin(elapsed * (15 + i * 3)) * 0.15 + Math.random() * 0.1;
-    flame.scale.set(1 + flicker * 0.3, 1 + flicker, 1 + flicker * 0.3);
-  });
-  yard.userData.fireplaceLight.intensity =
-    0.85 + Math.sin(elapsed * 18) * 0.15 + Math.random() * 0.12;
-
-  grassMaterial.uniforms.uTime.value = elapsed;
-
-  // The lawn is a large-but-finite plane (its texture tiles seamlessly via
-  // RepeatWrapping) so it can just follow whoever's playing around instead
-  // of needing genuinely infinite geometry — otherwise, since the woods
-  // stream in endlessly around them, walking past the plane's fixed edge
-  // would drop them off the grass into bare background color. Recentering
-  // the mesh alone would leave its texture glued in place relative to the
-  // player instead of scrolling like real ground — updateLawnTexture keeps
-  // the pattern anchored to world coordinates regardless.
-  yard.userData.lawn.position.set(player.position.x, 0, player.position.z);
-  updateLawnTexture(yard.userData.lawn, player.position.x, player.position.z);
+  // The lawn used to be a flat plane that chased the player around, with
+  // its texture offset scrolled to compensate — necessary back when the
+  // woods streamed on forever and no finite plane could cover them. The
+  // world is bounded now and the ground has real shape (see terrainHeight),
+  // so the lawn is a fixed displaced mesh: nothing to move, nothing to
+  // scroll.
 
   starfield.position.set(player.position.x, 0, player.position.z);
   starfield.userData.material.uniforms.uTime.value = elapsed;
