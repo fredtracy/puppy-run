@@ -55,11 +55,11 @@ const DEBUG_MODE = new URLSearchParams(window.location.search).has('debug');
 // of the property is being judged on right now. Was (0, 1.5, -12.2), the
 // middle of the house, while the elevations were being matched to the
 // reference photos.
-const DEBUG_FOCUS = new THREE.Vector3(-1, 3.4, 5);
+const DEBUG_FOCUS = new THREE.Vector3(-1.9, 3.93, 4.4);
 // Where the debug camera starts relative to DEBUG_FOCUS, rather than the old
 // fixed bird's-eye offset — being able to park it at eye level in front of
 // whatever's being worked on is most of what makes debug mode useful.
-const DEBUG_EYE = new THREE.Vector3(2.5, 1.4, -8);
+const DEBUG_EYE = new THREE.Vector3(0.5, 0.05, 0.6);
 
 // Browsers block audio until a user gesture — kick it off on the first
 // keypress or tap/click, whichever comes first.

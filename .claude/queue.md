@@ -25,6 +25,10 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
 - [ ] **Front flower bed** — it runs straight for a while and *then* curves
       around the corner, with the sidewalk following it. Currently it cuts
       across the sidewalk. See the front-of-house photos.
+- [ ] **Winged eyeliner is night-only.** Miranda goes bare-eyed by day and puts
+      it on for the night. And since the day/night swap has a load pause, use
+      that pause as a transition: her face, applying the wing, as the
+      "loading" beat. Ties into the loading-screen item below.
 - [ ] **Discuss using subagents** to work queue items in parallel — which items
       actually parallelise (they mostly touch different files, but several
       share `yard.js`), and whether the visual-iteration loop survives being

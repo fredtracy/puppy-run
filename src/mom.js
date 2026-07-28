@@ -764,6 +764,11 @@ export function createMom() {
     const eye = new THREE.Group();
     eye.position.set(side * EYE_X, EYE_Y, 0.098);
     eye.rotation.y = side * -0.22;
+    // Positive canthal tilt — outer corner sits above the inner. Mirrored by
+    // `side`, so rotating each eye group about z lifts whichever end is
+    // outboard. Everything inside the group (sclera, iris, lash, flick) rides
+    // along, so the tilt only has to be expressed once.
+    eye.rotation.z = side * 0.14;
     headGroup.add(eye);
 
     // Nudged up from the mature-pass sizing. A narrower jaw makes the eyes
@@ -802,7 +807,12 @@ export function createMom() {
     // Heavy upper lash line, and it does more of the work now the eye itself
     // is smaller — this is where the drama lives in the mature style.
     const lash = mesh(new THREE.TorusGeometry(0.0345, 0.0072, 8, 20, Math.PI * 0.8), linerMat);
-    lash.rotation.z = 0.42;
+    // Centred on vertical: a torus arc sweeps counter-clockwise from +x, so
+    // half its span short of 90 degrees puts it symmetrically over the eye.
+    // It was a flat 0.42 on both eyes, which isn't mirrored — the arc ended
+    // high at the outer corner on one eye and low on the other, so the two
+    // eyes had different tilts and neither was the one intended.
+    lash.rotation.z = Math.PI / 2 - (Math.PI * 0.8) / 2;
     lash.position.set(0, 0.001, 0.014);
     eye.add(lash);
 
@@ -813,8 +823,12 @@ export function createMom() {
 
     // Thin, high and arched. A heavy brow reads as stern or comic; a fine one
     // set well above the eye is what makes the face read as composed.
+    // Sign flipped from `side * -0.2`, which dropped the outer end of both
+    // brows and fought the tilt below it. The brow lives on headGroup rather
+    // than inside the eye group, so it doesn't inherit the rotation and has
+    // to be angled itself.
     const brow = mesh(new THREE.CapsuleGeometry(0.0028, 0.04, 4, 8), hairSolidMat);
-    brow.rotation.z = Math.PI / 2 + side * -0.2;
+    brow.rotation.z = Math.PI / 2 + side * 0.2;
     brow.position.set(side * EYE_X, 0.056, 0.099);
     headGroup.add(brow);
 
