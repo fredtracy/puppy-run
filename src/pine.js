@@ -62,53 +62,120 @@ function makeNeedleTexture(rand) {
   return texture;
 }
 
-// Deeply furrowed bark broken into irregular plates, which is what southern
-// yellow pine actually has close up — vertical fissures with reddish-grey
-// plates between them, not the smooth brown wrap the shared TRUNK_MAT gives.
-function makeBarkTexture(rand) {
+// Mature southern yellow pine bark: big flat irregular plates, like crazy
+// paving, separated by a connected network of deep dark fissures.
+//
+// The previous version drew soft ellipses and then laid a few wandering
+// vertical lines over them, which came out as smeared rust rather than bark.
+// Two things were wrong with that and both matter:
+//
+//   1. Plates need *hard edges*. The fissure is a gap between two flat
+//      faces, not a dark line painted on a continuous surface. Soft-edged
+//      blobs can never read as plates however they're tinted.
+//   2. The fissure network runs both ways. Vertical-only furrows give
+//      stripes; the real thing breaks horizontally too, which is what turns
+//      stripes into plates.
+//
+// It was also far too red. The photos are grey-brown in the face with only a
+// warm cast, and the strong colour was coming from the material's `color`
+// multiplying an already-red map — the texture carries its own colour now
+// and the material tint is neutral.
+//
+// Returns a bump map alongside, built from the same lattice: the fissures
+// are what should catch a shadow, and flat-shaded bark stays looking painted
+// no matter how good the colour is.
+function makeBarkTextures(rand) {
   const W = 256;
   const H = 512;
-  const { canvas, ctx } = canvas2d(W, H);
+  const col = canvas2d(W, H);
+  const bmp = canvas2d(W, H);
 
-  ctx.fillStyle = '#6b5445';
-  ctx.fillRect(0, 0, W, H);
+  // Fissure colour underneath — plates are then laid on top, and whatever
+  // shows between them is the furrow.
+  col.ctx.fillStyle = '#2a1f18';
+  col.ctx.fillRect(0, 0, W, H);
+  bmp.ctx.fillStyle = '#000000';
+  bmp.ctx.fillRect(0, 0, W, H);
 
-  // Plates first, then the fissures cut through them.
-  for (let i = 0; i < 420; i++) {
-    const pw = 18 + rand() * 46;
-    const ph = 20 + rand() * 60;
-    const px = rand() * W;
-    const py = rand() * H;
-    const tone = 96 + Math.floor(rand() * 62);
-    ctx.fillStyle = `rgb(${tone + 22},${Math.floor(tone * 0.78)},${Math.floor(tone * 0.62)})`;
-    ctx.globalAlpha = 0.35 + rand() * 0.4;
-    ctx.beginPath();
-    ctx.ellipse(px, py, pw / 2, ph / 2, (rand() - 0.5) * 0.5, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.globalAlpha = 1;
+  // One plate, drawn as a jittered quad. Repeated at ±W so plates crossing
+  // the seam wrap cleanly and the trunk has no visible join.
+  const plate = (x, y, w, h) => {
+    const jx = () => (rand() - 0.5) * w * 0.22;
+    const jy = () => (rand() - 0.5) * h * 0.22;
+    const pts = [
+      [x + jx(), y + jy()],
+      [x + w + jx(), y + jy()],
+      [x + w + jx(), y + h + jy()],
+      [x + jx(), y + h + jy()],
+    ];
+    // Grey-brown face, warm but not red, with a fair spread plate to plate.
+    const base = 104 + rand() * 46;
+    const warm = 1 + rand() * 0.16;
+    const face = `rgb(${Math.round(base * warm)},${Math.round(base * 0.86)},${Math.round(base * 0.72)})`;
+    // Plates stand proud; the brightest are the most weathered.
+    const lift = 150 + rand() * 80;
 
-  // Vertical fissures. They wander rather than running dead straight, and
-  // they wrap the texture horizontally so the trunk has no visible seam.
-  for (let i = 0; i < 34; i++) {
-    let x = rand() * W;
-    ctx.strokeStyle = `rgba(38,26,20,${0.5 + rand() * 0.45})`;
-    ctx.lineWidth = 2 + rand() * 6;
-    ctx.beginPath();
-    ctx.moveTo(x, -10);
-    for (let y = 0; y <= H + 10; y += 26) {
-      x += (rand() - 0.5) * 13;
-      ctx.lineTo(x, y);
+    for (const dx of [-W, 0, W]) {
+      for (const [ctx2, fill] of [
+        [col.ctx, face],
+        [bmp.ctx, `rgb(${lift},${lift},${lift})`],
+      ]) {
+        ctx2.beginPath();
+        ctx2.moveTo(pts[0][0] + dx, pts[0][1]);
+        for (let i = 1; i < pts.length; i++) ctx2.lineTo(pts[i][0] + dx, pts[i][1]);
+        ctx2.closePath();
+        ctx2.fillStyle = fill;
+        ctx2.fill();
+      }
+
+      // Thin flakes across the plate face. Southern pine plates are layered
+      // like puff pastry and shed in sheets, and without this the faces read
+      // as flat painted panels.
+      col.ctx.save();
+      col.ctx.beginPath();
+      col.ctx.moveTo(pts[0][0] + dx, pts[0][1]);
+      for (let i = 1; i < pts.length; i++) col.ctx.lineTo(pts[i][0] + dx, pts[i][1]);
+      col.ctx.closePath();
+      col.ctx.clip();
+      const flakes = 2 + Math.floor(rand() * 4);
+      for (let f = 0; f < flakes; f++) {
+        const fy = y + rand() * h;
+        col.ctx.strokeStyle = `rgba(${rand() < 0.5 ? '58,42,32' : '190,170,146'},${0.12 + rand() * 0.2})`;
+        col.ctx.lineWidth = 1 + rand() * 1.6;
+        col.ctx.beginPath();
+        col.ctx.moveTo(x + dx - 2, fy);
+        col.ctx.lineTo(x + dx + w + 2, fy + (rand() - 0.5) * 5);
+        col.ctx.stroke();
+      }
+      col.ctx.restore();
     }
-    ctx.stroke();
+  };
+
+  // Jittered rows of plates. Row heights and plate widths both vary, and
+  // each row starts at its own offset, so the lattice never lines up into
+  // visible columns.
+  let y = -40;
+  while (y < H + 40) {
+    const rowH = 34 + rand() * 46;
+    let x = -40 + rand() * 40;
+    while (x < W + 40) {
+      const pw = 26 + rand() * 42;
+      plate(x, y, pw, rowH);
+      // The gap left here is the fissure — width is the furrow depth.
+      x += pw + 3 + rand() * 5;
+    }
+    y += rowH + 3 + rand() * 5;
   }
 
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  texture.anisotropy = 8;
-  return texture;
+  const make = (canvas, srgb) => {
+    const t = new THREE.CanvasTexture(canvas);
+    if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+    t.wrapS = THREE.RepeatWrapping;
+    t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 8;
+    return t;
+  };
+  return { map: make(col.canvas, true), bump: make(bmp.canvas, false) };
 }
 
 // ── geometry helpers ───────────────────────────────────────────────────
@@ -123,20 +190,35 @@ function makeBarkTexture(rand) {
 // the bottom keeps one continuous surface with one continuous UV run — the
 // bolted-on version showed a bright ring where its open end and its
 // mismatched UVs met the tube.
-function taperedTube(curve, rStart, rEnd, along, radial, power = 1) {
+// `flare` adds a separate swell confined to the very bottom of the run. It
+// exists because the two effects fight each other through one exponent: a
+// power low enough to keep the trunk near-cylindrical has no root flare, and
+// one high enough to give a flare tapers the whole trunk to a spike. The
+// trunk was doing the latter and came out as a witch's hat. Two terms, one
+// for the overall taper and one for the flare, and both can be right.
+function taperedTube(curve, rStart, rEnd, along, radial, power = 1, flare = 0) {
   const frames = curve.computeFrenetFrames(along, false);
   const positions = [];
   const normals = [];
   const uvs = [];
   const indices = [];
   const length = curve.getLength();
+  // Horizontal texture scale, fixed for the whole limb rather than taken
+  // from each ring's own radius. Using the local radius means u spans less
+  // and less as the tube tapers, which *shears* the texture — every
+  // horizontal feature in it gets dragged into a diagonal up the trunk. That
+  // went unnoticed while the bark was soft blobs and turned into obvious
+  // chevrons the moment it had plates in rows. Still per-limb, so a twig
+  // keeps a finer grain than the trunk.
+  const uScale = Math.max(1, rStart * 8);
 
   for (let i = 0; i <= along; i++) {
     const t = i / along;
     const p = curve.getPointAt(t);
     const N = frames.normals[i];
     const B = frames.binormals[i];
-    const r = rEnd + (rStart - rEnd) * (1 - t) ** power;
+    const r =
+      rEnd + (rStart - rEnd) * (1 - t) ** power + rStart * flare * (1 - t) ** 14;
     for (let j = 0; j <= radial; j++) {
       const a = (j / radial) * Math.PI * 2;
       const sin = Math.sin(a);
@@ -147,8 +229,9 @@ function taperedTube(curve, rStart, rEnd, along, radial, power = 1) {
       positions.push(p.x + r * nx, p.y + r * ny, p.z + r * nz);
       normals.push(nx, ny, nz);
       // Metre-ish mapping so bark grain stays the same physical size on a
-      // 0.34 m trunk and a 0.03 m twig.
-      uvs.push((j / radial) * Math.max(1, r * 8), t * length * 0.55);
+      // 0.34 m trunk and a 0.03 m twig — see uScale above for why it isn't
+      // taken from this ring's own radius.
+      uvs.push((j / radial) * uScale, t * length * 0.55);
     }
   }
   for (let i = 0; i < along; i++) {
@@ -194,16 +277,26 @@ const NEEDLE_VAR = 0.32;
 
 export function createSouthernPine(rand, options = {}) {
   const height = options.height ?? 20;
-  // The photos are consistent about this: no limb anywhere on the lower
-  // half. Everything that makes the silhouette happens above it.
-  const crownBase = options.crownBase ?? 0.56;
+  // Where the lowest limb attaches, as a fraction of height. The photos of
+  // the real pair have this a shade under halfway — the first branches come
+  // off well below the mass of the crown, they're just short and sparse
+  // there. It was 0.56, which read as a bare pole with a cap on top.
+  const crownBase = options.crownBase ?? 0.44;
   const trunkR = options.trunkRadius ?? 0.34;
 
   const group = new THREE.Group();
+  const bark = makeBarkTextures(rand);
   const barkMat = new THREE.MeshStandardMaterial({
-    map: makeBarkTexture(rand),
-    color: 0xa89078,
-    roughness: 0.97,
+    map: bark.map,
+    // The fissure network is what gives bark its relief, and a flat-shaded
+    // trunk reads as painted however good the colour is.
+    bumpMap: bark.bump,
+    bumpScale: 0.03,
+    // Neutral. The old 0xa89078 multiplied an already-red map and was half
+    // the reason the trunk came out looking like rust — the texture carries
+    // its own colour now.
+    color: 0xffffff,
+    roughness: 0.95,
   });
 
   // ── trunk ────────────────────────────────────────────────────────────
@@ -225,20 +318,33 @@ export function createSouthernPine(rand, options = {}) {
     );
   }
   const trunkCurve = new THREE.CatmullRomCurve3(trunkPts);
-  // 2.6 gives a pronounced swell in the first metre or so and a near-even
-  // taper above it. These sit on a visible root flare in the photos, and a
-  // straight cone reads as a post driven into the turf.
-  const woodGeos = [taperedTube(trunkCurve, trunkR * 1.55, trunkR * 0.16, trunkSegs * 3, 12, 2.6)];
+  // Near-cylindrical, with the flare kept to the bottom tenth by its own
+  // term. The previous numbers — start 1.55x, end 0.16x, power 2.6 — put a
+  // 4x reduction in the first half of the trunk, which is a witch's hat, not
+  // a pine. A real one of this size is roughly as thick at the crown base as
+  // two thirds of its butt diameter, and only spreads out in the last foot
+  // above the ground.
+  const woodGeos = [
+    taperedTube(trunkCurve, trunkR * 1.05, trunkR * 0.42, trunkSegs * 3, 12, 1.5, 0.5),
+  ];
 
   // ── limbs ────────────────────────────────────────────────────────────
   const tufts = [];
-  const whorls = options.whorls ?? 14;
+  // 14 put a ring of limbs every 20cm up a 2.8m crown, which is a
+  // bottlebrush. Real whorls sit 40-60cm apart, and the gaps between them
+  // are most of what you see sky through. 9 was a touch bare from the road,
+  // so this sits just above it.
+  const whorls = options.whorls ?? 11;
   // Spread is set against crown *height*, not overall height, and that
   // ratio is the whole silhouette. The crown runs from crownBase to the
   // top — about 8.8 m on a 20 m tree — so a 0.3 spread gave 6 m limbs and
   // a 12 m-wide crown: a parasol, markedly wider than tall. These read as
   // taller than wide in every photo, so the limbs have to come in.
-  const maxLen = height * (options.spread ?? 0.19);
+  // Raised from 0.19. The photos show crowns roughly 0.6 as wide as the tree
+  // is tall — broad, spreading limbs, not the narrow column 0.19 gave. The
+  // old value was set to avoid a parasol on a 20m tree; at 4m the same ratio
+  // reads as a bottlebrush instead.
+  const maxLen = height * (options.spread ?? 0.34);
   // Golden angle between whorls, so successive rings of branches never
   // stack into visible columns down the trunk.
   const GOLDEN = Math.PI * (3 - Math.sqrt(5));
@@ -259,7 +365,14 @@ export function createSouthernPine(rand, options = {}) {
       // Heavy per-branch variation. A smooth envelope reads as a topiary;
       // the real crowns are visibly ragged, with gaps and long outliers.
       const len = lenBase * (0.62 + rand() * 0.75);
-      if (len < 0.6) continue;
+      // Relative to the tree, not an absolute 0.6m. That fixed floor was
+      // written when these were 20m tall and maxLen was ~3.8m, so it culled
+      // only genuine runts. Once the trees came down to ~4m, maxLen dropped
+      // to under a metre and the same floor started throwing away every
+      // short limb — which is all of the lower crown, since the crown
+      // profile makes limbs shortest at its base. That's why the foliage had
+      // retreated to a cap at the very top.
+      if (len < maxLen * 0.16) continue;
 
       const dirX = Math.cos(az);
       const dirZ = Math.sin(az);
@@ -295,9 +408,18 @@ export function createSouthernPine(rand, options = {}) {
       // needles straight on the main branch gives a row of fronds down a
       // bare pole; the real mass comes from each limb splitting into a
       // handful of short shoots that each carry their own cluster.
-      const twigs = 4 + Math.floor(rand() * 4);
+      // Counts here and below are the crown's whole density budget, and they
+      // were authored when these trees were 20m tall. Crown volume falls
+      // with the cube of size, so at 5m the same numbers put ~2,800 tufts
+      // into a crown that reads as a solid ball — and the open, see-through
+      // crown is the single most identifying thing about the species.
+      //
+      // These land around 1,000. A first cut at ~500 was genuinely open but
+      // went too far the other way and read as skeletal from the road: the
+      // crown wants to be see-through, not sparse.
+      const twigs = 3 + Math.floor(rand() * 3);
       for (let k = 0; k < twigs; k++) {
-        const t0 = 0.44 + rand() * 0.46;
+        const t0 = 0.52 + rand() * 0.4;
         const base = curve.getPointAt(t0);
         const tan = curve.getTangentAt(t0);
         const twigLen = len * (0.16 + rand() * 0.22);
@@ -322,7 +444,7 @@ export function createSouthernPine(rand, options = {}) {
         const twigR = Math.max(0.012, rBase * 0.34);
         woodGeos.push(taperedTube(twigCurve, twigR, twigR * 0.4, 3, 5));
 
-        const perTwig = 5 + Math.floor(rand() * 4);
+        const perTwig = 3 + Math.floor(rand() * 3);
         for (let n = 0; n < perTwig; n++) {
           const tt = Math.min(1, 0.35 + (n / perTwig) * 0.7 + rand() * 0.1);
           tufts.push({
@@ -335,7 +457,7 @@ export function createSouthernPine(rand, options = {}) {
       }
 
       // And a knot right on the limb's own tip, where the leading growth is.
-      for (let n = 0; n < 4; n++) {
+      for (let n = 0; n < 2; n++) {
         const t = Math.min(1, 0.82 + rand() * 0.18);
         tufts.push({
           pos: curve.getPointAt(t),

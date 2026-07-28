@@ -40,9 +40,6 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       emissive around the clock, so the fixtures still look lit at noon.
 - [ ] **Back patio lights** should glow at night like the front ones now do
       (see `lampSpots` in `house.js` — the patio fixtures aren't in that list).
-- [ ] **Queue editing shouldn't prompt.** Writing `.claude/queue.md` still asks
-      even though `Write(//c/inetpub/wwwroot/puppy-run/**)` should cover it —
-      Claude Code may treat `.claude/**` as protected. Find the right rule.
 - [ ] **Loading screen** — the bundle is big enough to need one. "Puppy Town"
       in a cute font, with Darla drawing in progressively as load progresses;
       when the fill reaches her tail she's fully loaded.
@@ -53,8 +50,63 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       roof surface where the bay's hip crosses it, showing the back wall's band
       through. Needs one focused pass.
 
+- [ ] **Miranda's loading-screen portrait** — the cute image of her on the
+      loading screen still shows the old model. Redraw it to match the
+      anime/cel-shaded rebuild.
+- [ ] **Night loading screen: her face transforming.** Winged eyeliner going
+      on *and* vampire teeth coming out, played across the load pause. Extends
+      the winged-eyeliner item above — that one covers the eyeliner as the
+      day→night transition beat; this adds the fangs and makes the whole
+      transformation the night loading screen.
+
+- [ ] **Tint the lawn mesh by the vigour field.** Bald patches cull the grass
+      blades but reveal the lawn mesh underneath, which is painted green grass
+      (`createPaintedGrassTexture` in `yard.js`) regardless of how dead the
+      ground is — so a bare patch still reads as short green lawn rather than
+      dirt. Doesn't currently hurt under the pines, where the needle mat now
+      covers it, but every other bare patch in the yard is affected.
+      `LAWN_SEGMENTS` is 200 over `LAWN_SIZE` 120, so vertices are ~0.6 apart
+      — fine enough to bake `lawnVigour`/`pineDuff` into vertex colours and
+      turn on `vertexColors`, rather than needing a second texture.
+
+- [ ] **Sky stops about halfway down.** Below that it's a single flat colour
+      with some light streaming down, instead of sky. The existing sky looks
+      great in both day and night — keep it exactly as it is and continue it
+      across the whole sky, rather than replacing it.
+
+- [ ] **Comment out the dialogue options** — clunky and not being used. Keep
+      the existing speech bubbles that appear above characters' heads; clicking
+      on Darla should just run those directly, with no options menu in between.
+
+- [ ] **Concrete tiles visibly.** The texture repeat is obvious on the
+      driveway/walk/patio slabs — reads as tiling rather than as a poured
+      surface. Needs to blend so the repeat isn't findable.
+
+- [ ] **Fix placement of windows, doors etc. on the house** — positions don't
+      match the reference photos.
+
+- [ ] **Realistic wind, driven from one place.** Hair, grass, trees etc. all
+      responding to the *same* wind rather than each doing their own thing:
+      intermittent gusts, varying strength, direction wandering somewhat. The
+      grass shader already has gust/sway/flutter layers worth reusing as the
+      model — the point is to hoist it into one shared source everything
+      reads from.
+
+- [ ] **Camera clips inside the house and shrubs.** Standing anywhere near the
+      house puts the camera through a wall or into a bush, and you end up
+      looking at the inside of brick. Wants the usual treatment: cast from the
+      aim point back toward the desired camera position and pull in to the
+      first hit, so it slides along the wall instead of entering it. Turned up
+      constantly while spawning at `?at=` coords near the house (see
+      `SPAWN_AT` in `main.js`) — it's the main thing making close-quarters
+      inspection painful.
+
 ## Done
 
+- [x] Queue editing no longer prompts — the cause was Claude Code's
+      sensitive-file gate on `.claude/**`, which sits *above* the
+      `permissions.allow` list, so no rule could ever satisfy it. Fixed by
+      moving this file and the permission log to `notes/`
 - [x] Trip skill stripped to a world-look change — no flying, no Darla barking
 - [x] Right-drag rotates the camera
 - [x] Exterior lamps throw real light at night

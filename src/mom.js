@@ -457,11 +457,17 @@ export function createMom() {
   const laceMat = toonMat(COLORS.lace);
   const tightsMat = toonMat(COLORS.tights);
   const bootMat = toonMat(COLORS.boots);
-  const metalMat = new THREE.MeshStandardMaterial({
-    color: COLORS.metal,
-    roughness: 0.25,
-    metalness: 0.85,
-  });
+  // Flat toon silver, not a PBR metal. At metalness 0.85 this was effectively
+  // a mirror, and with the sky the brightest thing around her every piece of
+  // hardware — pendant, corset eyelets, studs — reflected it and rendered as
+  // a cyan smudge instead of as jewellery. The pendant was the obvious one,
+  // sitting alone against black fabric.
+  //
+  // Worth noting this was the only MeshStandardMaterial on her; a lone PBR
+  // surface in an otherwise cel-shaded character reads as a mistake even when
+  // the colour happens to land, because it takes no ink outline and doesn't
+  // band like everything around it.
+  const metalMat = toonMat(COLORS.metal);
   const lipMat = toonMat(COLORS.lips);
   const linerMat = new THREE.MeshBasicMaterial({ color: COLORS.liner });
   const scleraMat = new THREE.MeshBasicMaterial({ color: 0xfdfbff });

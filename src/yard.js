@@ -1490,14 +1490,196 @@ function createLawn() {
 // to it; real grass is a long thin ribbon, and getting this ratio right
 // matters more than any shading trick.
 const LUSH_BLADE_WIDTH = 0.024;
-const LUSH_BLADE_HALF_WIDTH = LUSH_BLADE_WIDTH / 2;
 
-// Height and segment count are parameters so the one blade model can serve
-// both the mowed lawn and anything taller: a short blade barely curves, so
-// paying for ten height segments on it would be waste — the segments only
-// earn their keep once there's a real arc to describe.
-function createLushBladeGeometry(height, segments) {
-  const geo = new THREE.PlaneGeometry(LUSH_BLADE_WIDTH, height, 1, segments);
+// The lawn used to be one blade model everywhere, which is most of why it
+// read as a sheet of felt: real turf is a *mix*, and the mix is what the
+// eye picks up on long before it resolves any single stalk. Three species,
+// each its own geometry and its own material (the vertex shader bakes
+// height and width in as literals, so they can't share one):
+//
+//   TURF    the fine mown blade above — the bulk of the lawn everywhere
+//   COARSE  a taller, wider, straighter stalk with far less taper. This is
+//           the roadside/edge grass a mower never reaches — see the left
+//           edge of the frontage photo, where it stands well clear of the
+//           mown height
+//   CLOVER  a broadleaf weed, not a grass at all: short, several times
+//           wider, and rounded off rather than pointed. Colonises the
+//           thin, stressed ground where the turf has given up
+//
+// Widths and heights are deliberately far apart. An earlier attempt at
+// variety nudged one blade model by ±15% and it was invisible at any
+// distance — if two species don't differ enough to tell apart in a
+// silhouette, they aren't two species.
+const SPECIES = {
+  TURF: {
+    height: 0.13,
+    segments: 2,
+    width: LUSH_BLADE_WIDTH,
+    // Hold width up the shaft, pinch hard only near the tip.
+    taperPow: 2.4,
+    taperAmt: 0.85,
+    curve: 0.22,
+    scaleMin: 0.72,
+    scaleRange: 0.6,
+    lean: 0.85,
+  },
+  COARSE: {
+    // Tall enough to break the mown line clearly, but well short of the
+    // 0.34 this started at — at that height a modest scattering of them
+    // swamped the turf completely and the yard read as wheat.
+    height: 0.23,
+    // A real arc to describe at this height, so the segments finally earn
+    // their keep — see the note on createBladeGeometry below.
+    segments: 3,
+    width: 0.038,
+    taperPow: 1.7,
+    taperAmt: 0.72,
+    // Stands up far straighter than mown turf; tall stalks carry their own
+    // weight rather than matting over.
+    curve: 0.14,
+    scaleMin: 0.65,
+    scaleRange: 0.85,
+    // Sparser stand, so less tangle and more upright separation.
+    lean: 0.5,
+  },
+  // Fallen pine needles, lying on the ground rather than growing out of it.
+  // Long, straight, near-parallel-sided and blunt — a southern pine needle
+  // is a wire, not a blade, and tapering it to a point would read as more
+  // grass. The tilt is what sells it: laid over near-flat and pointing every
+  // which way, so the mat reads as scattered litter with real overlap
+  // catching the light, not as brown grass.
+  NEEDLE: {
+    // Size is the only lever left on coverage, and coverage is the whole
+    // difference between "a mat of pine straw" and "some brown bits in the
+    // grass". The spawn probability is already pinned at 1.0 per candidate
+    // position at the trunk, so density can't go up — but the needles are
+    // scattered at random, which means gaps follow Poisson: at the 1.47x
+    // nominal coverage of the previous size, e^-1.47 = 23% of the ground
+    // stayed visible through the mat however the needles fell, and that
+    // showed as green painted lawn between them.
+    //
+    // These dimensions give ~2.8x nominal, so about 6% gaps — reads as a
+    // continuous mat that still breaks up naturally at the feathered edge.
+    height: 0.15,
+    segments: 1,
+    width: 0.021,
+    // Barely narrows, and only right at the end.
+    taperPow: 3.0,
+    taperAmt: 0.3,
+    curve: 0.1,
+    scaleMin: 0.7,
+    scaleRange: 0.75,
+    // Laid down flat. Not *exactly* flat — a hair off level so needles rest
+    // across each other instead of all coplanar, which is what stops the
+    // mat looking like a printed texture.
+    tiltBase: Math.PI / 2 - 0.18,
+    lean: 0.65,
+    // Lifted up *into the grass canopy*, not laid on the soil. Fallen
+    // needles land on top of an existing lawn and hang in the blades — they
+    // don't sink to the ground and they don't displace the turf. At 0.005
+    // they sat under a 0.13 sward and were simply invisible behind it,
+    // which is why the bed kept reading as thin no matter how many were
+    // added.
+    yOffset: 0.085,
+    // Spread through the upper canopy so needles rest across each other at
+    // different heights rather than all lying in one plane. This also does
+    // the work of making the bed look deep: every candidate position under
+    // the trunk already becomes a needle, so the count cannot go up, and a
+    // single-plane mat reads as a decal however dense it is.
+    yJitter: 0.045,
+  },
+  // Both dandelions stand clear of the mown height on a bare stalk — that
+  // pop of colour above the turf line is the whole point of them, and a
+  // flower head sunk down among the blades reads as a speck of litter.
+  DANDELION: {
+    height: 0.19,
+    // Enough rows to describe the head's curve; below about five it comes
+    // out as a faceted lump rather than a bloom.
+    segments: 7,
+    width: 0.055,
+    profile: headedProfile(0.13, 0.72, 0.75),
+    crossed: true,
+    curve: 0.05,
+    scaleMin: 0.8,
+    scaleRange: 0.45,
+    // Stands up straight. A dandelion stalk is stiff and the head is heavy;
+    // letting them flop at the blades' angles made them look like they'd
+    // been trodden on.
+    lean: 0.22,
+  },
+  DANDELION_CLOCK: {
+    // The seed head, gone over. Slightly taller (the stalk lengthens as it
+    // goes to seed, which is true and also keeps them visible) and rounder.
+    height: 0.21,
+    segments: 7,
+    width: 0.062,
+    // Lower fullness rounds the lens out into a ball.
+    profile: headedProfile(0.11, 0.68, 0.45),
+    crossed: true,
+    curve: 0.04,
+    scaleMin: 0.8,
+    scaleRange: 0.4,
+    lean: 0.18,
+  },
+  CLOVER: {
+    // Taller than it looks like it should be, and this matters: at 0.075 a
+    // clover leaf sat *below* the 0.13 turf around it and then flopped
+    // nearly flat on top of that, so it was almost entirely buried. It has
+    // been in the lawn since the first pass and was barely ever visible.
+    // Real clover holds its leaves up level with mown grass or just over it.
+    height: 0.115,
+    segments: 2,
+    width: 0.085,
+    // Barely tapers, then rounds off — a leaf, not a point.
+    taperPow: 3.4,
+    taperAmt: 0.42,
+    // Leans over, but no longer flops. At 1.25 the leaves lay flat enough to
+    // vanish into the turf; this keeps the low, broad, mat-like read while
+    // leaving the leaf face angled up where it can catch light and be seen.
+    curve: 0.4,
+    scaleMin: 0.75,
+    scaleRange: 0.45,
+    lean: 0.8,
+  },
+};
+
+// The other two clovers are the identical plant — same leaf, same height,
+// same flop. Only their palettes differ, so sharing the geometry profile
+// keeps all three from drifting apart if the leaf shape is ever retuned.
+SPECIES.CLOVER_PALE = { ...SPECIES.CLOVER };
+SPECIES.CLOVER_BLUE = { ...SPECIES.CLOVER };
+
+// Height, segments and the taper/curve profile are all parameters so the
+// one blade model can serve all three species: a short blade barely curves,
+// so paying for ten height segments on it would be waste — the segments
+// only earn their keep once there's a real arc to describe.
+// A dandelion isn't a blade — it's a bare stalk with a head on top — so the
+// width profile can't be the blades' monotonic taper. `fullness` shapes the
+// head: 1.0 is a pointed lens, and lower values round it out toward a ball,
+// which is the difference between a flower and a seed clock.
+function headedProfile(stalkWidth, headBase, fullness) {
+  return (t) => {
+    if (t < headBase) return stalkWidth;
+    const u = (t - headBase) / (1 - headBase);
+    return stalkWidth + (1 - stalkWidth) * Math.pow(Math.sin(u * Math.PI), fullness);
+  };
+}
+
+function createBladeGeometry(profileOpts) {
+  const { crossed } = profileOpts;
+  if (!crossed) return buildBladePlane(profileOpts);
+  // A flower head made of one plane vanishes to a line when you view it
+  // edge-on, and blades are randomly rotated, so a good fraction of them
+  // would be invisible. Two planes crossed at right angles read as a round
+  // head from any angle for twice the (very small) vertex count.
+  const a = buildBladePlane(profileOpts);
+  const b = buildBladePlane(profileOpts);
+  b.rotateY(Math.PI / 2);
+  return mergeGeometries([a, b]);
+}
+
+function buildBladePlane({ height, segments, width, taperPow, taperAmt, curve, profile }) {
+  const geo = new THREE.PlaneGeometry(width, height, 1, segments);
   geo.translate(0, height / 2, 0);
   const pos = geo.attributes.position;
   for (let i = 0; i < pos.count; i++) {
@@ -1508,19 +1690,27 @@ function createLushBladeGeometry(height, segments) {
     // InstancedMesh.computeBoundingSphere() reading that shared shape,
     // getting whole grass chunks frustum-culled into invisible/black.
     const t = Math.min(1, Math.max(0, pos.getY(i) / height));
-    // Taper to a fine point — a real blade narrows to almost nothing.
-    // Hold most of the width up the shaft and only pinch near the tip. An
-    // even taper from root to point makes a triangle; a real blade is
-    // near-parallel-sided for most of its length.
-    pos.setX(i, pos.getX(i) * (1 - Math.pow(t, 2.4) * 0.85));
+    // Taper toward the tip. A real blade narrows to almost nothing; a
+    // clover leaf barely narrows at all, which is what taperAmt controls.
+    // An even taper from root to point makes a triangle; a real blade is
+    // near-parallel-sided for most of its length. Species with a head on a
+    // stalk supply their own profile instead (see headedProfile).
+    const w = profile ? profile(t) : 1 - Math.pow(t, taperPow) * taperAmt;
+    pos.setX(i, pos.getX(i) * w);
     // A gentle resting curve; the wind adds its own bend on top.
-    pos.setZ(i, pos.getZ(i) + t * t * height * 0.22);
+    pos.setZ(i, pos.getZ(i) + t * t * height * curve);
   }
   geo.computeVertexNormals();
   return geo;
 }
 
-function createLushGrassMaterial(bladeHeight) {
+// `palette` is the species' own colouring. Each species carries its own,
+// because two species sharing a palette read as one species with a haircut —
+// and because the colour variation in the lawn now comes entirely from which
+// *plant* is growing where, these are the only thing producing it.
+function createLushGrassMaterial(species, palette) {
+  const bladeHeight = species.height;
+  const halfWidth = species.width / 2;
   return new THREE.ShaderMaterial({
     uniforms: {
       uTime: { value: 0 },
@@ -1566,7 +1756,7 @@ function createLushGrassMaterial(bladeHeight) {
         vec4 mvRoot = modelViewMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
         float rootDist = max(-mvRoot.z, 0.001);
         float instScale = length(mat3(instanceMatrix)[0]);
-        float restHalfW = ${LUSH_BLADE_HALF_WIDTH.toFixed(4)} * instScale;
+        float restHalfW = ${halfWidth.toFixed(4)} * instScale;
         float minHalfW = rootDist * uAngPerPx * uMinBladePx * 0.5;
         float widen = max(1.0, minHalfW / max(restHalfW, 1e-5));
         vec3 widened = position;
@@ -1650,9 +1840,9 @@ function createLushGrassMaterial(bladeHeight) {
         // 0.06), which is almost black before anything else touches it —
         // and since two further terms below darken the lower blade again,
         // the bottom of every blade came out effectively at zero.
-        vec3 baseColor = vec3(0.11, 0.30, 0.13);
-        vec3 tipWarm = vec3(0.52, 0.86, 0.32);
-        vec3 tipCool = vec3(0.22, 0.58, 0.24);
+        vec3 baseColor = vec3(${palette.base});
+        vec3 tipWarm = vec3(${palette.tipWarm});
+        vec3 tipCool = vec3(${palette.tipCool});
 
         // Dark green near the house, lightening toward the edge of the
         // map — radial distance from the terrain's own center (see
@@ -1663,23 +1853,64 @@ function createLushGrassMaterial(bladeHeight) {
         // world's edge).
         float distFromCenter = length(vWorldPos.xz - vec2(${TERRAIN_CENTER_X.toFixed(3)}, ${TERRAIN_CENTER_Z.toFixed(3)}));
         float shade = 1.0 - smoothstep(${TERRAIN_PAD.toFixed(3)}, ${TERRAIN_RADIUS.toFixed(3)}, distFromCenter);
+        // The base (stem, root end) always takes the full shade — it sits
+        // down in the sward and should darken with everything around it.
         baseColor = mix(baseColor, vec3(0.02, 0.09, 0.04), shade);
-        tipWarm = mix(tipWarm, vec3(0.14, 0.32, 0.11), shade);
-        tipCool = mix(tipCool, vec3(0.05, 0.16, 0.07), shade);
+        // The tips only take as much as the species allows. This term is
+        // at full strength across the whole yard (shade is 1.0 everywhere
+        // inside TERRAIN_PAD), so at shadeResponse 1.0 it overwrites the
+        // tip palette outright — which silently repainted every dandelion
+        // head green and flattened the clover back to turf colour. Grasses
+        // still want it; anything whose colour is the point of it does not.
+        tipWarm = mix(tipWarm, vec3(0.14, 0.32, 0.11), shade * ${palette.shadeResponse.toFixed(2)});
+        tipCool = mix(tipCool, vec3(0.05, 0.16, 0.07), shade * ${palette.shadeResponse.toFixed(2)});
 
+        // There is deliberately no patch-scale colour term here any more.
+        //
+        // This went through five versions — straw, then a second green, then
+        // an intermediate colour stop, then a much wider band, then a
+        // per-blade dither — and every one of them was visible as *regions*
+        // on the lawn. Confirmed by forcing the term to zero: the lines
+        // vanished completely, so it was never shadows or the lawn mesh
+        // underneath.
+        //
+        // The reason is structural rather than a matter of tuning. A colour
+        // field painted across the ground has an isoline wherever it
+        // changes, and the eye is extremely good at finding those on a flat
+        // surface of otherwise uniform texture. Softening the gradient only
+        // makes the region softer-edged; it does not stop it being a region.
+        //
+        // Colour variation now comes from the clover instead — actual plants,
+        // clumped by their own noise, each with its own silhouette. A patch
+        // of them reads as a patch of a different plant, which is what a real
+        // lawn's colour variation actually is, and scattered instances can't
+        // draw an outline the way a field can.
         vec3 tipColor = mix(tipCool, tipWarm, vRandom);
-        // Slightly biased toward the base rather than squared. vHeightT*
-        // vHeightT is only a quarter of the way to the tip colour at
-        // mid-blade, so most of the blade's visible length sat at base
-        // colour — the gradient was doing far more darkening than intended.
-        vec3 color = mix(baseColor, tipColor, pow(vHeightT, 1.3));
+        // How the blade grades from base colour to tip colour, baked per
+        // species. The grasses use a power curve slightly biased toward the
+        // base — vHeightT*vHeightT is only a quarter of the way to the tip
+        // colour at mid-blade, which left most of the visible length sitting
+        // at base colour and made the gradient do far more darkening than
+        // intended.
+        //
+        // The dandelions need something a power curve can't give: a stem
+        // that stays green right up to where the head starts, then goes
+        // fully yellow across the head. That's a smoothstep with its edges
+        // sat either side of the head base, not a ramp from zero.
+        vec3 color = mix(baseColor, tipColor, ${palette.tipRamp});
 
         // Ambient occlusion down in the sward: little light reaches the
         // bottom of dense turf, and lighting every blade evenly root to tip
         // makes a field look like a flat sheet of spikes rather than
         // something with depth. Gentle, though — at 0.30 this was stacking
         // on top of an already-dark base and crushing it to black.
-        color *= 0.66 + 0.34 * smoothstep(0.0, 0.7, vHeightT);
+        // Species that lie flat opt out via aoResponse. The gradient is
+        // keyed to height *along the blade*, which is only the same thing as
+        // height above ground for something standing up — on a needle lying
+        // flat it runs horizontally down the needle's length and shades one
+        // end of every one of them for no reason, which is what made the mat
+        // read as olive mud rather than gold straw.
+        color *= mix(1.0, 0.66 + 0.34 * smoothstep(0.0, 0.7, vHeightT), ${(palette.aoResponse ?? 1).toFixed(2)});
 
         vec3 lightDir = normalize(uLightDir);
         vec3 N = normalize(vNormalW);
@@ -1700,6 +1931,11 @@ function createLushGrassMaterial(bladeHeight) {
         color += vec3(0.45, 0.80, 0.28) * back * (1.0 - ndl) * vHeightT * 0.75 * uBackScatter;
 
         color += tipWarm * pow(vHeightT, 4.0) * 0.16 * ndl;
+        // Per-blade brightness jitter. This is the only variation left in
+        // the turf's colour, and it's per-blade rather than per-area, which
+        // is precisely why it has never caused the banding the patch term
+        // did — noise at blade scale averages into an even tone at any
+        // distance instead of resolving into shapes.
         color *= 0.85 + vRandom * 0.3;
 
         // The whole reason the lawn glowed after dark: every term above is
@@ -1730,24 +1966,18 @@ function createLushGrassMaterial(bladeHeight) {
   });
 }
 
-// Mowed-lawn height — this is now the only grass in the world, so the
-// blade model above carries everything from the yard to the treeline.
-// Was doubled to 0.4 to fix bare-looking turf, but that read as knee-high
-// field grass rather than a mowed lawn — a taller blade was the wrong fix
-// for gaps between blades. Back down near the original 0.2, with
-// GRASS_SPACING tightened below instead so short blades still mat into a
-// surface rather than standing apart as separate spikes.
-const MOWED_BLADE_HEIGHT = 0.13;
-// Three height segments rather than the ten a tall blade wants: at this
-// height there is barely an arc to describe, and the segment count is
-// pure vertex cost across ~150k blades.
-// Two, down from three, to pay for the density above. A 0.2-tall blade has
-// almost no arc to describe, so segments here buy very little — whereas
-// the reference gets away with as few as one on anything past ~15 units.
-// Blade *count* is what makes turf look thick; segments per blade aren't.
-const MOWED_BLADE_SEGMENTS = 2;
-
-export const grassMaterial = createLushGrassMaterial(MOWED_BLADE_HEIGHT);
+// Mowed-lawn height lives in SPECIES.TURF above, along with the two other
+// species' dimensions. It was doubled to 0.4 at one point to fix
+// bare-looking turf, but that read as knee-high field grass rather than a
+// mowed lawn — a taller blade was the wrong fix for gaps between blades.
+// Back down near the original 0.2, with GRASS_SPACING tightened below
+// instead so short blades still mat into a surface rather than standing
+// apart as separate spikes.
+//
+// Segment counts are likewise per-species. Two for turf: a 0.13-tall blade
+// has almost no arc to describe, so segments there buy very little, and
+// blade *count* is what makes turf look thick. The taller COARSE stalk
+// carries four, because at 0.34 there finally is an arc.
 
 // Every grass material there is. Keeping the per-frame/per-mode updates
 // behind these helpers means main.js doesn't have to know how many there
@@ -1793,16 +2023,149 @@ export function updateGrassAngularSize(camera, viewportHeight) {
   });
 }
 
-// Now that it exists — see the note on grassMaterials above.
-grassMaterials.push(grassMaterial);
+// Palettes. Turf keeps the colours the lawn was already tuned to; the others
+// are pulled deliberately away from it, because two species that share a
+// palette read as one species with a haircut.
+//
+// Since the painted patch-colour term was removed, these palettes are the
+// entire source of colour variation in the lawn. Clover's in particular is
+// doing real work now: a clump of it is the "different shade of green"
+// the yard has, so it wants to stay clearly its own colour.
+const GRASS_MATERIALS = {
+  TURF: createLushGrassMaterial(SPECIES.TURF, {
+    base: '0.11, 0.30, 0.13',
+    tipWarm: '0.52, 0.86, 0.32',
+    tipCool: '0.22, 0.58, 0.24',
+    tipRamp: 'pow(vHeightT, 1.3)',
+    // The lawn's own colouring — this is the term that was tuned against it.
+    shadeResponse: 1.0,
+  }),
+  COARSE: createLushGrassMaterial(SPECIES.COARSE, {
+    // Greyer and bluer than the lawn — roadside grass is a coarser, duller
+    // plant, and the cast is most of what separates it at a distance.
+    base: '0.13, 0.26, 0.14',
+    tipWarm: '0.55, 0.74, 0.36',
+    tipCool: '0.28, 0.49, 0.30',
+    tipRamp: 'pow(vHeightT, 1.3)',
+    // Mostly lives out past TERRAIN_PAD where shade has fallen off anyway.
+    shadeResponse: 1.0,
+  }),
+  CLOVER: createLushGrassMaterial(SPECIES.CLOVER, {
+    // Deeper and bluer, with far less spread between base and tip: a broad
+    // flat leaf doesn't have the root-to-tip gradient a blade does.
+    base: '0.06, 0.18, 0.09',
+    tipWarm: '0.26, 0.48, 0.22',
+    tipCool: '0.12, 0.32, 0.15',
+    tipRamp: 'pow(vHeightT, 1.3)',
+    // High, and this was the bug that made the patches read as pale spray
+    // paint. At 0.2 the clover skipped almost all of the radial shade the
+    // turf takes, so near the house — where that shade is at full strength —
+    // clover came out *lighter* than the grass around it, which is the
+    // opposite of what a clover patch does. Following the shade closely
+    // keeps it sitting in the same light as the lawn, so its palette being
+    // darker is what actually reads, everywhere in the yard.
+    shadeResponse: 0.85,
+  }),
+  // The blue-green one, off a walk round the real back yard. Pulled toward
+  // teal rather than just darkened — that cool cast is the whole reason it
+  // reads as a different plant and not as grass in shadow, which is the trap
+  // with any clover colour that only differs in brightness.
+  CLOVER_BLUE: createLushGrassMaterial(SPECIES.CLOVER_BLUE, {
+    // Darker than the other clovers look like they need to be, and that is
+    // what buys the low shadeResponse below. The two constraints fight:
+    // a high shade response keeps clover from turning out *lighter* than the
+    // turf near the house, but it also repaints the tips toward the turf's
+    // own dark green — and at 0.85 that erased the teal completely across
+    // the whole yard, which is why no blue was visible anywhere near the
+    // house even though the colonies were right there.
+    //
+    // Starting dark resolves it: at a quarter response this still lands at
+    // about the turf's lightness near the house while keeping roughly three
+    // times its blue, so it reads as a different plant rather than as either
+    // pale paint or grass in shadow.
+    base: '0.04, 0.15, 0.14',
+    tipWarm: '0.18, 0.42, 0.38',
+    tipCool: '0.09, 0.27, 0.25',
+    tipRamp: 'pow(vHeightT, 1.3)',
+    shadeResponse: 0.25,
+  }),
+  // The same plant in a green barely off the turf's own. Where the dark
+  // clover is a feature you notice, this one only breaks up the uniformity —
+  // it should never be identifiable as a patch, just as the lawn not being
+  // perfectly even.
+  CLOVER_PALE: createLushGrassMaterial(SPECIES.CLOVER_PALE, {
+    base: '0.10, 0.27, 0.13',
+    tipWarm: '0.44, 0.76, 0.30',
+    tipCool: '0.19, 0.52, 0.22',
+    tipRamp: 'pow(vHeightT, 1.3)',
+    // Follows the lawn's shading exactly, for the same reason as above.
+    shadeResponse: 1.0,
+  }),
+  // Pine litter: flat, with almost no base-to-tip gradient, because a fallen
+  // needle is uniform along its whole length — the root-is-darker logic that
+  // makes living blades read as a sward is exactly wrong here.
+  NEEDLE: createLushGrassMaterial(SPECIES.NEEDLE, {
+    // Golden straw, matched to the reference photo. This is the one thing in
+    // the yard that stays brown: the lawn itself went all-green because dead
+    // *grass* read as neglect, but fallen needles under a pine are litter
+    // rather than dying turf, and they're the correct colour for what they
+    // are. The first pass was a dark oxblood, which read as mud — this sits
+    // warmer and more orange.
+    base: '0.44, 0.34, 0.16',
+    tipWarm: '0.86, 0.66, 0.28',
+    tipCool: '0.68, 0.50, 0.22',
+    tipRamp: 'vHeightT * 0.35',
+    shadeResponse: 0.0,
+    // Lies flat — see the note on the AO term in the fragment shader.
+    aoResponse: 0.0,
+  }),
+  // Green stalk, then a hard jump to yellow across the head. The smoothstep
+  // edges bracket SPECIES.DANDELION's headBase of 0.72 — if those two ever
+  // drift apart you get either a yellow stem or a green flower.
+  DANDELION: createLushGrassMaterial(SPECIES.DANDELION, {
+    base: '0.16, 0.34, 0.14',
+    // Two yellows rather than one, so vRandom gives a patch of them some
+    // spread instead of stamping out identical dots.
+    tipWarm: '1.00, 0.86, 0.16',
+    tipCool: '0.94, 0.68, 0.10',
+    tipRamp: 'smoothstep(0.66, 0.80, vHeightT)',
+    // The head keeps its yellow everywhere. The stem still darkens, since
+    // baseColor takes the full shade regardless.
+    shadeResponse: 0.0,
+  }),
+  DANDELION_CLOCK: createLushGrassMaterial(SPECIES.DANDELION_CLOCK, {
+    base: '0.15, 0.31, 0.14',
+    // Not pure white: a seed head is translucent grey-fawn, and at full
+    // white they read as blown highlights or as snow.
+    tipWarm: '0.92, 0.91, 0.86',
+    tipCool: '0.74, 0.73, 0.68',
+    tipRamp: 'smoothstep(0.62, 0.76, vHeightT)',
+    shadeResponse: 0.0,
+  }),
+};
 
-function buildGrassMesh(positions, rand) {
-  const geometry = createLushBladeGeometry(MOWED_BLADE_HEIGHT, MOWED_BLADE_SEGMENTS);
-  const field = new THREE.InstancedMesh(geometry, grassMaterial, positions.length);
-  const instanceRandom = new Float32Array(positions.length);
+// Now that they exist — see the note on grassMaterials above. Every species
+// has to be in here or it silently keeps a stale clock, the wrong fog, and
+// daylight colour after dark.
+grassMaterials.push(...Object.values(GRASS_MATERIALS));
+
+// One InstancedMesh per species per chunk. The geometry is rebuilt per
+// chunk rather than shared module-wide because instanceRandom
+// are set *on the geometry* — a shared one would have each chunk clobber
+// the last chunk's attributes.
+//
+// `entries` are [x, z, vigour] triples; vigour rides along from
+// createChunkGrass so the shader can colour the blade by the same field
+// that decided whether to plant it at all.
+function buildGrassMesh(speciesKey, entries, rand) {
+  const profile = SPECIES[speciesKey];
+  const geometry = createBladeGeometry(profile);
+  const field = new THREE.InstancedMesh(geometry, GRASS_MATERIALS[speciesKey], entries.length);
+  const instanceRandom = new Float32Array(entries.length);
   const dummy = new THREE.Object3D();
-  positions.forEach(([x, z], i) => {
-    dummy.position.set(x, terrainHeight(x, z), z);
+  entries.forEach(([x, z, vigour], i) => {
+    const lift = (profile.yOffset ?? 0) + (profile.yJitter ? rand() * profile.yJitter : 0);
+    dummy.position.set(x, terrainHeight(x, z) + lift, z);
     // Facing, plus a real lean. Blades standing dead upright read as a bed
     // of nails — turf mats down, with stalks lying over each other at all
     // angles, and that tangle is most of what makes it look like a mass
@@ -1814,10 +2177,14 @@ function buildGrassMesh(positions, rand) {
     // scale, which is what both the normal transform and the instScale
     // measurement there assume.
     dummy.rotation.order = 'YXZ';
+    // Lean spread is per-species: mown turf mats over itself, tall coarse
+    // stalks stand much straighter, and clover lies almost flat. tiltBase
+    // shifts the *centre* of that spread rather than its width, which is how
+    // fallen needles get laid over near-horizontal while still varying.
     dummy.rotation.set(
-      (rand() - 0.5) * 0.85,
+      (profile.tiltBase ?? 0) + (rand() - 0.5) * profile.lean,
       rand() * Math.PI * 2,
-      (rand() - 0.5) * 0.85
+      (rand() - 0.5) * profile.lean
     );
     // Some unevenness so it doesn't read as bristles on a brush, but a
     // tighter spread than a wild field would have — this is a mowed lawn,
@@ -1828,7 +2195,11 @@ function buildGrassMesh(positions, rand) {
     // Enough spread that it isn't a uniform crop, but not so much that it
     // reads as scraggly — a mown lawn's blades are broadly the same
     // length, unlike the hay-meadow spread this had before.
-    const scale = 0.72 + rand() * 0.6;
+    // Poor ground grows shorter grass. Scaling by vigour is a cheap way to
+    // make a thinning patch also *sag*, rather than just having fewer
+    // full-height blades standing in it — a bald spot in a real lawn has a
+    // fringe of stunted growth around it, not a clean edge.
+    const scale = (profile.scaleMin + rand() * profile.scaleRange) * (0.72 + vigour * 0.28);
     dummy.scale.set(scale, scale, scale);
     dummy.updateMatrix();
     field.setMatrixAt(i, dummy.matrix);
@@ -1857,6 +2228,318 @@ function buildGrassMesh(positions, rand) {
 // *because* it's thousands of fine stalks, not because each one is broad.
 // Going sparse-and-thin at the same time (as an earlier pass did) gives
 // stubble, which is the one thing it must not look like.
+// --- Lawn variation fields -------------------------------------------
+//
+// Two scalar fields over world XZ that everything about the lawn's variety
+// keys off. Keeping it to two shared fields (rather than an independent
+// random roll per effect) is the whole point: in a real lawn the thin patch
+// *is* the yellow patch *is* the weedy patch, and when those three are
+// decided independently the result reads as noise rather than as ground.
+
+// Integer-lattice hash. Bit ops force int32 in JS, so this stays stable and
+// repeatable — the world is generated from a seeded rand() and has to come
+// out the same every load.
+function latticeHash(ix, iz) {
+  let h = Math.imul(ix, 374761393) + Math.imul(iz, 668265263);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
+}
+
+// Plain 2D value noise, smootherstep-interpolated. Cheap, and it only runs
+// at world-build time — nothing here is per-frame.
+function valueNoise(x, z) {
+  const ix = Math.floor(x);
+  const iz = Math.floor(z);
+  const ux = smootherstep(x - ix);
+  const uz = smootherstep(z - iz);
+  const a = latticeHash(ix, iz);
+  const b = latticeHash(ix + 1, iz);
+  const c = latticeHash(ix, iz + 1);
+  const d = latticeHash(ix + 1, iz + 1);
+  return (
+    a * (1 - ux) * (1 - uz) + b * ux * (1 - uz) + c * (1 - ux) * uz + d * ux * uz
+  );
+}
+
+// Clover colonies, placed on a jittered grid rather than by thresholding
+// noise. This is the only way to actually guarantee they stay apart: noise
+// peaks cluster wherever they like, so two colonies routinely landed beside
+// each other and merged into one broad sweep — which is exactly what reads
+// as painted rather than as patches.
+//
+// One candidate colony per CLOVER_CELL square, positioned at a hashed offset
+// *inside* its own cell and kept only if the cell's own hash passes
+// CLOVER_DENSITY. Because every colony is confined to its own cell and the
+// offset is clamped to the middle half of it, two centres can never be
+// closer than half a cell — a hard floor of 5m at these numbers, where noise
+// gave no floor at all.
+//
+// Only the 3x3 neighbourhood needs checking, since nothing outside it can
+// reach: max radius is well under one cell.
+const CLOVER_CELL = 10;
+const CLOVER_DENSITY = 0.55;
+
+function cloverClump(x, z, radius, seed) {
+  const cx = Math.floor(x / CLOVER_CELL);
+  const cz = Math.floor(z / CLOVER_CELL);
+  let best = 0;
+  for (let i = -1; i <= 1; i++) {
+    for (let j = -1; j <= 1; j++) {
+      const gx = cx + i;
+      const gz = cz + j;
+      const host = latticeHash(gx + seed, gz - seed);
+      if (host > CLOVER_DENSITY) continue;
+      // Offset within the cell, clamped to its middle half — that clamp is
+      // what preserves the spacing floor.
+      const ox = latticeHash(gx * 7 + seed, gz * 13 - seed);
+      const oz = latticeHash(gx * 31 - seed, gz * 17 + seed);
+      const px = (gx + 0.25 + ox * 0.5) * CLOVER_CELL;
+      const pz = (gz + 0.25 + oz * 0.5) * CLOVER_CELL;
+
+      // Size varies off its own hash rather than reusing `host`, which is
+      // already spoken for deciding whether the cell hosts anything at all —
+      // sharing it would tie a colony's size to its existence and put all
+      // the small ones in the same cells every time.
+      const sizeH = latticeHash(gx * 53 + seed, gz * 97 + seed);
+      const r = radius * (0.78 + sizeH * 0.44);
+
+      const dx = x - px;
+      const dz = z - pz;
+      // Cheap reject before the trigonometry below. Nothing past the largest
+      // the lobed radius can reach can possibly be inside, and this runs for
+      // every candidate blade position in the world — roughly nine times per
+      // position — so it has to bail early for the ~90% of ground that isn't
+      // near a colony at all.
+      const reach = r * 1.35;
+      if (dx * dx + dz * dz > reach * reach) continue;
+
+      // Irregular outline. Three harmonics of the angle around the centre,
+      // each with its own phase from the cell's hashes, so every colony is a
+      // different lopsided blob rather than the same disc: one low-frequency
+      // term to make it egg-shaped, and two higher ones for smaller bulges
+      // and dents. Kept modest — it should read as a natural clump, not as
+      // a starfish.
+      const ang = Math.atan2(dz, dx);
+      const lobes =
+        Math.sin(ang * 2.0 + ox * 6.2831) * 0.13 +
+        Math.sin(ang * 3.0 - oz * 6.2831) * 0.09 +
+        Math.sin(ang * 5.0 + sizeH * 6.2831) * 0.06;
+      const rLobed = r * (1 + lobes);
+
+      // Fine noise on top frays the edge at leaf-clump scale. The lobes give
+      // the colony its shape; this stops that shape having a smooth drawn
+      // line around it.
+      const wobble = 0.82 + valueNoise(x / 1.1 + seed, z / 1.1 - seed) * 0.42;
+      const d = Math.sqrt(dx * dx + dz * dz) * wobble;
+      // Linear falloff from the centre, so density ramps down to nothing at
+      // the rim and the patch has no edge to see.
+      if (d < rLobed) best = Math.max(best, 1 - d / rLobed);
+    }
+  }
+  return best;
+}
+
+// --- Per-chunk field cache -------------------------------------------
+//
+// Every field above varies over metres, while candidate blade positions sit
+// 3cm apart — so evaluating them per position recomputes a value almost
+// identical to its neighbour's, several million times over. Measured, that
+// was ~36 seconds of world generation.
+//
+// Instead each field is sampled once onto a coarse lattice per chunk and
+// read back with bilinear interpolation. At 0.4m the lattice still resolves
+// the finest octave any of these fields contains (~1.1m), so the result is
+// visually identical, for roughly two orders of magnitude less work: ~2.2k
+// samples per field per chunk instead of 360k.
+//
+// The values do differ from exact evaluation by a hair, so the lawn's layout
+// shifts very slightly. Still fully deterministic — same every load.
+const FIELD_STEP = 0.4;
+
+function sampleChunkField(fn, originX, originZ) {
+  const n = Math.ceil(CHUNK_SIZE / FIELD_STEP) + 2;
+  const grid = new Float32Array(n * n);
+  for (let i = 0; i < n; i++) {
+    const x = originX + i * FIELD_STEP;
+    for (let j = 0; j < n; j++) {
+      grid[i * n + j] = fn(x, originZ + j * FIELD_STEP);
+    }
+  }
+  return { grid, n };
+}
+
+function readChunkField(field, originX, originZ, x, z) {
+  const n = field.n;
+  const max = n - 1.0001;
+  let fx = (x - originX) / FIELD_STEP;
+  let fz = (z - originZ) / FIELD_STEP;
+  // Positions are jittered and can land a hair outside the chunk; clamping
+  // into the lattice is cheaper than sizing it for the overhang.
+  if (fx < 0) fx = 0; else if (fx > max) fx = max;
+  if (fz < 0) fz = 0; else if (fz > max) fz = max;
+  const i = fx | 0;
+  const j = fz | 0;
+  const tx = fx - i;
+  const tz = fz - j;
+  const g = field.grid;
+  const base = i * n + j;
+  const a = g[base];
+  const b = g[base + n];
+  const c = g[base + 1];
+  const d = g[base + n + 1];
+  return (
+    a * (1 - tx) * (1 - tz) + b * tx * (1 - tz) + c * (1 - tx) * tz + d * tx * tz
+  );
+}
+
+function smoothBand(edge0, edge1, x) {
+  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+// Where the two front pines stand (see createYard). Nothing grows well in
+// pine duff — the frontage photo shows bare reddish needle litter running
+// out several metres from each trunk, and it's the most recognisable bald
+// spot on the whole property.
+const PINE_DUFF = [
+  [-3.4, -32],
+  [9.6, -32],
+];
+
+// How thick the pine litter is at a point, 0 (none) to 1 (bare needle mat
+// at the trunk). Pulled out of lawnVigour so the needles themselves can be
+// scattered against the same field that kills the grass — the litter and
+// the bald spot have to be the same shape or you get needles lying on
+// healthy turf and bare dirt with nothing on it.
+function pineDuff(x, z) {
+  let duff = 0;
+  for (const [px, pz] of PINE_DUFF) {
+    const d = Math.hypot(x - px, z - pz);
+    // The edge wobbles rather than ending on a clean circle — needle fall
+    // drifts, and a perfect disc of litter around a trunk looks stamped.
+    const wobble = 0.78 + valueNoise(x / 1.7 + 210.4, z / 1.7 - 33.8) * 0.5;
+    duff = Math.max(duff, Math.pow(Math.max(0, 1 - d / (3.4 * wobble)), 1.4));
+  }
+  return duff;
+}
+
+// How healthy the ground is, 0 (bare dirt) to 1 (thick and green).
+//
+// `duff` is passed in rather than computed here because the caller already
+// needs it for the needle scatter, and it is not cheap — it walks every pine
+// and samples noise per trunk. Computing it in both places doubled that cost
+// on every candidate position in the world.
+function lawnVigour(x, z, duff = pineDuff(x, z)) {
+  // Two octaves. The broad one puts whole regions of the yard into shade or
+  // sun; the fine one breaks those up so the edges aren't smooth blobs.
+  // Three octaves, weighted away from the broadest. An earlier version put
+  // 70% of the weight on the 13-unit octave, and at that scale the result
+  // isn't texture — it's big amoeba outlines drawn across the lawn, which
+  // the eye reads as *shapes* sitting on the grass rather than as the grass
+  // itself. No amount of softening the colour hides an unnatural outline;
+  // the outline has to stop existing. Most of the variation now sits at
+  // 1-3 units, about the scale of real patchiness in turf.
+  const broad = valueNoise(x / 13, z / 13);
+  const mid = valueNoise(x / 3.4 + 31.7, z / 3.4 - 17.3);
+  const fine = valueNoise(x / 1.3 - 12.6, z / 1.3 + 51.2);
+  // Contrast, then bias. Both halves matter and each fixes a failure this
+  // went through:
+  //
+  // Averaging two octaves piles the result up hard around 0.5 (they're
+  // independent, so they average toward the middle) and the field then
+  // never reaches its low end at all — at gain 1.0 only 0.6% of the yard
+  // thinned out and 2% went dry, which is invisible. The gain stretches
+  // the distribution back out so the dips are real dips.
+  //
+  // The bias then puts the *centre* up around 0.65, because a lawn's
+  // baseline is healthy and damage is the exception. Without it the yard
+  // came out straw everywhere and read as a hay field.
+  //
+  // At these numbers roughly 9% of blades get culled into bald patches and
+  // ~22% of the yard shows visible straw. The gain is the knob for "rougher
+  // lawn" and it moves both together, which is correct — a lawn that browns
+  // more also thins more. It has been 2.0 (tidier, ~5%/15%) and 1.0 (which
+  // was invisible); 2.5 is where the patches actually read as features of
+  // the yard rather than as noise in it.
+  // Averaging three independent octaves piles the result up around 0.5
+  // harder than two did, so the contrast gain has to come up to compensate
+  // or the field never reaches its ends at all.
+  let noise = broad * 0.26 + mid * 0.44 + fine * 0.30;
+  noise = Math.min(1, Math.max(0, (noise - 0.5) * 3.2 + 0.5));
+  let v = 0.28 + noise * 0.72;
+
+  // A pine shades the grass under it, so it grows a little shorter — but
+  // only a little. This was 0.85, from when the litter was meant to sit on
+  // bare ground; the bed lies on top of an ordinary lawn now, so knocking
+  // the vigour out from under it would just reintroduce the bald patch the
+  // needles are supposed to be resting on.
+  v -= 0.25 * duff;
+
+  // The road shoulder bakes: reflected heat off the asphalt, and it's the
+  // strip that gets least water. Only the near side — past the road is
+  // somebody else's lawn.
+  const fromRoad = Math.abs(z - ROAD_Z);
+  v -= 0.3 * (1 - smoothBand(2.5, 7.0, fromRoad));
+
+  // Foot traffic wears a thin arc off the driveway apron toward the front
+  // door. Grass never really recovers on a path people actually walk.
+  const walkD = Math.abs(Math.hypot(x - DRIVE_X, z + 20) - 9.5);
+  v -= 0.35 * (1 - smoothBand(0.0, 1.6, walkD));
+
+  // The parts of the yard that get looked after. Dead grass reads as
+  // neglect, and neglect belongs at the edges of a property rather than in
+  // the middle of where people actually live:
+  //
+  //   - the ground close to the house, which is what gets watered, walked
+  //     past and noticed
+  //   - the circle around the fire pit, which is where everyone sits. A
+  //     ring of dead straw around the one social spot in the yard looks
+  //     wrong even when the rest of the lawn is struggling
+  //
+  // Additive lifts rather than a clamp, so the noise still reads underneath
+  // them — tended ground varies too, it just doesn't die. Both use wide
+  // falloffs so the tended area has no edge of its own to see.
+  // The house lift was first tried at 0.34 out to radius 26, which reaches
+  // most of the yard and knocked the dead ground from 24% to 1.3% — the
+  // whole effect vanished. Kept deliberately local instead: it protects the
+  // ground you see from the windows and leaves the far end of the property
+  // free to go over.
+  const fromHouse = Math.hypot(x - TERRAIN_CENTER_X, z - TERRAIN_CENTER_Z);
+  v += 0.22 * (1 - smoothBand(4, 14, fromHouse));
+  const fromPit = Math.hypot(x - FIRE_PIT.x, z - FIRE_PIT.z);
+  v += 0.32 * (1 - smoothBand(1.5, 9, fromPit));
+
+  return Math.min(1, Math.max(0, v));
+}
+
+// How unmown the ground is, 0 (kept lawn) to 1 (nobody has ever cut this).
+// Separate from vigour on purpose: the roadside strip is both scruffy *and*
+// dry, but the far corners of the clearing are scruffy and perfectly green,
+// and one field can't say both.
+function lawnWildness(x, z) {
+  // The mower covers the yard proper and gives up further out.
+  const fromHouse = Math.hypot(x - TERRAIN_CENTER_X, z - TERRAIN_CENTER_Z);
+  let w = smoothBand(GRASS_FULL_RADIUS * 0.62, GRASS_FADE_RADIUS * 0.85, fromHouse);
+
+  // The mown yard proper. Without this the tall species crept well inside
+  // the clearing and the lawn read as a meadow — a cut lawn should show
+  // almost no tall stalks at all, and "almost" is doing real work here:
+  // a few stragglers are what stop it looking like carpet.
+  if (inOpenArea(x, z)) w *= 0.16;
+
+  // The strip along the road, which in the photos is visibly taller than
+  // anything else on the lot — it's the one place a mower can't reach past.
+  // Applied after the mown damp above so it still wins: the shoulder is
+  // inside inOpenArea's z range but is emphatically not mown.
+  const fromRoad = Math.abs(z - ROAD_Z);
+  w = Math.max(w, 0.85 * (1 - smoothBand(2.2, 5.5, fromRoad)));
+
+  // Broken up so the transition isn't a clean ring around the house.
+  w *= 0.75 + valueNoise(x / 5.5 - 61.2, z / 5.5 + 44.8) * 0.5;
+
+  return Math.min(1, Math.max(0, w));
+}
+
 const GRASS_SPACING = 0.03;
 // Full density out to FULL_RADIUS, then thinning linearly to nothing by
 // FADE_RADIUS. FULL_RADIUS is set to clear the whole yard clearing (whose
@@ -1891,9 +2574,36 @@ function createChunkGrass(cx, cz, rand) {
   const nearestZ = Math.max(originZ, Math.min(0, originZ + CHUNK_SIZE));
   if (Math.hypot(nearestX, nearestZ) > GRASS_FADE_RADIUS) return null;
 
+  // Sampled once for the whole chunk — see the note on sampleChunkField.
+  // Deliberately after the fade early-out above, so chunks that produce no
+  // grass at all don't pay for it.
+  const fDuff = sampleChunkField(pineDuff, originX, originZ);
+  const fVigour = sampleChunkField((x, z) => lawnVigour(x, z), originX, originZ);
+  const fWild = sampleChunkField(lawnWildness, originX, originZ);
+  const fClover = sampleChunkField((x, z) => cloverClump(x, z, 2.55, 88), originX, originZ);
+  const fPale = sampleChunkField((x, z) => cloverClump(x, z, 2.85, 214), originX, originZ);
+  const fBlue = sampleChunkField((x, z) => cloverClump(x, z, 1.0, 401), originX, originZ);
+  const fCoarse = sampleChunkField(
+    (x, z) => valueNoise(x / 4.2 + 7.4, z / 4.2 - 55.6), originX, originZ
+  );
+  const fDandy = sampleChunkField(
+    (x, z) => valueNoise(x / 3.1 + 140.2, z / 3.1 - 96.4), originX, originZ
+  );
+
+  const field = (f, x, z) => readChunkField(f, originX, originZ, x, z);
+
   const exclude = (x, z) => inHouse(x, z) || inFirePit(x, z) || inRoad(x, z);
   const jitter = GRASS_SPACING * 0.9;
-  const positions = [];
+  const entries = {
+    TURF: [],
+    COARSE: [],
+    CLOVER: [],
+    CLOVER_PALE: [],
+    CLOVER_BLUE: [],
+    DANDELION: [],
+    DANDELION_CLOCK: [],
+    NEEDLE: [],
+  };
 
   for (let lx = 0; lx < CHUNK_SIZE; lx += GRASS_SPACING) {
     for (let lz = 0; lz < CHUNK_SIZE; lz += GRASS_SPACING) {
@@ -1901,20 +2611,167 @@ function createChunkGrass(cx, cz, rand) {
       const z = originZ + lz + (rand() - 0.5) * jitter;
       if (exclude(x, z)) continue;
 
-      const dist = Math.hypot(x, z);
-      if (dist > GRASS_FADE_RADIUS) continue;
-      if (dist > GRASS_FULL_RADIUS) {
-        const keep =
-          1 - (dist - GRASS_FULL_RADIUS) / (GRASS_FADE_RADIUS - GRASS_FULL_RADIUS);
-        if (rand() > keep) continue;
+      // Pine litter goes down before anything else, and ahead of both the
+      // distance fade and the bald-patch cull.
+      //
+      // Being ahead of the fade matters more than it looks: the fade exists
+      // to feather the grass out into the woods, and the pines stand about
+      // 32 units from the origin, where it was quietly deleting 40% of the
+      // mat. The litter is a fixed feature of the ground under a specific
+      // tree, not part of the grass field, so distance from the house has
+      // no business thinning it.
+      //
+      // Being ahead of the cull matters because the litter is what's lying
+      // *on* the bare ground, not something growing out of it — culling it
+      // would leave the ground barest exactly where the mat is thickest.
+      //
+      // Probability tracks the duff field directly, so the mat is densest
+      // at the trunk and feathers out into the grass rather than ending on
+      // an edge. At 1.0 the trunk gets ~1100 needles per square metre,
+      // which with a 12mm-wide needle is well past full coverage once they
+      // overlap. It needs to be: anything less and the painted grass on the
+      // lawn mesh shows through between them and the whole mat reads green.
+      //
+      // Ordering below is performance-critical, not cosmetic. Everything
+      // cheap and rejecting runs first; the noise fields run only for
+      // positions that have already survived. Getting this backwards — the
+      // fields above the distance fade — put lawnVigour on all 360k
+      // positions of every chunk including the outer woods, where nearly
+      // all of them are discarded a few lines later, and took world
+      // generation from a couple of seconds to ~39.
+      const onProperty = inOpenArea(x, z) && z > ROAD_Z + ROAD_HALF_WIDTH;
+      if (!onProperty) {
+        // The distance fade exists to feather grass out into the trees and
+        // keys off distance from the world origin, which sits in the back
+        // yard. That meant the front lawn was being thinned to 60% purely
+        // for being far from that point. The mown property is exempt; only
+        // the woods and across the street fade.
+        const dist = Math.hypot(x, z);
+        if (dist > GRASS_FADE_RADIUS) continue;
+        if (dist > GRASS_FULL_RADIUS) {
+          const keep =
+            1 - (dist - GRASS_FULL_RADIUS) / (GRASS_FADE_RADIUS - GRASS_FULL_RADIUS);
+          if (rand() > keep) continue;
+        }
       }
 
-      positions.push([x, z]);
+      const duff = field(fDuff, x, z);
+      const vigour = field(fVigour, x, z);
+
+      if (duff > 0.04 && rand() < duff) {
+        entries.NEEDLE.push([x, z, vigour]);
+        // A second needle at the same spot, deeper into the colony. One per
+        // candidate position was a hard ceiling on how thick the bed could
+        // get — the spawn chance was already pinned at 1.0 under the trunk,
+        // so there was no headroom left anywhere else. Nothing stops two
+        // instances sharing a position, and with the vertical jitter they
+        // land at different heights in the canopy, so the pair reads as
+        // depth rather than as one needle drawn twice.
+        if (rand() < duff - 0.3) entries.NEEDLE.push([x, z, vigour]);
+        // Deliberately no `continue`. Litter lies *on* the ground and grass
+        // grows up through it, so a needle and a blade can share a position.
+        // Consuming the position meant the bed was needles *instead of*
+        // grass rather than needles *as well as* grass — which is exactly
+        // why it read as a bald spot with litter on it.
+      }
+
+      // Grass grows here exactly as it does anywhere else on the lawn. The
+      // litter is not a substitute for turf and never thins it — needles
+      // fall *onto* an existing lawn and get caught in the canopy, which is
+      // what NEEDLE's yOffset is for. Earlier versions removed the grass to
+      // make room for the bed and got a bald patch with debris on it.
+
+      // The bald-patch cull that used to sit here is gone. It thinned the
+      // turf wherever vigour was low, which was the right idea while the
+      // lawn was meant to look neglected — but the yard reads as tended now,
+      // and its only remaining effect was holes in an otherwise full lawn.
+      // Vigour still varies blade height (see buildGrassMesh), which gives
+      // the same unevenness without opening gaps.
+
+      const wild = field(fWild, x, z);
+
+      // Clover is the lawn's colour variation — the painted patch tint that
+      // used to do that job was removed for drawing visible regions (see the
+      // note in the fragment shader).
+      //
+      // All three colonies come from cloverClump, which places them on a
+      // jittered grid instead of thresholding noise. Measured, the noise
+      // version had clover on 65% of the yard between the three of them
+      // (dark 23%, pale 38%, blue 5%) — hence how much of it there seemed to
+      // be. These radii put each at about a fifth of that, and the grid
+      // guarantees a 5m floor between colony centres, which noise could not:
+      // its peaks cluster freely, so two patches regularly landed touching
+      // and merged into one broad sweep.
+      //
+      // The 0.55 strength is the other half of why a patch has no visible
+      // edge. Combined with cloverClump's linear falloff, density runs from
+      // 55% clover at a colony's centre down to nothing at its rim, so turf
+      // and clover interleave the whole way out. An early version used a
+      // multiplier steep enough to saturate immediately past the threshold,
+      // which made every patch ~100% clover inside and 0% outside — a hard
+      // boundary by construction, whatever shape it was. Leaving grass
+      // visible through the middle also matters: it reads as clover *in* a
+      // lawn, where total takeover reads as a different material laid on top.
+      //
+      // Separate seeds so the three don't stack on the same ground, and
+      // deliberately independent of vigour — real clover does favour poor
+      // ground, but that would tie the colonies back to the field that kept
+      // generating region shapes.
+      const cloverChance = field(fClover, x, z) * 0.55;
+      const paleChance = field(fPale, x, z) * 0.55;
+      const blueChance = field(fBlue, x, z) * 0.55;
+
+      const coarsePatch = field(fCoarse, x, z);
+      const coarseChance = wild * Math.max(0, coarsePatch - 0.42) * 1.5;
+
+      // Dandelions. Their own patch field on a tighter scale than the
+      // clover's, and thresholded hard: dandelions come up in loose
+      // colonies of a handful, not evenly salted across a lawn. The rate
+      // has to stay tiny — at GRASS_SPACING there are ~1100 candidate
+      // positions per square metre, so even a 0.2% chance is a couple of
+      // heads per square metre, which is already a neglected lawn.
+      const dandyPatch = field(fDandy, x, z);
+      const dandyChance = Math.max(0, dandyPatch - 0.66) * 0.030 * (1.4 - vigour);
+
+      // One roll against cumulative bands, so the chances compete for the
+      // same position rather than each getting an independent shot — two
+      // colonies overlapping would otherwise both plant here and the denser
+      // one would silently win by whichever test ran last.
+      const roll = rand();
+      let species = 'TURF';
+      let edge = dandyChance;
+      if (roll < edge) {
+        // A minority have gone to seed. Mixing the two states in the same
+        // colony is what real dandelions do, and the white clocks are the
+        // more interesting shape, so they're worth more than a token few.
+        species = rand() < 0.38 ? 'DANDELION_CLOCK' : 'DANDELION';
+      // Blue is tested before the dark clover, and the order is load-bearing:
+      // earlier branches win every overlap, and where the two colonies cross
+      // the dark one's chance can be four times the blue one's. Testing dark
+      // first meant blue simply never appeared on that ground — which near
+      // the house is most of the ground clover grows on at all. Rarest and
+      // most deliberate species get priority.
+      } else if (roll < (edge += blueChance)) species = 'CLOVER_BLUE';
+      else if (roll < (edge += cloverChance)) species = 'CLOVER';
+      else if (roll < (edge += paleChance)) species = 'CLOVER_PALE';
+      else if (roll < edge + coarseChance) species = 'COARSE';
+
+      entries[species].push([x, z, vigour]);
     }
   }
 
-  if (positions.length === 0) return null;
-  return buildGrassMesh(positions, rand);
+  // One mesh per species that actually got any blades. Returned as a group
+  // so the chunk is still a single thing for generateWorld to add and for
+  // the streaming code to dispose of, while each species still frustum-culls
+  // on its own bounds.
+  const meshes = Object.keys(entries)
+    .filter((key) => entries[key].length > 0)
+    .map((key) => buildGrassMesh(key, entries[key], rand));
+
+  if (meshes.length === 0) return null;
+  const group = new THREE.Group();
+  meshes.forEach((m) => group.add(m));
+  return group;
 }
 
 export function createYard() {
@@ -1986,22 +2843,28 @@ export function createYard() {
   // These two are the only createSouthernPine in the world (see pine.js).
   // Everything else is the cheap cone tree, which is fine out among the
   // forest but was never going to pass for these at ten metres.
+  // Shorter than the real ones. At 6/6.6 they were accurate to the photos
+  // but you had to tilt the camera up off the ground to see the crowns,
+  // which fights how the game is actually played — the view sits low and
+  // behind the character. These went to 4.1/4.5 first, which overshot and
+  // made them stubby; back up a quarter from there. Still clearly the
+  // tallest thing on the property, without demanding you look up at them.
   const pineRand = mulberry32(20260727);
   const leftTree = createSouthernPine(pineRand, {
-    height: 6,
-    spread: 0.2,
+    height: 5.1,
+    spread: 0.36,
     trunkRadius: 0.33,
   });
   leftTree.position.set(-3.4, terrainHeight(-3.4, -32), -32);
   group.add(leftTree);
 
   const rightTree = createSouthernPine(pineRand, {
-    height: 6.6,
-    spread: 0.175,
+    height: 5.6,
+    spread: 0.31,
     trunkRadius: 0.36,
     // The taller of the two carries its crown a little higher, which is
     // what separates them in the photos.
-    crownBase: 0.6,
+    crownBase: 0.5,
   });
   rightTree.position.set(9.6, terrainHeight(9.6, -32), -32);
   group.add(rightTree);

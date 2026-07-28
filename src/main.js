@@ -48,6 +48,46 @@ import * as net from './net.js';
 // GRASS_ENABLED, which checks the same query param) purely for faster
 // reloads while iterating — normal loads still get grass as usual.
 const DEBUG_MODE = new URLSearchParams(window.location.search).has('debug');
+
+// `?at=x,z` — start the game already standing at a world position, instead
+// of at the fire pit. Optionally `&as=miranda` to pick the character, which
+// also skips the character-select screen.
+//
+// Deliberately independent of DEBUG_MODE, and that's the entire point of it
+// being a separate flag: ?debug turns the grass *off* (see GRASS_ENABLED in
+// yard.js) so it's useless for the one thing this gets used for most, which
+// is walking out to some corner of the lawn to look at the ground. Every
+// edit triggers an HMR reload and drops you back at the fire pit, so
+// checking anything at the road meant a 15-second walk after every single
+// change.
+//
+//   ?at=-3.4,-32          the left road pine and its needle bed
+//   ?at=9.6,-32           the right road pine
+//   ?at=-1,5&as=miranda   the fire pit, as Miranda
+const SPAWN_AT = (() => {
+  const raw = new URLSearchParams(window.location.search).get('at');
+  if (!raw) return null;
+  const [x, z] = raw.split(',').map(Number);
+  return Number.isFinite(x) && Number.isFinite(z) ? { x, z } : null;
+})();
+const SPAWN_AS = new URLSearchParams(window.location.search).get('as');
+
+// `?cam=radius,phi,theta` — the camera's orbit around the player, in metres
+// and degrees. Pairs with ?at= to make a view exactly repeatable, which
+// ?at= alone is not: it puts the character in the right place but leaves the
+// camera wherever it happened to be, so the same URL can land you looking at
+// the subject, at the sky, or at the inside of a wall.
+//
+// phi is measured from straight up (so 90 is horizontal, smaller looks down
+// from above) and theta is the compass angle around the player. Both come
+// straight from THREE.Spherical, so window.camView() below can hand back
+// numbers that round-trip exactly.
+const SPAWN_CAM = (() => {
+  const raw = new URLSearchParams(window.location.search).get('cam');
+  if (!raw) return null;
+  const [radius, phi, theta] = raw.split(',').map(Number);
+  return [radius, phi, theta].every(Number.isFinite) ? { radius, phi, theta } : null;
+})();
 // Currently the middle of the driveway — x on the garage centreline, z
 // halfway between where the house's own slab ends (world -28.2) and the
 // road's near edge (world -38.3, see ROAD_Z in yard.js). Orbiting this
@@ -67,10 +107,16 @@ const DEBUG_EYE = new THREE.Vector3(0.5, 0.05, 0.6);
 // Silent in debug mode. Debug is for staring at geometry and reloading every
 // few seconds, and the music restarting from the top on every reload gets
 // old fast. Same reasoning as skipping grass there.
+// Music is off for now — the same restarting-from-the-top annoyance debug
+// mode already avoids, but it bites just as hard during any long visual
+// iteration pass. SFX still initialise; only the soundtrack is held back.
+// Flip this back to false to restore it.
+const MUSIC_MUTED = true;
+
 function beginAudioOnFirstInput() {
   if (DEBUG_MODE) return;
   initAudio();
-  startMusic();
+  if (!MUSIC_MUTED) startMusic();
 }
 if (!DEBUG_MODE) {
   window.addEventListener('keydown', beginAudioOnFirstInput, { once: true });
@@ -508,7 +554,49 @@ function startGame(kind) {
   document.body.classList.toggle('multiplayer-mode', isMultiplayer);
   document.getElementById('mp-menu').classList.add('hidden');
   document.getElementById('character-select').classList.add('hidden');
+
+  // Drop the player straight onto ?at= if it was given. Done here rather
+  // than at construction so it applies to whichever character was actually
+  // chosen, and after gameStarted so nothing resets it back.
+  if (SPAWN_AT) {
+    player.position.set(SPAWN_AT.x, terrainHeight(SPAWN_AT.x, SPAWN_AT.z), SPAWN_AT.z);
+  }
+
+  if (SPAWN_CAM) {
+    // Target first: OrbitControls derives its own spherical state from
+    // wherever camera.position and target actually are, so setting the
+    // target after the position would leave the angles pointing at the old
+    // one until something else moved the camera.
+    controls.target.set(player.position.x, 0.5, player.position.z);
+    const offset = new THREE.Vector3().setFromSpherical(
+      new THREE.Spherical(
+        SPAWN_CAM.radius,
+        THREE.MathUtils.degToRad(SPAWN_CAM.phi),
+        THREE.MathUtils.degToRad(SPAWN_CAM.theta)
+      )
+    );
+    camera.position.copy(controls.target).add(offset);
+    controls.update();
+  }
 }
+
+// Hand back the URL that reproduces whatever is on screen right now. Position
+// the view by hand, run this in the console, and the link is exact — which is
+// the half that made ?at= awkward on its own.
+globalThis.camView = () => {
+  const sph = new THREE.Spherical().setFromVector3(
+    camera.position.clone().sub(controls.target)
+  );
+  const n = (v, d = 2) => Number(v.toFixed(d));
+  const url =
+    `${location.origin}${location.pathname}?at=${n(player?.position.x ?? 0)},` +
+    `${n(player?.position.z ?? 0)}&cam=${n(sph.radius)},` +
+    `${n(THREE.MathUtils.radToDeg(sph.phi), 1)},` +
+    `${n(THREE.MathUtils.radToDeg(sph.theta), 1)}` +
+    (playerKind === 'miranda' ? '&as=miranda' : '');
+  console.log(url);
+  return url;
+};
 
 document.getElementById('pick-darla').addEventListener('click', () => {
   startGame('darla');
@@ -521,6 +609,8 @@ document.getElementById('pick-miranda').addEventListener('click', () => {
 
 // Debug mode skips both menus entirely — see DEBUG_MODE above.
 if (DEBUG_MODE) startGame('darla');
+// So does ?at=, since its whole purpose is getting to a spot in one load.
+else if (SPAWN_AT) startGame(SPAWN_AS === 'miranda' ? 'miranda' : 'darla');
 
 // --- Multiplayer lobby (mode-select screen, before character-select) ----
 const mpMenuEl = document.getElementById('mp-menu');
