@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { createSouthernPine } from './pine.js';
 import {
   createHouse,
@@ -489,44 +490,199 @@ export function createTreeChunk(cx, cz) {
   return group;
 }
 
+// Tumbled split-face wall block. The real ones aren't a flat colour: each
+// block is mottled across its own face, with exposed aggregate speckle and
+// faint horizontal striation from the mould, and the tone wanders within a
+// single block as much as it does between blocks. Tinting a plain material
+// per block only ever gets the second half of that.
+function makeStoneTexture() {
+  const S = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = S;
+  canvas.height = S;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = '#cec4ae';
+  ctx.fillRect(0, 0, S, S);
+
+  // Broad tonal drift first — big soft patches, so the face reads as cast
+  // stone rather than painted board.
+  for (let i = 0; i < 26; i++) {
+    const x = Math.random() * S;
+    const y = Math.random() * S;
+    const r = S * (0.1 + Math.random() * 0.28);
+    const tone = 128 + Math.floor(Math.random() * 70);
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+    grad.addColorStop(0, `rgba(${tone},${Math.floor(tone * 0.94)},${Math.floor(tone * 0.83)},0.5)`);
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+
+  // Faint horizontal striation from the mould face.
+  for (let i = 0; i < 40; i++) {
+    const y = Math.random() * S;
+    ctx.strokeStyle = `rgba(${90 + Math.random() * 60},${84 + Math.random() * 55},${72 + Math.random() * 48},${0.05 + Math.random() * 0.09})`;
+    ctx.lineWidth = 1 + Math.random() * 4;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.bezierCurveTo(S * 0.3, y + (Math.random() - 0.5) * 12, S * 0.7, y + (Math.random() - 0.5) * 12, S, y);
+    ctx.stroke();
+  }
+
+  // Exposed aggregate — the fine light and dark grit that makes it read as
+  // concrete close up.
+  for (let i = 0; i < 2600; i++) {
+    // Weighted light: dark grit at full strength turned the whole face
+    // muddy once the material tint multiplied through it.
+    const g = Math.random();
+    const v = g < 0.38 ? 95 + Math.random() * 45 : 200 + Math.random() * 50;
+    ctx.fillStyle = `rgba(${v},${Math.floor(v * 0.96)},${Math.floor(v * 0.88)},${0.1 + Math.random() * 0.22})`;
+    const s = 0.6 + Math.random() * 1.9;
+    ctx.fillRect(Math.random() * S, Math.random() * S, s, s);
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.anisotropy = 8;
+  return texture;
+}
+
+// Deterministic per-position hash, so every copy of a shared corner gets the
+// same offset. Jittering vertices independently would tear the box open at
+// its seams — BoxGeometry duplicates corner vertices once per face.
+function cornerHash(x, y, z, seed) {
+  const n = Math.sin(x * 127.1 + y * 311.7 + z * 74.7 + seed * 53.3) * 43758.5453;
+  return n - Math.floor(n);
+}
+
+// A block knocked out of true: corners and mid-edge points pushed around so
+// no two are the same shape and none has a clean machined arris. These are
+// cast, tumbled to break the edges, then stacked by hand.
+function jitteredBlock(w, h, d, seed) {
+  const geo = new THREE.BoxGeometry(w, h, d, 2, 2, 2);
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    pos.setX(i, x + (cornerHash(x, y, z, seed) - 0.5) * w * 0.09);
+    pos.setY(i, y + (cornerHash(x, y, z, seed + 7) - 0.5) * h * 0.2);
+    pos.setZ(i, z + (cornerHash(x, y, z, seed + 13) - 0.5) * d * 0.22);
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// Soft round puff, dense in the middle and falling away to nothing at the
+// edge. Drawn once and shared by every smoke sprite.
+function makeSmokeTexture() {
+  const S = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = S;
+  canvas.height = S;
+  const ctx = canvas.getContext('2d');
+  const grad = ctx.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+  grad.addColorStop(0, 'rgba(210,205,198,0.85)');
+  grad.addColorStop(0.45, 'rgba(188,183,176,0.4)');
+  grad.addColorStop(1, 'rgba(170,166,160,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, S, S);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+const SMOKE_COUNT = 16;
+const SMOKE_RISE = 2.6;
+
 function createFirePit() {
   const group = new THREE.Group();
 
-  // A built pit, not a campfire ring: three courses of stacked wall block
-  // in a circle, laid in running bond (each course offset half a block so
-  // the vertical joints don't line up, which is both how they actually go
+  // A built pit, not a campfire ring: three courses of stacked wall block in
+  // a circle, laid in running bond (each course offset half a block so the
+  // vertical joints don't line up, which is both how they actually go
   // together and what stops it reading as a stack of rings).
   const ringRadius = 0.55;
   const blocksPerCourse = 13;
   const courses = 3;
   const courseHeight = 0.115;
   const blockDepth = 0.13;
-  // Chord width of one block, less a hair so neighbours don't interpenetrate
-  // at the corners once they're rotated to face outward.
-  const blockWidth = 2 * ringRadius * Math.sin(Math.PI / blocksPerCourse) * 0.94;
-  const blockGeo = new THREE.BoxGeometry(blockWidth, courseHeight, blockDepth);
+  // Chord width measured at the *outer* face, not the centreline. A block
+  // sitting tangentially spans a longer chord the further out you measure,
+  // so sizing it to the centre radius leaves every joint open by about 4 cm
+  // on the face you actually look at — which is what made the ring read as
+  // spaced-out rather than stacked. The 1.04 is deliberate overlap to cover
+  // the shape jitter; blocks interpenetrate slightly at the inner face,
+  // where the steel insert hides it.
+  const blockWidth =
+    2 * (ringRadius + blockDepth / 2) * Math.sin(Math.PI / blocksPerCourse) * 1.04;
+  // Seven pre-jittered block shapes, picked from at random. One shape reused
+  // 39 times reads as a machined ring no matter how it's tinted, but 39
+  // unique buffers is wasteful for a static prop — seven is enough that the
+  // repeat never registers.
+  const blockGeos = [];
+  for (let s = 0; s < 7; s++) {
+    blockGeos.push(jitteredBlock(blockWidth, courseHeight, blockDepth, s + 1));
+  }
 
-  // A small shared palette rather than a fresh material per block: these
-  // are tumbled concrete pavers and want mottling, but 39 individual
-  // materials would be 39 draw calls for one fire pit.
-  const blockMats = [0x9c8f7a, 0x8b7f6c, 0xa89a83, 0x7d7264].map(
-    (hex) => new THREE.MeshStandardMaterial({ color: hex, roughness: 0.95 })
+  // Tumbled split-face block, which is what the real pit is built from: warm
+  // and varied rather than uniformly grey. The photo runs tan through
+  // rust-brown to a cool grey, block to block, so the palette spans that.
+  //
+  // The tint is only half of it though — each block is also mottled across
+  // its own face, so they share one stone texture and the colour just shifts
+  // it. bumpMap off the same canvas picks out the aggregate so the surface
+  // catches light unevenly instead of reading as flat card.
+  const stoneTexture = makeStoneTexture();
+  // Lighter than they look right, because the tint multiplies *through* the
+  // texture rather than replacing it — the map already averages well below
+  // white, so a mid-tone here lands close to black on the finished block.
+  const blockMats = [
+    0xe4d8c0, 0xcdc6b6, 0xc0a487, 0xd6b18f, 0xefe6d4, 0xb3a795,
+  ].map(
+    (hex) =>
+      new THREE.MeshStandardMaterial({
+        map: stoneTexture,
+        bumpMap: stoneTexture,
+        bumpScale: 0.45,
+        color: hex,
+        roughness: 0.97,
+      })
   );
 
   for (let c = 0; c < courses; c++) {
-    // Half-block twist per course, plus a touch of per-course rotation so
-    // the whole thing isn't perfectly regular.
+    // Half-block twist per course, plus a touch of per-course rotation so the
+    // whole thing isn't perfectly regular.
     const offset = (c % 2 === 0 ? 0 : Math.PI / blocksPerCourse) + c * 0.03;
     for (let i = 0; i < blocksPerCourse; i++) {
       const angle = (i / blocksPerCourse) * Math.PI * 2 + offset;
       const blockMat = blockMats[Math.floor(Math.random() * blockMats.length)];
-      const block = mesh(blockGeo, blockMat);
+      const block = mesh(
+        blockGeos[Math.floor(Math.random() * blockGeos.length)],
+        blockMat
+      );
       block.position.set(
         Math.cos(angle) * ringRadius,
         courseHeight / 2 + c * courseHeight,
         Math.sin(angle) * ringRadius
       );
-      block.rotation.y = -angle;
+      // pi/2 - angle, not -angle. The block's width runs along its local x,
+      // and -angle points that straight out from the centre — so every block
+      // stuck out radially like a petal with gaps between them, and the
+      // 0.13 depth was doing the job of closing the ring. This turns them
+      // side-on: width around the circumference, depth through the wall.
+      block.rotation.y = Math.PI / 2 - angle;
+      // Tumbled block is never laid dead true. A little jitter in seating and
+      // depth is the difference between stacked stone and a machined ring —
+      // these are cast, tumbled to knock the arrises off, then stacked by
+      // hand on an uneven base.
+      block.rotation.z = (Math.random() - 0.5) * 0.05;
+      block.rotation.x = (Math.random() - 0.5) * 0.04;
+      block.scale.set(1, 0.94 + Math.random() * 0.12, 0.92 + Math.random() * 0.16);
       group.add(block);
     }
   }
@@ -543,6 +699,7 @@ function createFirePit() {
     new THREE.CylinderGeometry(ringRadius - 0.1, ringRadius - 0.12, insertHeight, 28, 1, true),
     steelMat
   );
+  insert.material.side = THREE.DoubleSide;
   insert.position.y = insertHeight / 2 + 0.02;
   group.add(insert);
 
@@ -551,48 +708,356 @@ function createFirePit() {
   rim.position.y = courses * courseHeight + 0.01;
   group.add(rim);
 
-  const ashMat = new THREE.MeshStandardMaterial({ color: 0x3a3530, roughness: 1 });
-  const ash = mesh(new THREE.CircleGeometry(0.38, 20), ashMat);
-  ash.rotation.x = -Math.PI / 2;
-  ash.position.y = 0.01;
-  group.add(ash);
+  // Ring of air slots just under the rim. This is a smokeless pit — the
+  // double wall draws air up through these and reburns the smoke — and the
+  // band of dark notches is the detail that identifies it as one.
+  const slotMat = new THREE.MeshStandardMaterial({ color: 0x0b0a09, roughness: 0.9 });
+  const slotGeo = new THREE.BoxGeometry(0.035, 0.022, 0.03);
+  for (let i = 0; i < 22; i++) {
+    const angle = (i / 22) * Math.PI * 2;
+    const slot = mesh(slotGeo, slotMat);
+    slot.position.set(
+      Math.cos(angle) * (ringRadius - 0.1),
+      courses * courseHeight - 0.045,
+      Math.sin(angle) * (ringRadius - 0.1)
+    );
+    slot.rotation.y = -angle;
+    group.add(slot);
+  }
 
-  const logMat = new THREE.MeshStandardMaterial({ color: 0x5b4330, roughness: 0.9 });
-  const logGeo = new THREE.CylinderGeometry(0.045, 0.05, 0.5, 8);
-  [0, 1, 2].forEach((i) => {
-    const log = mesh(logGeo, logMat);
-    log.rotation.z = Math.PI / 2.6;
-    log.rotation.y = (i / 3) * Math.PI * 2 + 0.3;
-    log.position.set(0, 0.1, 0);
-    group.add(log);
-  });
+  // A dark floor well down inside, rather than a pale ash disc sitting near
+  // the rim. The real one reads as an empty black drum from any angle you
+  // actually see it from.
+  const floorMat = new THREE.MeshStandardMaterial({ color: 0x231f1c, roughness: 1 });
+  const floor = mesh(new THREE.CircleGeometry(ringRadius - 0.11, 24), floorMat);
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.y = 0.03;
+  group.add(floor);
 
+  // ── firewood ──────────────────────────────────────────────────────────
+  // Split logs, laid as a real fire is: two on the bottom running one way, a
+  // couple across them, and two more leaned into a shallow teepee. The old
+  // version put three logs at the same point and only changed their rotation,
+  // so they all radiated from a single spot in mid-air.
+  const logMat = new THREE.MeshStandardMaterial({ color: 0x5b4330, roughness: 0.94 });
+  const barkMat = new THREE.MeshStandardMaterial({ color: 0x3d2c1e, roughness: 1 });
+  const logs = new THREE.Group();
+  const addLog = (len, r, x, y, z, rotY, rotZ, mat = logMat) => {
+    const log = mesh(new THREE.CylinderGeometry(r, r * 0.92, len, 9), mat);
+    log.rotation.z = Math.PI / 2 + rotZ;
+    log.rotation.y = rotY;
+    log.position.set(x, y, z);
+    logs.add(log);
+  };
+  addLog(0.52, 0.05, 0, 0.085, -0.07, 0.15, 0, barkMat);
+  addLog(0.48, 0.046, 0, 0.085, 0.08, 0.02, 0);
+  addLog(0.5, 0.048, -0.03, 0.175, 0, Math.PI / 2 + 0.12, 0, barkMat);
+  addLog(0.44, 0.043, 0.05, 0.175, 0, Math.PI / 2 - 0.25, 0);
+  // The two leaners, tipped up out of the stack.
+  addLog(0.46, 0.04, -0.09, 0.23, -0.05, 0.9, -0.5);
+  addLog(0.42, 0.038, 0.1, 0.23, 0.06, -0.7, 0.55, barkMat);
+  group.add(logs);
+
+  // ── fire, embers and smoke ────────────────────────────────────────────
+  // All of this is night-only. main.js switches it with the day/night toggle
+  // — a fire burning at noon was the single most obviously wrong thing about
+  // the old pit.
+  // A scatter of small tongues rather than three big concentric cones. The
+  // old version was one solid opaque cone standing well above the rim, and
+  // at 85% opacity it read as a traffic cone rather than a fire — real
+  // flames are lots of small, thin, overlapping shapes, and the see-through
+  // is most of what sells it.
   const flames = new THREE.Group();
-  [0xff8c1a, 0xffb347, 0xffd166].forEach((color, i) => {
+  for (let i = 0; i < 8; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const d = Math.random() * 0.15;
+    const h = 0.14 + Math.random() * 0.2;
     const flameMat = new THREE.MeshBasicMaterial({
-      color,
+      color: [0xff5a12, 0xff8c1a, 0xffb347, 0xffd166][i % 4],
       transparent: true,
-      opacity: 0.85,
+      opacity: 0.42 + Math.random() * 0.2,
       toneMapped: false,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
     });
     const flame = new THREE.Mesh(
-      new THREE.ConeGeometry(0.09 - i * 0.02, 0.28 - i * 0.06, 8),
+      new THREE.ConeGeometry(0.032 + Math.random() * 0.026, h, 7),
       flameMat
     );
-    flame.position.y = 0.15 + i * 0.05;
+    flame.position.set(Math.cos(a) * d, 0.04 + h / 2, Math.sin(a) * d);
+    flame.userData.phase = Math.random() * Math.PI * 2;
     flames.add(flame);
-  });
-  flames.position.y = 0.1;
+  }
+  flames.position.y = 0.08;
   group.add(flames);
 
-  const fireLight = new THREE.PointLight(0xffa64d, 1.2, 3, 2);
-  fireLight.position.set(0, 0.3, 0);
+  // Coals glowing down in the log stack. Unlit these would just be gravel, so
+  // they're switched with everything else.
+  const embers = new THREE.Group();
+  for (let i = 0; i < 9; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const d = Math.random() * 0.2;
+    const ember = new THREE.Mesh(
+      new THREE.SphereGeometry(0.018 + Math.random() * 0.016, 6, 5),
+      new THREE.MeshBasicMaterial({ color: 0xff5a12, toneMapped: false })
+    );
+    ember.position.set(Math.cos(a) * d, 0.05 + Math.random() * 0.03, Math.sin(a) * d);
+    embers.add(ember);
+  }
+  group.add(embers);
+
+  // Smoke as billboarded sprites rather than geometry — a puff has no form
+  // worth modelling, and Sprite turns to face the camera for free, so it
+  // reads from every angle including from directly above.
+  const smokeTexture = makeSmokeTexture();
+  const smoke = new THREE.Group();
+  for (let i = 0; i < SMOKE_COUNT; i++) {
+    const puff = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: smokeTexture,
+        transparent: true,
+        depthWrite: false,
+        opacity: 0,
+      })
+    );
+    // Staggered so they don't all rise and vanish in lockstep.
+    puff.userData.life = i / SMOKE_COUNT;
+    puff.userData.drift = (Math.random() - 0.5) * 0.5;
+    puff.userData.spin = (Math.random() - 0.5) * 0.4;
+    smoke.add(puff);
+  }
+  group.add(smoke);
+
+  // Reaches further than it did (3 -> 7) now that night is actually dark, and
+  // casts real shadows. A shadow-casting point light renders six faces, so
+  // the map is kept small and the range tight — at 512 that's cheap enough
+  // for the one light in the scene that genuinely wants it, and it's what
+  // throws the pit's own stones and anyone standing at it across the grass.
+  const fireLight = new THREE.PointLight(0xffa64d, 1.2, 7, 2);
+  fireLight.position.set(0, 0.34, 0);
+  fireLight.castShadow = true;
+  fireLight.shadow.mapSize.set(512, 512);
+  fireLight.shadow.camera.near = 0.12;
+  fireLight.shadow.camera.far = 7;
+  // Curved blades and stacked stone self-shadow badly at this map size
+  // without a bias — it shows up as dark banding crawling over the blocks.
+  fireLight.shadow.bias = -0.004;
   group.add(fireLight);
 
   group.userData.flames = flames;
+  group.userData.embers = embers;
+  group.userData.smoke = smoke;
   group.userData.light = fireLight;
+  group.userData.logs = logs;
 
   return group;
+}
+
+// ── dragonflies ─────────────────────────────────────────────────────────
+// Night-only, green and blue. At this scale a dragonfly is only a few
+// centimetres of geometry, so what actually reads across a dark yard is the
+// glow rather than the body — each one carries an additive halo sprite
+// several times its own size, and the body is unlit basic colour with tone
+// mapping off so it stays saturated instead of being rolled off toward white
+// by the filmic curve.
+const DRAGONFLY_COUNT = 22;
+
+function makeGlowTexture() {
+  const S = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = S;
+  canvas.height = S;
+  const ctx = canvas.getContext('2d');
+  const grad = ctx.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+  grad.addColorStop(0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.25, 'rgba(255,255,255,0.42)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, S, S);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function createDragonflies() {
+  const group = new THREE.Group();
+  const glowTexture = makeGlowTexture();
+
+  // Bodies point along +z so lookAt aims them nose-first down their path.
+  const bodyGeo = new THREE.CapsuleGeometry(0.009, 0.1, 4, 7);
+  bodyGeo.rotateX(Math.PI / 2);
+  const headGeo = new THREE.SphereGeometry(0.016, 7, 6);
+  headGeo.translate(0, 0, 0.066);
+  const bodyMerged = mergeGeometries([bodyGeo, headGeo]);
+
+  // One flat cross of wings. Individual beats are far too fast to resolve at
+  // this size — a translucent blur that shivers reads better than four wings
+  // flapping, and costs a quarter as much.
+  const wingGeo = new THREE.PlaneGeometry(0.17, 0.055);
+  wingGeo.rotateX(-Math.PI / 2);
+
+  for (let i = 0; i < DRAGONFLY_COUNT; i++) {
+    const green = i % 2 === 0;
+    const color = green
+      ? [0x35ffa8, 0x66ffc4, 0x1fe38c][i % 3]
+      : [0x39b6ff, 0x6ad9ff, 0x2b8cff][i % 3];
+
+    const fly = new THREE.Group();
+
+    const body = new THREE.Mesh(
+      bodyMerged,
+      new THREE.MeshBasicMaterial({ color, toneMapped: false })
+    );
+    fly.add(body);
+
+    const wings = new THREE.Mesh(
+      wingGeo,
+      new THREE.MeshBasicMaterial({
+        color: 0xdff4ff,
+        transparent: true,
+        opacity: 0.3,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        toneMapped: false,
+      })
+    );
+    wings.position.z = 0.012;
+    fly.add(wings);
+    fly.userData.wings = wings;
+
+    const glow = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: glowTexture,
+        color,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        opacity: 0.42,
+        toneMapped: false,
+      })
+    );
+    // Big enough to carry across a dark yard, small enough that one passing
+    // near the camera still reads as an insect rather than a floating orb.
+    glow.scale.setScalar(0.26);
+    fly.add(glow);
+
+    // Each one owns a patch of the backyard clearing and wanders inside it,
+    // rather than all of them orbiting one point.
+    fly.userData.home = new THREE.Vector3(
+      -9 + Math.random() * 18,
+      0,
+      -1 + Math.random() * 14
+    );
+    fly.userData.span = new THREE.Vector3(
+      0.9 + Math.random() * 2.6,
+      0.28 + Math.random() * 0.5,
+      0.9 + Math.random() * 2.6
+    );
+    fly.userData.height = 0.5 + Math.random() * 1.5;
+    fly.userData.speed = 0.35 + Math.random() * 0.5;
+    fly.userData.phase = Math.random() * Math.PI * 2;
+    fly.userData.beat = 26 + Math.random() * 14;
+
+    group.add(fly);
+  }
+
+  return group;
+}
+
+// Position on a wandering path, nose pointed the way it's going. The
+// incommensurate frequencies are the point — round numbers give a visible
+// repeating loop, and once you notice one dragonfly doing laps you notice
+// all of them.
+const flyAhead = new THREE.Vector3();
+export function updateDragonflies(group, elapsed) {
+  if (!group.visible) return;
+  group.children.forEach((fly) => {
+    const d = fly.userData;
+    const t = elapsed * d.speed + d.phase;
+    const at = (k) =>
+      new THREE.Vector3(
+        d.home.x + Math.sin(t * 1.0 + k) * d.span.x + Math.sin(t * 2.31 + k) * 0.35,
+        d.height + Math.sin(t * 1.73 + k + 1) * d.span.y,
+        d.home.z + Math.cos(t * 0.83 + k) * d.span.z + Math.cos(t * 1.97 + k) * 0.35
+      );
+
+    const here = at(0);
+    fly.position.set(here.x, terrainHeight(here.x, here.z) + here.y, here.z);
+    // Aim at where it will be a moment from now, so it banks into turns.
+    const soon = at(0.08);
+    flyAhead.set(soon.x, terrainHeight(soon.x, soon.z) + soon.y, soon.z);
+    fly.lookAt(flyAhead);
+
+    // Wing blur: a fast shiver in span rather than a flap.
+    const beat = Math.sin(elapsed * d.beat + d.phase);
+    d.wings.scale.set(1, 1, 0.55 + Math.abs(beat) * 0.6);
+    d.wings.material.opacity = 0.18 + Math.abs(beat) * 0.2;
+  });
+}
+
+// Lights the fire, or puts it out. Called from applyDayNight.
+export function setFirePitLit(pit, lit) {
+  pit.userData.flames.visible = lit;
+  pit.userData.embers.visible = lit;
+  pit.userData.smoke.visible = lit;
+  pit.userData.light.visible = lit;
+  // The grass applies the fire by hand, so hiding the light isn't enough —
+  // it has to be told the fire is out or the lawn keeps its warm pool.
+  if (!lit) setGrassFireLight(null, 0);
+}
+
+// Feeds the grass shader the fire's world position and current brightness.
+const fireWorldPos = new THREE.Vector3();
+function setGrassFireLight(pit, intensity) {
+  if (pit) pit.userData.light.getWorldPosition(fireWorldPos);
+  grassMaterials.forEach((m) => {
+    if (pit) m.uniforms.uFirePos.value.copy(fireWorldPos);
+    m.uniforms.uFireIntensity.value = intensity;
+  });
+}
+
+// Flicker and smoke. Only worth running while the fire is actually lit.
+export function updateFirePit(pit, elapsed, delta) {
+  if (!pit.userData.flames.visible) return;
+
+  // Each tongue flickers on its own phase — in lockstep the whole fire
+  // pulses like a heartbeat instead of dancing.
+  pit.userData.flames.children.forEach((flame, i) => {
+    const p = flame.userData.phase;
+    const flicker = Math.sin(elapsed * (13 + i * 2.3) + p) * 0.18 + Math.random() * 0.12;
+    flame.scale.set(1 + flicker * 0.35, 1 + flicker * 1.3, 1 + flicker * 0.35);
+  });
+  const fireIntensity = 1.1 + Math.sin(elapsed * 17) * 0.2 + Math.random() * 0.15;
+  pit.userData.light.intensity = fireIntensity;
+  // Same flicker drives the grass, so the pool of light on the lawn breathes
+  // with the fire instead of sitting there as a static disc.
+  setGrassFireLight(pit, fireIntensity * 0.42);
+
+  pit.userData.embers.children.forEach((ember, i) => {
+    ember.material.opacity = 1;
+    const pulse = 0.6 + 0.4 * Math.sin(elapsed * (3 + i) + i);
+    ember.scale.setScalar(0.8 + pulse * 0.4);
+  });
+
+  pit.userData.smoke.children.forEach((puff) => {
+    const d = puff.userData;
+    d.life += delta * 0.22;
+    if (d.life > 1) d.life -= 1;
+    const t = d.life;
+    // Wanders as it climbs. Without enough lateral drift the puffs stack
+    // straight up and the column reads as a searchlight beam rather than
+    // smoke.
+    puff.position.set(
+      d.drift * t * t * 3.2,
+      0.32 + t * SMOKE_RISE,
+      d.spin * t * t * 3.2
+    );
+    // Grows as it rises and thins out — a puff that keeps its size looks
+    // like a balloon on a string.
+    puff.scale.setScalar(0.34 + t * 1.5);
+    // Fades in fast off the fire, then away to nothing by the top.
+    puff.material.opacity = Math.min(1, t * 5) * (1 - t) * 0.22;
+  });
 }
 
 // The original driveway (see createHouse) is a short straight slab right
@@ -1064,6 +1529,20 @@ function createLushGrassMaterial(bladeHeight) {
       fogFar: { value: 55 },
       uAngPerPx: { value: 0.002 },
       uMinBladePx: { value: 1.5 },
+      // The grass is a hand-written shader, so it gets none of Three's
+      // lighting for free — it has to be told what time of day it is. These
+      // are driven from applyDayNight, exactly like the fog uniforms.
+      uLightDir: { value: new THREE.Vector3(0.45, 0.75, 0.35).normalize() },
+      uLightColor: { value: new THREE.Color(1, 1, 1) },
+      uBackScatter: { value: 1 },
+      // The fire, as a point light the shader has to apply by hand. Three's
+      // PointLight lights every other material in the scene for free but
+      // can't touch this one, so without it the pit sat in a pool of black
+      // turf while its own stones were glowing.
+      uFirePos: { value: new THREE.Vector3(0, -999, 0) },
+      uFireColor: { value: new THREE.Color(0xff8a3d) },
+      uFireIntensity: { value: 0 },
+      uFireRange: { value: 6.5 },
     },
     vertexShader: `
       attribute float instanceRandom;
@@ -1158,6 +1637,13 @@ function createLushGrassMaterial(bladeHeight) {
       uniform vec3 fogColor;
       uniform float fogNear;
       uniform float fogFar;
+      uniform vec3 uLightDir;
+      uniform vec3 uLightColor;
+      uniform float uBackScatter;
+      uniform vec3 uFirePos;
+      uniform vec3 uFireColor;
+      uniform float uFireIntensity;
+      uniform float uFireRange;
 
       void main() {
         // A shadowed green, not a near-black one. This was (0.04, 0.16,
@@ -1195,7 +1681,7 @@ function createLushGrassMaterial(bladeHeight) {
         // on top of an already-dark base and crushing it to black.
         color *= 0.66 + 0.34 * smoothstep(0.0, 0.7, vHeightT);
 
-        vec3 lightDir = normalize(vec3(0.45, 0.75, 0.35));
+        vec3 lightDir = normalize(uLightDir);
         vec3 N = normalize(vNormalW);
         float ndl = abs(dot(N, lightDir));
         color *= 0.55 + 0.55 * (ndl * 0.5 + 0.5);
@@ -1208,10 +1694,32 @@ function createLushGrassMaterial(bladeHeight) {
         // backlight.
         vec3 V = normalize(cameraPosition - vWorldPos);
         float back = pow(clamp(dot(V, -lightDir), 0.0, 1.0), 3.0);
-        color += vec3(0.45, 0.80, 0.28) * back * (1.0 - ndl) * vHeightT * 0.75;
+        // Scaled down at night — sunlight coming *through* a blade is a
+        // daylight effect, and at full strength under a moon it lit the
+        // lawn from the inside like it was radioactive.
+        color += vec3(0.45, 0.80, 0.28) * back * (1.0 - ndl) * vHeightT * 0.75 * uBackScatter;
 
         color += tipWarm * pow(vHeightT, 4.0) * 0.16 * ndl;
         color *= 0.85 + vRandom * 0.3;
+
+        // The whole reason the lawn glowed after dark: every term above is
+        // baked daylight, so without this the grass stayed at noon while the
+        // rest of the scene went dark around it.
+        color *= uLightColor;
+
+        // Firelight, added *after* the day/night tint rather than before —
+        // the fire is its own source, so it shouldn't be dimmed by how dark
+        // the night is. Quadratic falloff, and blades facing the fire catch
+        // more of it, which is what makes the pool of light read as coming
+        // from a point rather than being a flat disc painted on the lawn.
+        if (uFireIntensity > 0.001) {
+          vec3 toFire = uFirePos - vWorldPos;
+          float fireDist = length(toFire);
+          float atten = clamp(1.0 - fireDist / uFireRange, 0.0, 1.0);
+          atten *= atten;
+          float faceFire = max(dot(N, normalize(toFire)), 0.0) * 0.65 + 0.35;
+          color += uFireColor * atten * faceFire * uFireIntensity;
+        }
 
         float fogFactor = smoothstep(fogNear, fogFar, vFogDepth);
         color = mix(color, fogColor, fogFactor);
@@ -1251,6 +1759,16 @@ const grassMaterials = [];
 export function setGrassTime(elapsed) {
   grassMaterials.forEach((m) => {
     m.uniforms.uTime.value = elapsed;
+  });
+}
+
+// Sun or moon direction, and the tint/intensity the grass is lit at. Called
+// from applyDayNight next to setGrassFog.
+export function setGrassLight(direction, color, backScatter) {
+  grassMaterials.forEach((m) => {
+    m.uniforms.uLightDir.value.copy(direction).normalize();
+    m.uniforms.uLightColor.value.set(color);
+    m.uniforms.uBackScatter.value = backScatter;
   });
 }
 
@@ -1428,6 +1946,11 @@ export function createYard() {
   firePit.position.set(-1, terrainHeight(-1, 5), 5);
   group.add(firePit);
   group.userData.firePit = firePit;
+
+  // Out over the backyard clearing, and only after dark.
+  const dragonflies = createDragonflies();
+  group.add(dragonflies);
+  group.userData.dragonflies = dragonflies;
 
   const hammock = createHammock();
   hammock.position.set(6, terrainHeight(6, 9), 9);

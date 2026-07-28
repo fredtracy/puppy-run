@@ -16,7 +16,11 @@ import {
   terrainHeight,
   updateGrassAngularSize,
   setGrassFog,
+  setGrassLight,
   setGrassTime,
+  setFirePitLit,
+  updateFirePit,
+  updateDragonflies,
 } from './yard.js';
 import { HOUSE_SOLIDS, HOUSE_BACK_WALK_Z } from './house.js';
 import { createSky } from './sky.js';
@@ -51,11 +55,11 @@ const DEBUG_MODE = new URLSearchParams(window.location.search).has('debug');
 // of the property is being judged on right now. Was (0, 1.5, -12.2), the
 // middle of the house, while the elevations were being matched to the
 // reference photos.
-const DEBUG_FOCUS = new THREE.Vector3(-1, 2.65, 5);
+const DEBUG_FOCUS = new THREE.Vector3(-1, 3.4, 5);
 // Where the debug camera starts relative to DEBUG_FOCUS, rather than the old
 // fixed bird's-eye offset — being able to park it at eye level in front of
 // whatever's being worked on is most of what makes debug mode useful.
-const DEBUG_EYE = new THREE.Vector3(0.6, 0.9, -2.1);
+const DEBUG_EYE = new THREE.Vector3(2.5, 1.4, -8);
 
 // Browsers block audio until a user gesture — kick it off on the first
 // keypress or tap/click, whichever comes first.
@@ -189,6 +193,10 @@ const DAY_LIGHTING = {
   // saturated than the surface it bounced off, so this is both the fix and
   // the more correct value.
   hemi: { sky: 0x87ceeb, ground: 0x84876c, intensity: 0.6 },
+  // The grass shader is hand-written and reads none of the lights above, so
+  // it takes its own copy. Full daylight, full through-the-blade scatter.
+  grassLight: 0xffffff,
+  grassBackScatter: 1,
   sky: {
     // Deep, saturated blue overhead washing out to a pale band at the
     // skyline. The first pass was far too milky — it read as haze rather
@@ -215,6 +223,14 @@ const NIGHT_LIGHTING = {
   sun: { color: 0xcdd8ff, intensity: 0.55, direction: MOON_DIRECTION },
   fill: { color: 0x4a5f8a, intensity: 0.15 },
   hemi: { sky: 0x1a2340, ground: 0x0d1a12, intensity: 0.25 },
+  // Dim and cool. This is the fix for the lawn glowing at night: the shader
+  // bakes daylight into every one of its colour terms, so without a tint to
+  // multiply through it the grass simply stayed at noon while everything
+  // else went dark. Back-scatter drops close to nothing too — light coming
+  // *through* a blade is a sun effect, and at full strength under a moon it
+  // lit the turf from the inside.
+  grassLight: 0x36486e,
+  grassBackScatter: 0.08,
   sky: {
     horizon: 0x14203c,
     zenith: 0x05080f,
@@ -1054,6 +1070,8 @@ function applyDayNight(day) {
   // in sync by hand or distant grass would stay fogged to whichever mode
   // was active when the material was first created.
   setGrassFog(cfg.fogColor, cfg.fogNear, cfg.fogFar);
+  // And the same for its lighting, which it also can't read from the scene.
+  setGrassLight(cfg.sun.direction, cfg.grassLight, cfg.grassBackScatter);
 
   sunMoonLight.color.set(cfg.sun.color);
   sunMoonLight.intensity = cfg.sun.intensity;
@@ -1072,6 +1090,10 @@ function applyDayNight(day) {
   yard.userData.nightLights.forEach((light) => {
     light.intensity = day ? 0 : 4.5;
   });
+
+  // The wood sits in the pit all day and only burns after dark.
+  setFirePitLit(yard.userData.firePit, !day);
+  yard.userData.dragonflies.visible = !day;
 
   sunSprite.visible = day;
   moonSprite.visible = !day;
@@ -3475,13 +3497,10 @@ function animate() {
   moonSprite.position.y = MOON_DIRECTION.y * SKY_DISTANCE + skyBob;
   sunSprite.position.y = SUN_DIRECTION.y * SKY_DISTANCE + skyBob;
 
-  // fire pit flicker
-  const firePit = yard.userData.firePit;
-  firePit.userData.flames.children.forEach((flame, i) => {
-    const flicker = Math.sin(elapsed * (14 + i * 3)) * 0.15 + Math.random() * 0.1;
-    flame.scale.set(1 + flicker * 0.3, 1 + flicker, 1 + flicker * 0.3);
-  });
-  firePit.userData.light.intensity = 1.1 + Math.sin(elapsed * 17) * 0.2 + Math.random() * 0.15;
+  // Fire pit flicker and smoke. Self-skips by day, when the wood is just
+  // sitting there unlit.
+  updateFirePit(yard.userData.firePit, elapsed, delta);
+  updateDragonflies(yard.userData.dragonflies, elapsed);
 
   setGrassTime(elapsed);
   // Miranda's hair sways on the same clock — see the strand system in mom.js.
