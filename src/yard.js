@@ -1,4 +1,13 @@
 import * as THREE from 'three';
+import { createSouthernPine } from './pine.js';
+import {
+  createHouse,
+  isHousePaved,
+  CONCRETE_MAT,
+  CONCRETE_UV_SCALE,
+  HOUSE_Z,
+  HOUSE_DRIVEWAY,
+} from './house.js';
 
 function mesh(geometry, material) {
   const m = new THREE.Mesh(geometry, material);
@@ -69,12 +78,13 @@ function makeFoliageTexture() {
 
 const textureLoader = new THREE.TextureLoader();
 
-// Real photographed CC0 textures (polyhaven.com) instead of hand-drawn
-// canvas speckle — diffuse + normal + roughness maps give actual physical
-// depth and per-pixel material variation under lighting. `folder` doubles
-// as the shared filename prefix, matching how Poly Haven ships each set;
-// `diffuseSuffix` covers the one inconsistency between sets ("diffuse" for
-// brick_wall_001, "diff" for everything else added since).
+// Real photographed CC0 textures (polyhaven.com): diffuse + normal +
+// roughness maps give actual physical depth and per-pixel variation under
+// lighting. `folder` doubles as the shared filename prefix, matching how
+// Poly Haven ships each set. Only bark still comes from here — everything
+// the house is made of is generated at runtime instead (see house.js),
+// because a photographed set can only ever be generic, and matching one
+// specific house is the whole point.
 function loadPbrTextures(folder, diffuseSuffix, repeatX, repeatY) {
   const base = `${import.meta.env.BASE_URL}textures/${folder}/${folder}_`;
   const map = textureLoader.load(`${base}${diffuseSuffix}_1k.jpg`);
@@ -90,22 +100,8 @@ function loadPbrTextures(folder, diffuseSuffix, repeatX, repeatY) {
   return { map, normalMap, roughnessMap };
 }
 
-function loadBrickTextures() {
-  return loadPbrTextures('brick_wall_001', 'diffuse', 4, 2);
-}
-
 function loadBarkTextures() {
   return loadPbrTextures('bark_brown_02', 'diff', 1, 2);
-}
-
-function loadRoofTextures() {
-  // 1.5x1 instead of 6x4 — 4x fewer repeats across the same roof surface,
-  // so each shingle reads at roughly actual size instead of tiling tiny.
-  return loadPbrTextures('grey_roof_01', 'diff', 1.5, 1);
-}
-
-function loadConcreteTextures() {
-  return loadPbrTextures('concrete_floor', 'diff', 3, 2);
 }
 
 // A painted-grass texture instead of a photo — thousands of short, thinly
@@ -163,11 +159,8 @@ function createPaintedGrassTexture() {
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   // Negative Y repeat compensates for how the lawn plane gets rotated flat
-  // (rotation.x = -PI/2) — without it, the offset compensation in
-  // updateLawnTexture below would scroll the texture backwards on the Z
-  // axis relative to how it scrolls correctly on X. Same repeat count the
-  // old photo texture used, so the existing tiling/scroll math in
-  // the lawn mesh's own UVs still line up unchanged.
+  // (rotation.x = -PI/2), which mirrors the texture on the Z axis relative
+  // to how it lands on X.
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
   texture.repeat.set(25, -25);
@@ -206,132 +199,6 @@ function makeSignTexture(text) {
   return texture;
 }
 
-// A unit hip-roof pyramid, rotated so its base is axis-aligned, wrapped in a
-// group so it can be non-uniformly scaled to any width/depth/height without
-// distorting the rotation.
-function buildHipRoof(width, depth, height, material) {
-  const geo = new THREE.ConeGeometry(1 / Math.SQRT2, 1, 4, 1, true);
-  const inner = mesh(geo, material);
-  inner.rotation.y = Math.PI / 4;
-  const group = new THREE.Group();
-  group.add(inner);
-  group.scale.set(width, height, depth);
-  return group;
-}
-
-function buildWindow(w, h, trimMat, glassMat) {
-  const group = new THREE.Group();
-  const frame = mesh(new THREE.BoxGeometry(w, h, 0.06), trimMat);
-  group.add(frame);
-  const glass = mesh(new THREE.PlaneGeometry(w * 0.85, h * 0.85), glassMat);
-  glass.position.z = 0.035;
-  group.add(glass);
-  const vBar = mesh(new THREE.BoxGeometry(0.04, h * 0.85, 0.02), trimMat);
-  vBar.position.z = 0.05;
-  group.add(vBar);
-  const hBar = mesh(new THREE.BoxGeometry(w * 0.85, 0.04, 0.02), trimMat);
-  hBar.position.z = 0.05;
-  group.add(hBar);
-  return group;
-}
-
-function buildFrenchDoors(totalW, h, trimMat, glassMat, rightOpen = false) {
-  const group = new THREE.Group();
-  const doorW = totalW / 2 - 0.03;
-  const left = buildWindow(doorW, h, trimMat, glassMat);
-  left.position.x = -totalW / 4;
-  group.add(left);
-  if (!rightOpen) {
-    const right = buildWindow(doorW, h, trimMat, glassMat);
-    right.position.x = totalW / 4;
-    group.add(right);
-    const centerMullion = mesh(new THREE.BoxGeometry(0.06, h, 0.08), trimMat);
-    group.add(centerMullion);
-  }
-  return group;
-}
-
-// A flat triangular slab (base at y=0, apex at (0, peakHeight), thin along
-// Z) — the brick gable-end pediment above the garage and front entry,
-// matching the reference house's front-facing gables.
-function buildGableEnd(width, peakHeight, thickness, material) {
-  const shape = new THREE.Shape();
-  shape.moveTo(-width / 2, 0);
-  shape.lineTo(width / 2, 0);
-  shape.lineTo(0, peakHeight);
-  shape.lineTo(-width / 2, 0);
-  const geo = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
-  geo.translate(0, 0, -thickness / 2);
-  return mesh(geo, material);
-}
-
-// Two tilted slabs meeting at a ridge running the full `runDepth` (plus
-// overhang) — a simple gable roof cap sized to sit over a `width`-wide
-// gable end below. Unlike buildHipRoof's single cone, this needs an actual
-// ridge *line* rather than a point, hence two flat rectangular slabs
-// instead of one radially-symmetric shape.
-function buildGableRoof(width, runDepth, peakHeight, thickness, overhangSide, overhangEnd, material) {
-  const group = new THREE.Group();
-  const halfSpan = width / 2 + overhangSide;
-  const angle = Math.atan2(peakHeight, halfSpan);
-  const slopeLength = Math.hypot(halfSpan, peakHeight);
-  [-1, 1].forEach((side) => {
-    const slab = mesh(
-      new THREE.BoxGeometry(slopeLength, thickness, runDepth + overhangEnd * 2),
-      material
-    );
-    slab.rotation.z = -side * angle;
-    slab.position.set((side * halfSpan) / 2, peakHeight / 2, 0);
-    group.add(slab);
-  });
-  return group;
-}
-
-// A flat semicircular cap sized to sit on top of a `width`-wide buildWindow
-// — a stylized approximation of the reference house's arched front windows
-// (a true curved arch doesn't read as anything different from a faceted
-// one at this camera distance, so this keeps the same flat-panel
-// construction style as the rest of the house).
-function buildArchCap(width, thickness, material) {
-  const radius = width / 2;
-  const segments = 12;
-  const shape = new THREE.Shape();
-  shape.moveTo(-radius, 0);
-  for (let i = 0; i <= segments; i++) {
-    const a = Math.PI - (Math.PI * i) / segments;
-    shape.lineTo(Math.cos(a) * radius, Math.sin(a) * radius);
-  }
-  shape.lineTo(-radius, 0);
-  const geo = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
-  geo.translate(0, 0, -thickness / 2);
-  return mesh(geo, material);
-}
-
-function buildArchedWindow(w, h, trimMat, glassMat) {
-  const group = new THREE.Group();
-  group.add(buildWindow(w, h, trimMat, glassMat));
-  const cap = buildArchCap(w, 0.06, trimMat);
-  cap.position.y = h / 2;
-  group.add(cap);
-  return group;
-}
-
-// Ground-to-cap brick chimney, standing proud of whatever wall it's placed
-// against.
-function buildChimney(width, depth, height, capMat, brickMat) {
-  const group = new THREE.Group();
-  const shaft = mesh(new THREE.BoxGeometry(width, height, depth), brickMat);
-  shaft.position.y = height / 2;
-  group.add(shaft);
-  const cap = mesh(new THREE.BoxGeometry(width + 0.08, 0.08, depth + 0.08), capMat);
-  cap.position.y = height + 0.04;
-  group.add(cap);
-  const flue = mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.18, 8), capMat);
-  flue.position.y = height + 0.17;
-  group.add(flue);
-  return group;
-}
-
 // A tilted yard sign on a stake, planted in the lawn near the front walk —
 // a livelier home for "FORT DARLA" than a wall plaque, closer to a kid's
 // clubhouse sign than a house number.
@@ -351,522 +218,6 @@ function buildYardSign(text) {
   board.rotation.y = 0.2;
   group.add(board);
   group.rotation.z = -0.04;
-  return group;
-}
-
-export function createHouse() {
-  const group = new THREE.Group();
-  const width = 11;
-  const depth = 7;
-  const wallHeight = 2.7;
-  const roofHeight = 2.3;
-
-  const brickTextures = loadBrickTextures();
-  const brickMat = new THREE.MeshStandardMaterial({
-    map: brickTextures.map,
-    normalMap: brickTextures.normalMap,
-    roughnessMap: brickTextures.roughnessMap,
-    roughness: 1,
-  });
-  const roofTextures = loadRoofTextures();
-  const roofMat = new THREE.MeshStandardMaterial({
-    map: roofTextures.map,
-    normalMap: roofTextures.normalMap,
-    roughnessMap: roofTextures.roughnessMap,
-    roughness: 1,
-  });
-  const trimMat = new THREE.MeshStandardMaterial({
-    map: makeSpeckleTexture('#e8e2d1', 20, 6, 2),
-    roughness: 0.75,
-  });
-  const glassMat = new THREE.MeshPhysicalMaterial({
-    color: 0x1b2b33,
-    roughness: 0.15,
-    metalness: 0.1,
-    clearcoat: 0.4,
-  });
-  const concreteTextures = loadConcreteTextures();
-  const concreteMat = new THREE.MeshStandardMaterial({
-    map: concreteTextures.map,
-    normalMap: concreteTextures.normalMap,
-    roughnessMap: concreteTextures.roughnessMap,
-    roughness: 1,
-  });
-  const interiorWallMat = new THREE.MeshStandardMaterial({
-    color: 0xf5f2ea,
-    roughness: 0.9,
-  });
-  // Walls are a hollow shell (not one solid box) with a doorway gap in the
-  // front wall, matching the right patio door, so Darla can actually walk
-  // inside rather than the "door" just being a decorative overlay on solid
-  // brick. Brick faces outward, plain white faces the interior — matching
-  // the reference photo of the living room.
-  const wallThickness = 0.3;
-  const doorway = { xMin: -0.1, xMax: 1.25, yMax: 2.2 };
-
-  // Physical size (world units) that one repeat of the brick texture should
-  // cover, so bricks read as the same size on every wall piece instead of a
-  // different density on every differently-sized surface.
-  const brickTileSize = wallHeight / 2;
-  function scaledBrickMat(faceWidth, faceHeight) {
-    const repeatX = faceWidth / brickTileSize;
-    const repeatY = faceHeight / brickTileSize;
-    const map = brickMat.map.clone();
-    map.needsUpdate = true;
-    map.repeat.set(repeatX, repeatY);
-    const normalMap = brickMat.normalMap.clone();
-    normalMap.needsUpdate = true;
-    normalMap.repeat.set(repeatX, repeatY);
-    const roughnessMap = brickMat.roughnessMap.clone();
-    roughnessMap.needsUpdate = true;
-    roughnessMap.repeat.set(repeatX, repeatY);
-    return new THREE.MeshStandardMaterial({ map, normalMap, roughnessMap, roughness: 1 });
-  }
-
-  // Front/back walls stop at the *inner* face of the side walls instead of
-  // running the full building width. They used to extend all the way to
-  // the outer corner, which put their thin end-cap face exactly coplanar
-  // with the side wall's own face at that same corner — two overlapping
-  // brick surfaces occupying the same spot, which is a textbook z-fighting
-  // setup and showed up as shimmering right where the walls met. The side
-  // walls' own end-cap faces (below) already cover that sliver, so nothing
-  // is left uncovered.
-  const innerHalfWidth = width / 2 - wallThickness;
-  const sideBrickMat = scaledBrickMat(depth, wallHeight);
-  const sideEndCapMat = scaledBrickMat(wallThickness, wallHeight);
-
-  // BoxGeometry material order: [+x, -x, +y, -y, +z, -z]
-  // Every exterior wall is brick, including this "front" one under the
-  // covered patio. It was sided here, read from the Zillow shots — but the
-  // owner's own photos of the back of the house show brick running right
-  // across under the patio roof, with white only on the trim, soffit and
-  // door surrounds. White walls with brick columns had it backwards.
-  const patioWallBrickMat = scaledBrickMat(width, wallHeight);
-  const frontMats = [
-    patioWallBrickMat,
-    patioWallBrickMat,
-    patioWallBrickMat,
-    patioWallBrickMat,
-    patioWallBrickMat,
-    interiorWallMat,
-  ];
-  const backMats = [brickMat, brickMat, brickMat, brickMat, interiorWallMat, brickMat];
-  const leftMats = [
-    interiorWallMat,
-    sideBrickMat,
-    sideEndCapMat,
-    sideEndCapMat,
-    sideEndCapMat,
-    sideEndCapMat,
-  ];
-  const rightMats = [
-    sideBrickMat,
-    interiorWallMat,
-    sideEndCapMat,
-    sideEndCapMat,
-    sideEndCapMat,
-    sideEndCapMat,
-  ];
-
-  const frontLeft = mesh(
-    new THREE.BoxGeometry(innerHalfWidth + doorway.xMin, wallHeight, wallThickness),
-    frontMats
-  );
-  frontLeft.position.set(
-    (-innerHalfWidth + doorway.xMin) / 2,
-    wallHeight / 2,
-    depth / 2 - wallThickness / 2
-  );
-  group.add(frontLeft);
-
-  const frontRight = mesh(
-    new THREE.BoxGeometry(innerHalfWidth - doorway.xMax, wallHeight, wallThickness),
-    frontMats
-  );
-  frontRight.position.set(
-    (doorway.xMax + innerHalfWidth) / 2,
-    wallHeight / 2,
-    depth / 2 - wallThickness / 2
-  );
-  group.add(frontRight);
-
-  const lintelWidth = doorway.xMax - doorway.xMin;
-  const lintelHeight = wallHeight - doorway.yMax;
-  // Brick too — it's the strip of the same patio wall above the doorway.
-  const lintelBrickMat = scaledBrickMat(lintelWidth, lintelHeight);
-  const lintelMats = [
-    lintelBrickMat,
-    lintelBrickMat,
-    lintelBrickMat,
-    lintelBrickMat,
-    lintelBrickMat,
-    interiorWallMat,
-  ];
-
-  const lintel = mesh(
-    new THREE.BoxGeometry(lintelWidth, lintelHeight, wallThickness),
-    lintelMats
-  );
-  lintel.position.set(
-    (doorway.xMin + doorway.xMax) / 2,
-    doorway.yMax + (wallHeight - doorway.yMax) / 2,
-    depth / 2 - wallThickness / 2
-  );
-  group.add(lintel);
-
-  // Doorway infill: the back door is closed now (see `doors` below, no
-  // longer built with an open right leaf) and there's no interior behind
-  // it to walk into, so the actual gap in the wall — frontLeft/frontRight
-  // above only build up to doorway.xMin/xMax — needs to be filled in
-  // rather than just covered by a door panel that doesn't quite match its
-  // edges. Same brick as the rest of this wall, scaled to its own size so
-  // the tiling still reads as continuous brick, not a patched-in seam.
-  const doorwayInfillMat = scaledBrickMat(lintelWidth, doorway.yMax);
-  const doorwayInfillMats = [
-    doorwayInfillMat,
-    doorwayInfillMat,
-    doorwayInfillMat,
-    doorwayInfillMat,
-    doorwayInfillMat,
-    interiorWallMat,
-  ];
-  const doorwayInfill = mesh(
-    new THREE.BoxGeometry(lintelWidth, doorway.yMax, wallThickness),
-    doorwayInfillMats
-  );
-  doorwayInfill.position.set(
-    (doorway.xMin + doorway.xMax) / 2,
-    doorway.yMax / 2,
-    depth / 2 - wallThickness / 2
-  );
-  group.add(doorwayInfill);
-
-  const backWall = mesh(
-    new THREE.BoxGeometry(innerHalfWidth * 2, wallHeight, wallThickness),
-    backMats
-  );
-  backWall.position.set(0, wallHeight / 2, -depth / 2 + wallThickness / 2);
-  group.add(backWall);
-
-  const leftWall = mesh(new THREE.BoxGeometry(wallThickness, wallHeight, depth), leftMats);
-  leftWall.position.set(-width / 2 + wallThickness / 2, wallHeight / 2, 0);
-  group.add(leftWall);
-
-  const rightWall = mesh(new THREE.BoxGeometry(wallThickness, wallHeight, depth), rightMats);
-  rightWall.position.set(width / 2 - wallThickness / 2, wallHeight / 2, 0);
-  group.add(rightWall);
-
-  const roof = buildHipRoof(width * 1.12, depth * 1.12, roofHeight, roofMat);
-  roof.position.y = wallHeight + roofHeight / 2;
-  group.add(roof);
-
-  // Covered patio, matching the reference photos
-  const patioWidth = width * 0.72;
-  const patioDepth = 2.6;
-  const patioFloor = mesh(
-    new THREE.BoxGeometry(patioWidth, 0.1, patioDepth),
-    concreteMat
-  );
-  patioFloor.position.set(0, 0.05, depth / 2 + patioDepth / 2);
-  group.add(patioFloor);
-
-  // Column height is set to reach exactly the underside of the patio roof
-  // panel below (wallHeight + 0.02, thickness 0.14), not past it.
-  const columnHeight = wallHeight - 0.05;
-  const columnSize = 0.35;
-
-  // Columns are far thinner than the walls, so — same issue as the lintel —
-  // the wall-sized brick repeat would squeeze in way too many courses.
-  const columnBrickMat = scaledBrickMat(columnSize, columnHeight);
-
-  [-patioWidth / 2 + 0.2, 0.3, patioWidth / 2 - 0.2].forEach((x) => {
-    const col = mesh(
-      new THREE.BoxGeometry(columnSize, columnHeight, columnSize),
-      columnBrickMat
-    );
-    col.position.set(x, columnHeight / 2, depth / 2 + patioDepth - 0.2);
-    group.add(col);
-  });
-
-  // Patio roof, extending from the wall out past the columns so they
-  // actually hold something up. Uses the same gray roof material (not the
-  // white trim) so it reads as a roofline extension, not a floating shelf.
-  const patioRoofPanel = mesh(
-    new THREE.BoxGeometry(patioWidth + 0.4, 0.14, patioDepth + 0.5),
-    roofMat
-  );
-  patioRoofPanel.position.set(0, wallHeight + 0.02, depth / 2 + patioDepth / 2);
-  group.add(patioRoofPanel);
-
-  // Festoon lights swagged along the outer edge of the patio roof — strung
-  // across the front of the porch in the owner's photos, and the one bit of
-  // the house that reads as lived-in rather than architectural.
-  //
-  // Bulbs are emissive rather than actual lights: forty point lights would
-  // be absurd, and the bloom pass (threshold 0.82) picks emissive geometry
-  // up on its own, so they glow at night without costing anything.
-  const bulbMat = new THREE.MeshStandardMaterial({
-    color: 0xfff2cf,
-    emissive: 0xffe6a8,
-    emissiveIntensity: 1.6,
-    roughness: 0.4,
-  });
-  const cordMat = new THREE.MeshStandardMaterial({ color: 0x2a2622, roughness: 0.9 });
-  const bulbGeo = new THREE.SphereGeometry(0.045, 8, 6);
-
-  const strandZ = depth / 2 + patioDepth - 0.18;
-  const strandTop = wallHeight - 0.06;
-  const strandHalf = patioWidth / 2 - 0.25;
-  const strandSag = 0.28;
-  const bulbCount = 15;
-
-  // Parabolic swag rather than a straight run — close enough to a catenary
-  // at this span, and a dead-level string reads as a pipe.
-  const strandY = (u) => strandTop - strandSag * (1 - u * u);
-
-  let prev = null;
-  for (let i = 0; i < bulbCount; i++) {
-    // u runs -1..1 across the span, so u*u gives zero sag at the ends and
-    // maximum in the middle.
-    const u = (i / (bulbCount - 1)) * 2 - 1;
-    const x = u * strandHalf;
-    const y = strandY(u);
-    const bulb = mesh(bulbGeo, bulbMat);
-    bulb.position.set(x, y, strandZ);
-    group.add(bulb);
-
-    if (prev) {
-      // One short cord segment bridging each neighbouring pair, rotated to
-      // lie along the gap — a cheap way to draw a curve out of straight
-      // pieces without building a tube geometry.
-      const dx = x - prev.x;
-      const dy = y - prev.y;
-      const len = Math.hypot(dx, dy);
-      const cord = mesh(new THREE.CylinderGeometry(0.008, 0.008, len, 5), cordMat);
-      cord.position.set((x + prev.x) / 2, (y + prev.y) / 2, strandZ);
-      cord.rotation.z = Math.atan2(dx, -dy) + Math.PI;
-      group.add(cord);
-    }
-    prev = { x, y };
-  }
-
-  // Two sets of French doors along the patio wall, matching the reference
-  // photos' composition — both purely decorative now that the doorway
-  // behind them is filled in (see doorwayInfill above) and there's no
-  // interior to walk into.
-  const doors = buildFrenchDoors(2.2, 2.0, trimMat, glassMat, false);
-  doors.position.set(0, wallHeight * 0.42, depth / 2 + 0.01);
-  group.add(doors);
-
-  const doorsSecondary = buildFrenchDoors(2.0, 2.0, trimMat, glassMat, false);
-  doorsSecondary.position.set(-2.6, wallHeight * 0.42, depth / 2 + 0.01);
-  group.add(doorsSecondary);
-
-  const patioWin = buildWindow(1.1, 1.3, trimMat, glassMat);
-  patioWin.position.set(2.7, wallHeight * 0.55, depth / 2 + 0.01);
-  group.add(patioWin);
-
-  // AC condenser unit, tucked against the wall just outside the patio.
-  const acMat = new THREE.MeshStandardMaterial({ color: 0xd6d6d2, roughness: 0.6 });
-  const acUnit = mesh(new THREE.BoxGeometry(0.5, 0.45, 0.5), acMat);
-  acUnit.position.set(patioWidth / 2 + 0.5, 0.225, depth / 2 + 0.3);
-  group.add(acUnit);
-
-  // --- Front of the house (the solid "back" wall above, -z) -------------
-  // Garage, gabled entry, arched windows, and chimney, matching the
-  // reference photos' street-facing side. Everything below attaches to the
-  // outward face of `backWall`, at local z = -depth / 2.
-
-  const garageWidth = 4.4;
-  const garageDepth = 3.0;
-  const garageCenterX = 2.6;
-  const garageFrontZ = -depth / 2 - garageDepth;
-  const garageBrickMat = scaledBrickMat(garageWidth, wallHeight);
-  const garageSideBrickMat = scaledBrickMat(garageDepth, wallHeight);
-
-  const garageBox = mesh(new THREE.BoxGeometry(garageWidth, wallHeight, garageDepth), [
-    garageSideBrickMat,
-    garageSideBrickMat,
-    garageBrickMat,
-    garageBrickMat,
-    garageBrickMat,
-    garageBrickMat,
-  ]);
-  garageBox.position.set(garageCenterX, wallHeight / 2, -depth / 2 - garageDepth / 2);
-  group.add(garageBox);
-
-  const garageDoorMat = new THREE.MeshStandardMaterial({ color: 0xf0efe9, roughness: 0.55 });
-  const garageDoorGrooveMat = new THREE.MeshStandardMaterial({ color: 0xd8d6cd, roughness: 0.6 });
-  const garageDoorHeight = wallHeight * 0.72;
-  const garageDoor = mesh(
-    new THREE.BoxGeometry(garageWidth - 1, garageDoorHeight, 0.05),
-    garageDoorMat
-  );
-  garageDoor.position.set(garageCenterX, garageDoorHeight / 2, garageFrontZ - 0.03);
-  group.add(garageDoor);
-  for (let i = 1; i < 4; i++) {
-    const groove = mesh(
-      new THREE.BoxGeometry((garageWidth - 1) * 0.92, 0.02, 0.01),
-      garageDoorGrooveMat
-    );
-    groove.position.set(garageCenterX, (garageDoorHeight * i) / 4, garageFrontZ - 0.06);
-    group.add(groove);
-  }
-
-  // Wall-lantern porch lights flanking the garage door — present in the
-  // owner's own photo and one of the few things that reads as "lived in"
-  // on an otherwise flat run of brick either side of the door.
-  const sconceMetalMat = new THREE.MeshStandardMaterial({
-    color: 0x2a2622,
-    roughness: 0.5,
-    metalness: 0.4,
-  });
-  const sconceGlassMat = new THREE.MeshStandardMaterial({
-    color: 0xfff2cf,
-    emissive: 0xffcf80,
-    emissiveIntensity: 1.4,
-    roughness: 0.4,
-  });
-  function buildSconce() {
-    const sconceGroup = new THREE.Group();
-    // Backplate sits flush against the wall; the lantern body and cap
-    // project outward (local -Z) from it, toward the street.
-    const backplate = mesh(new THREE.BoxGeometry(0.14, 0.22, 0.04), sconceMetalMat);
-    sconceGroup.add(backplate);
-    const lantern = mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.16, 8), sconceGlassMat);
-    lantern.position.set(0, -0.02, -0.09);
-    sconceGroup.add(lantern);
-    const cap = mesh(new THREE.ConeGeometry(0.07, 0.06, 8), sconceMetalMat);
-    cap.position.set(0, 0.09, -0.09);
-    sconceGroup.add(cap);
-    return sconceGroup;
-  }
-  // Just outside the door's own edges (door spans garageCenterX +/- (garageWidth - 1) / 2).
-  const sconceInset = (garageWidth - 1) / 2 + 0.25;
-  const sconceLeft = buildSconce();
-  sconceLeft.position.set(garageCenterX - sconceInset, garageDoorHeight * 0.85, garageFrontZ);
-  group.add(sconceLeft);
-  const sconceRight = buildSconce();
-  sconceRight.position.set(garageCenterX + sconceInset, garageDoorHeight * 0.85, garageFrontZ);
-  group.add(sconceRight);
-
-  // Driveway, leading away from the garage door.
-  const drivewayWidth = garageWidth - 0.2;
-  const drivewayLength = 6;
-  const driveway = mesh(new THREE.BoxGeometry(drivewayWidth, 0.06, drivewayLength), concreteMat);
-  driveway.position.set(garageCenterX, 0.03, garageFrontZ - drivewayLength / 2);
-  group.add(driveway);
-
-  // Brick gable pediment over the garage, with a round louvered vent — this
-  // is what makes the garage read as its own gabled volume rather than just
-  // a box tucked under the main hip roof.
-  const garageGablePeak = 1.7;
-  const gableEnd = buildGableEnd(garageWidth, garageGablePeak, 0.1, garageBrickMat);
-  gableEnd.position.set(garageCenterX, wallHeight, garageFrontZ);
-  group.add(gableEnd);
-
-  const ventOuter = mesh(new THREE.CircleGeometry(0.24, 16), trimMat);
-  ventOuter.rotation.y = Math.PI;
-  ventOuter.position.set(garageCenterX, wallHeight + garageGablePeak * 0.5, garageFrontZ - 0.061);
-  group.add(ventOuter);
-  const ventInnerMat = new THREE.MeshStandardMaterial({ color: 0x141210, roughness: 0.9 });
-  const ventInner = mesh(new THREE.CircleGeometry(0.16, 16), ventInnerMat);
-  ventInner.rotation.y = Math.PI;
-  ventInner.position.set(garageCenterX, wallHeight + garageGablePeak * 0.5, garageFrontZ - 0.062);
-  group.add(ventInner);
-
-  const garageRoof = buildGableRoof(
-    garageWidth,
-    garageDepth,
-    garageGablePeak,
-    0.12,
-    0.35,
-    0.35,
-    roofMat
-  );
-  garageRoof.position.set(garageCenterX, wallHeight, -depth / 2 - garageDepth / 2);
-  group.add(garageRoof);
-
-  // Front entry: oval-glass door under a small gabled hood, on a slim
-  // brick support column.
-  const frontDoorX = -1.1;
-  const frontDoorMat = new THREE.MeshStandardMaterial({ color: 0xefe7d8, roughness: 0.55 });
-  const frontDoor = mesh(new THREE.BoxGeometry(0.85, 2.0, 0.06), frontDoorMat);
-  frontDoor.position.set(frontDoorX, 1.0, -depth / 2 - 0.03);
-  group.add(frontDoor);
-
-  const ovalMat = new THREE.MeshPhysicalMaterial({
-    color: 0xbcd4e0,
-    roughness: 0.2,
-    metalness: 0.05,
-    clearcoat: 0.5,
-  });
-  const oval = mesh(new THREE.CircleGeometry(0.16, 20), ovalMat);
-  oval.scale.set(1, 1.7, 1);
-  oval.rotation.y = Math.PI;
-  oval.position.set(frontDoorX, 1.35, -depth / 2 - 0.061);
-  group.add(oval);
-
-  const entryRoof = buildGableRoof(1.3, 0.9, 0.55, 0.08, 0.15, 0.15, roofMat);
-  entryRoof.position.set(frontDoorX, wallHeight, -depth / 2 - 0.45);
-  group.add(entryRoof);
-
-  const entryColumnHeight = wallHeight * 0.62;
-  const entryColumnMat = scaledBrickMat(0.18, entryColumnHeight);
-  const entryColumn = mesh(
-    new THREE.BoxGeometry(0.18, entryColumnHeight, 0.18),
-    entryColumnMat
-  );
-  entryColumn.position.set(frontDoorX - 0.75, entryColumnHeight / 2, -depth / 2 - 0.85);
-  group.add(entryColumn);
-
-  // Arched front windows.
-  const archWinBig = buildArchedWindow(1.3, 1.4, trimMat, glassMat);
-  archWinBig.position.set(-3.3, 1.15, -depth / 2 - 0.03);
-  group.add(archWinBig);
-
-  const archWinSmall = buildArchedWindow(0.8, 1.1, trimMat, glassMat);
-  archWinSmall.position.set(-4.5, 1.0, -depth / 2 - 0.03);
-  group.add(archWinSmall);
-
-  // Chimney — rising up through the main hip roof itself rather than
-  // standing beside an exterior wall, matching the owner's own satellite
-  // photo (the pin sits well inside the roof's outline, near the ridge,
-  // not at any edge). It was previously parked at x = -4.6 against the
-  // front wall, which also happened to clip straight through
-  // archWinSmall (x = -4.5) — this new spot is clear of both windows and
-  // the front entry, still on the side opposite the garage per the
-  // ground photo, but pulled back toward the rear half of the roof where
-  // nothing else is placed.
-  //
-  // Taller than before (was wallHeight + roofHeight * 0.85 = 4.655,
-  // shorter than the roof's own peak at wallHeight + roofHeight = 5.0) —
-  // that only cleared the roof because it stood right at the low eave
-  // edge. Moved this far in from the edge, the local roof surface is much
-  // closer to full peak height, so the chimney needs to clear the actual
-  // peak, not just the eave, plus a bit more so the cap visibly stands
-  // proud of the ridge the way a real flue does.
-  const chimneyHeight = wallHeight + roofHeight + 0.6;
-  // Painted masonry, not exposed brick — it's the one light-coloured mass
-  // on an otherwise all-brick exterior in the owner's photos, and having it
-  // brick made it disappear into the wall behind it.
-  const chimneyBodyMat = new THREE.MeshStandardMaterial({
-    map: makeSpeckleTexture('#ddd7c8', 10, 8, 3),
-    roughness: 0.92,
-  });
-  const chimney = buildChimney(0.55, 0.5, chimneyHeight, trimMat, chimneyBodyMat);
-  chimney.position.set(-3.5, 0, -2);
-  group.add(chimney);
-
-  // "FORT DARLA" — a tilted yard sign staked in the lawn by the front walk,
-  // rather than a wall plaque. Default board orientation faces back toward
-  // the house, so this needs the +PI flip to actually greet someone
-  // approaching from the street instead of showing them the mirrored back.
-  const yardSign = buildYardSign('FORT DARLA');
-  yardSign.position.set(-2.2, 0, -depth / 2 - 2.5);
-  yardSign.rotation.y = Math.PI + 0.3;
-  group.add(yardSign);
-
   return group;
 }
 
@@ -979,39 +330,62 @@ const TREE_SPACING = 3.0;
 // createTreeChunk (keeps trees out of it) and createChunkGrass (keeps
 // forest-floor tufts out of it, so they don't double up with the yard's
 // own denser grass below) key off of.
-// z lower bound pushed out to -40 (from -24) so the open corridor reaches
-// all the way past the road (see ROAD_Z below) instead of a forest wall
-// cutting across the extended driveway partway there.
-const inOpenArea = (x, z) => x > -13 && x < 13 && z > -40 && z < 18;
-// Where grass and trees can't grow because a building is standing there.
-// This used to be one box spanning x ±8.7 and z -24.2..-3.8, which was
-// sized to reach the garage and driveway at the back — but the house
-// itself is only x ±5.5, so that box left a ~3 unit strip of bare ground
-// running down each side of the house for its whole depth. Hugging the
-// actual structures instead lets the lawn come right up to the walls, the
-// way it does in the reference photos.
+// z lower bound pushed out to -48 (from -24, then -40) so the open
+// corridor reaches all the way past the road (see ROAD_Z below) instead of
+// a forest wall cutting across the extended driveway partway there. It has
+// to clear the mailbox on the far shoulder too (ROAD_Z - ROAD_HALF_WIDTH -
+// 1.2 = -43.9), or trees grow through it.
+const inOpenArea = (x, z) => x > -13 && x < 13 && z > -48 && z < 18;
+
+// The straight run of driveway between where the house's own slab stops
+// (HOUSE_DRIVEWAY) and the road.
+const DRIVE_X = HOUSE_DRIVEWAY.x;
+const DRIVE_HALF_W = HOUSE_DRIVEWAY.halfWidth;
+const DRIVE_START_Z = HOUSE_DRIVEWAY.endZ;
+
+// The run to the road isn't straight. In the photos the drive leaves the
+// garage, drifts steadily away from the garage side, and opens into a
+// broad bell where it meets the pavement — a county road with no curb cut,
+// so the concrete itself has to give cars room to swing in off the lane.
 //
-// Coordinates are world-space; the house group sits at (0, 0, -11) with an
-// 11 x 7 main box, so its walls are x ±5.5 / z -14.5..-7.5. The margins
-// below are deliberately a few centimetres proud of each wall so blades
-// don't clip through from the inside — was 0.2 (20cm), which at close
-// range read as a visible bald strip of bare lawn-base color between the
-// grass and every wall/driveway edge rather than turf actually meeting
-// them. 0.03 is closer to what "a few centimetres" actually meant.
-const inBuildingBox = (x, z, xMin, xMax, zMin, zMax) =>
-  x > xMin && x < xMax && z > zMin && z < zMax;
+// Sign: the garage sits at +x, and from the road you're looking down +z,
+// which puts the garage on your left. The apron in the photos opens to the
+// right of the drive as you look at the house, so the centreline drifts
+// toward -x on its way out.
+const DRIVE_BEND = -2.4;
+const DRIVE_APRON_HALF = 5.6;
+
+// Where the drive is along its run, 0 at the house slab and 1 at the curb.
+const driveT = (z) =>
+  Math.min(1, Math.max(0, (DRIVE_START_Z - z) / (DRIVE_START_Z - (ROAD_Z + ROAD_HALF_WIDTH))));
+const driveCenterX = (t) => DRIVE_X + DRIVE_BEND * smootherstep(t);
+// Fifth power, so the flare stays tight for nearly the whole run and only
+// opens over the last two or three metres. What the photos actually show
+// is a constant-width drive with a radiused return at the pavement, not a
+// widening wedge — cubic was already too gradual and rendered as a fan
+// spanning most of the frontage, which read as a parking lot.
+const driveHalfWidth = (t) => DRIVE_HALF_W + (DRIVE_APRON_HALF - DRIVE_HALF_W) * t ** 5;
+
+const onDriveway = (x, z) => {
+  if (z > DRIVE_START_Z || z < ROAD_Z + ROAD_HALF_WIDTH) return false;
+  const t = driveT(z);
+  return Math.abs(x - driveCenterX(t)) < driveHalfWidth(t);
+};
+
+// Where grass and trees can't grow because a building or a slab is standing
+// there. The house's own shapes live in house.js — walls, driveway, side
+// apron, back walk and the curved front walk — so that this file and the
+// house can't drift apart about where the lawn stops. Everything the house
+// knows about is deliberately hugged tight, not boxed generously: the whole
+// point is that turf comes right up to the brick the way it does in the
+// reference photos.
 const inHouse = (x, z) =>
-  // main house
-  inBuildingBox(x, z, -5.53, 5.53, -14.53, -7.47) ||
-  // covered patio slab off the back
-  inBuildingBox(x, z, -3.99, 3.99, -7.53, -4.87) ||
-  // garage, projecting past the main roofline
-  inBuildingBox(x, z, 0.37, 4.83, -17.53, -14.5) ||
-  // and its driveway
-  inBuildingBox(x, z, 0.47, 4.73, -23.53, -17.5) ||
-  // the straight extension carrying it the rest of the way to the road
-  // (createDrivewayExtension)
-  inBuildingBox(x, z, 0.47, 4.73, -31.83, -23.5);
+  isHousePaved(x, z) ||
+  // the curved, flaring extension carrying the driveway the rest of the
+  // way out to the road (createDrivewayExtension). Shares its centreline
+  // and width functions rather than approximating them with a box, or the
+  // lawn grows through the apron where the two disagree.
+  onDriveway(x, z);
 
 // Matches firePit's own placement in createYard() below — kept separate so
 // grass (createChunkGrass) can skip it without needing the actual fire pit
@@ -1025,9 +399,68 @@ const inFirePit = (x, z) => Math.hypot(x - FIRE_PIT.x, z - FIRE_PIT.z) < FIRE_PI
 // near the house, so the road reads as continuing off into the trees on
 // either side instead of stopping dead at the edge of the yard. Matches
 // createRoad() below.
-const ROAD_Z = -34;
+//
+// Moved out from -34 when the house went to its real assessor dimensions.
+// The house grew *forwards* (see HOUSE_Z in house.js) — the garage door
+// went from world z -17.5 to -23.96, a 6.46 m march toward the street —
+// while the road stayed put, so the drive from door to curb collapsed
+// from 14.3 m to 7.84 m and the house ended up sitting almost on the
+// road. This puts the near edge back at 14.3 m from the garage door,
+// which is the length it had before the rebuild.
+//
+// It also fixes the elevation: the dome is centred under the house, so
+// at -34 the road sat 2.20 m up the hill against the pad's 2.40 — a
+// 0.20 m climb across the whole drive, i.e. visually flat. At -40.5 the
+// near edge is at 0.84 m, a 1.56 m climb, so the driveway actually rises
+// to the house the way the terrain comment upstream claims it does.
+const ROAD_Z = -40.5;
 const ROAD_HALF_WIDTH = 2.2;
 const inRoad = (x, z) => z > ROAD_Z - ROAD_HALF_WIDTH && z < ROAD_Z + ROAD_HALF_WIDTH;
+
+// ── roadside drainage ──────────────────────────────────────────────────
+// This is a county road with no curb and no storm sewer. The photos show
+// the lawn crowning up away from the pavement and dropping into an open
+// grass swale that runs the length of the frontage and carries runoff
+// along it — the single most legible piece of ground shaping out front,
+// and the reason the yard reads as a mound rather than a flat sheet.
+//
+// The ditch still has to close up under the driveway, or the concrete
+// would sag through the low point. The culvert pipe that used to be
+// modelled at the crossing is gone — it never read as anything but a
+// length of tube lying in the grass — but the fill it implies stays,
+// since that's what carries the drive across.
+// Set back far enough from the pavement that the ditch's near bank clears
+// the road edge entirely (needs at least DITCH_HALF of gap), or the road
+// itself sags into the profile.
+const DITCH_Z = ROAD_Z + ROAD_HALF_WIDTH + 2.8;
+const DITCH_HALF = 2.4;
+// These are proper trenches, not a dip in the lawn — the far bank is over
+// your head standing in the bottom. Depth does double duty: it's also what
+// buys the culvert its cover, so the pipe runs three-quarters of a metre
+// under the driveway instead of scraping the underside of the slab the way
+// it did at 0.55 and again at 0.75.
+const DITCH_DEPTH = 1.2;
+// Reaches clear of the apron's widest point so the fill carries past the
+// concrete edge, rather than the slab overhanging an open trench.
+const DITCH_FILL_HALF = DRIVE_APRON_HALF + 1.4;
+
+function ditchDepthAt(x, z) {
+  const dz = Math.abs(z - DITCH_Z);
+  if (dz >= DITCH_HALF) return 0;
+  // Parabolic section — a rounded swale you could run a mower through,
+  // not a slot trench.
+  const profile = 1 - (dz / DITCH_HALF) ** 2;
+  // Measured from where the drive actually *is* at this z, not from
+  // DRIVE_X. The centreline has bent 2.3 m by the time it reaches the
+  // swale, and centring the fill on the straight-line x put the raised
+  // embankment 2.3 m to one side of the concrete it carries: the apron's
+  // left edge overhung an open ditch and stood on a visible lip, while on
+  // the right the fill humped up under open lawn and left the culvert
+  // mouth lying on top of the ground.
+  const dx = Math.abs(x - driveCenterX(driveT(z)));
+  if (dx >= DITCH_FILL_HALF) return DITCH_DEPTH * profile;
+  return DITCH_DEPTH * profile * smootherstep(dx / DITCH_FILL_HALF);
+}
 
 export function createTreeChunk(cx, cz) {
   const group = new THREE.Group();
@@ -1163,64 +596,90 @@ function createFirePit() {
 }
 
 // The original driveway (see createHouse) is a short straight slab right
-// at the garage — fine up close, but the road now sits much further out
-// (see ROAD_Z), so this picks up where that ends and runs straight on to
-// it. Built the same way as the lawn and the road (a PlaneGeometry with
-// each vertex's height sampled from terrainHeight, then laid flat) rather
-// than the hand-rolled curved ribbon this replaced, which had its winding
-// backwards and came out as a broken white patch.
+// at the garage — fine up close, but the road sits a long way out (see
+// ROAD_Z), so this picks up where that ends and carries it the rest of the
+// way. Not a straight run: it follows the drifting centreline and
+// trumpeting width defined up by DRIVE_BEND, so it matches the photos and
+// so isHousePaved/onDriveway agree with it exactly.
+//
+// Built directly in the XZ plane as a parametric ribbon rather than as a
+// rotated PlaneGeometry. There's no rectangle to start from once the
+// centreline moves and the width varies, and going direct drops the
+// local-Y-is-minus-world-Z sign flip that the rotated version needed.
 function createDrivewayExtension() {
-  const width = 4.2;
-  // Flush with the garage driveway's own end (garageCenterX = 2.6, ending
-  // at local z = -12.5 -> world z = -23.5, from createHouse).
-  const startZ = -23.5;
+  const startZ = DRIVE_START_Z;
   // Exactly the road's near edge — both this and the road sample the same
   // terrainHeight() at the boundary, so they meet flush without needing a
   // deliberate overlap (which just showed as the driveway visibly
   // covering part of the road instead of ending at it).
   const endZ = ROAD_Z + ROAD_HALF_WIDTH;
-  const centerX = 2.6;
-  const centerZ = (startZ + endZ) / 2;
-  const length = Math.abs(startZ - endZ);
+  const segsAlong = 56;
+  const segsAcross = 10;
 
-  // The original driveway (createHouse) is a flat box riding on the
-  // house's own flat local Y — it never dips with the terrain the way
-  // this extension (which samples real terrainHeight per vertex) does.
-  // Left alone, that's a step right at the seam, since the house's pad is
-  // already past TERRAIN_PAD by the time the driveway ends. Blending from
-  // that same flat height at startZ down to the real terrain height by
-  // endZ removes the step without flattening the extension's own slope.
-  const flatHeight = terrainHeight(0, -11) + 0.03;
-  const realStartHeight = terrainHeight(centerX, startZ);
+  // The house's own driveway is a flat slab riding on its flat graded pad —
+  // it never dips with the terrain the way this extension (which samples
+  // real terrainHeight per vertex) does. Left alone that's a step right at
+  // the seam, since the pad has run out by the time the driveway ends.
+  // Blending from the pad's height at startZ down to the real terrain
+  // height by endZ removes the step without flattening the slope.
+  const flatHeight = terrainHeight(0, HOUSE_Z) + HOUSE_DRIVEWAY.surfaceY;
+  const realStartHeight = terrainHeight(DRIVE_X, startZ);
   const seamOffset = flatHeight - realStartHeight;
 
-  const geo = new THREE.PlaneGeometry(width, length, 4, 16);
-  // Recenters local (x, y) on (centerX, centerZ) before the height
-  // sampling below reads it back out — see createLawn's comment on the
-  // rotation.x = -PI/2 sign flip (local Y becomes -worldZ once flat).
-  geo.translate(centerX, -centerZ, 0);
-  const pos = geo.attributes.position;
-  for (let i = 0; i < pos.count; i++) {
-    const worldX = pos.getX(i);
-    const worldZ = -pos.getY(i);
-    const t = Math.min(1, Math.max(0, (startZ - worldZ) / (startZ - endZ)));
-    pos.setZ(i, terrainHeight(worldX, worldZ) + seamOffset * (1 - t) + 0.018);
+  const positions = [];
+  const uvs = [];
+  const indices = [];
+  for (let iv = 0; iv <= segsAlong; iv++) {
+    const t = iv / segsAlong;
+    const z = startZ + (endZ - startZ) * t;
+    const cx = driveCenterX(t);
+    const halfW = driveHalfWidth(t);
+    for (let iu = 0; iu <= segsAcross; iu++) {
+      const x = cx + (iu / segsAcross - 0.5) * 2 * halfW;
+      positions.push(
+        x,
+        // ditchDepthAt already fills the swale back in under the drive, so
+        // sampling the terrain here follows a smooth grade across the
+        // culvert rather than sagging into the ditch.
+        // 0.045, not the 0.018 this used to sit at. The road surface is
+        // terrain + 0.015 and the apron ends exactly on the road's near
+        // edge, so 3 mm of separation left the two meshes z-fighting into
+        // a torn white fringe along the whole apron lip. The resulting
+        // ~3 cm step reads correctly anyway — concrete meeting asphalt.
+        terrainHeight(x, z) + seamOffset * (1 - t) + 0.045,
+        z
+      );
+      // The same procedural concrete the house's own slabs use, mapped in
+      // metres like they are — the two meet in plain sight at startZ, and
+      // any difference in tint or grain size reads as a patch job.
+      uvs.push(x * CONCRETE_UV_SCALE, z * CONCRETE_UV_SCALE);
+    }
   }
+  const stride = segsAcross + 1;
+  for (let iv = 0; iv < segsAlong; iv++) {
+    for (let iu = 0; iu < segsAcross; iu++) {
+      const a = iv * stride + iu;
+      const b = a + 1;
+      const c = a + stride;
+      const d = c + 1;
+      // Winding matters and is easy to get backwards here: iv advances
+      // toward the road, which is -z, so the row step is -z rather than
+      // +z. That flips the sign of the cross product against what the
+      // usual +x/+z grid gives, and (a, c, b) — correct for a normal
+      // grid — points every normal into the ground, leaving the slab
+      // invisible under backface culling.
+      indices.push(a, b, c, b, d, c);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
   geo.computeVertexNormals();
 
-  // Same photographed concrete as the garage driveway (createHouse), not
-  // the flat canvas-speckle tint this replaced — that one read as
-  // near-white once lit, since it had no roughnessMap to vary the
-  // highlight the way a real photo texture does.
-  const concreteTextures = loadPbrTextures('concrete_floor', 'diff', 4, 2);
-  const concreteMat = new THREE.MeshStandardMaterial({
-    map: concreteTextures.map,
-    normalMap: concreteTextures.normalMap,
-    roughnessMap: concreteTextures.roughnessMap,
-    roughness: 1,
-  });
-  const extension = mesh(geo, concreteMat);
-  extension.rotation.x = -Math.PI / 2;
+  const extension = mesh(geo, CONCRETE_MAT);
+  extension.receiveShadow = true;
   return extension;
 }
 
@@ -1422,9 +881,6 @@ function createHammock() {
   return group;
 }
 
-// World units covered by one texture tile (plane size / repeat count) —
-// used by updateLawnTexture below to keep the pattern anchored to world
-// space instead of gluing itself to whoever's standing on it.
 // ── terrain ────────────────────────────────────────────────────────────
 // The house sits on a level pad at the top of a broad dome that falls away
 // in every direction — the driveway climbs to it from the road, and the
@@ -1433,18 +889,30 @@ function createHammock() {
 // characters and all the yard props sample it, so if it changes they all
 // move together.
 const TERRAIN_CENTER_X = 0;
-// Under the house, which sits at z = -11.
-const TERRAIN_CENTER_Z = -11;
+// Directly under the house, wherever house.js puts it.
+const TERRAIN_CENTER_Z = HOUSE_Z;
 const TERRAIN_HEIGHT = 2.4;
-// Flat out to PAD, so the house, patio and driveway all sit on level
-// ground rather than one corner hanging in the air — real lots get graded
-// that way, and a 7-unit-deep building on a curved dome would visibly
+// Flat out to PAD, so the house, its porch and all its flatwork sit on
+// level ground rather than one corner hanging in the air — real lots get
+// graded that way, and a building this size on a curved dome would visibly
 // float at the edges.
-// 9 clears the furthest corner of the house-plus-patio footprint (about
-// 7.6 units from centre) with a little margin, and no more — pushing it
-// further just flattens back lawn that should be rolling away.
-const TERRAIN_PAD = 9;
-const TERRAIN_RADIUS = 34;
+// 16 clears the furthest corner of everything the house lays down. That's
+// the outside corner of the walk wrapping the garage, which is a long way
+// out now that the house is at its real size: the assessor's plan puts the
+// garage 23 ft forward of the front door, and the concrete rings the whole
+// building. Pushing the pad further would just flatten lawn that should be
+// rolling away, but stopping short of it would leave the driveway end
+// hanging off the side of the hill.
+// Widened from 16 so the *frontage* is near-level: the garage and the road
+// sit at close to the same height, which is what the photos show. At 16 the
+// pad ran out well short of the curb and the drive climbed 1.5 m over its
+// length — a 10% grade nobody would pour. The relief in the lot comes from
+// the northwest/southeast tilt below and from the drainage swale, not from
+// the drive itself being a ramp.
+const TERRAIN_PAD = 23;
+// Raised with it, or the 10 m of falloff left between pad and radius turns
+// the yard into a plateau with a cliff around the rim.
+const TERRAIN_RADIUS = 46;
 
 // Flat at both ends, steepest in the middle — a rounded brow rather than a
 // cone, and it meets the flat outer ground without a crease.
@@ -1452,18 +920,51 @@ function smootherstep(t) {
   return t * t * t * (t * (t * 6 - 15) + 10);
 }
 
+// The lot is not a symmetric dome. Its high corner is the northwest and it
+// falls away to the southeast, so the dome's falloff is biased by heading
+// rather than depending on distance alone: ground downhill of the pad drops
+// sooner, ground uphill of it stays high further out.
+//
+// Compass: the evening sun's position across photos 002 and 006 puts west
+// at +x and north at +z, which makes the house's front (-z, the street)
+// face south and the northwest corner the back garage side. If that's
+// rotated, THIS is the only thing to change — the slope is derived from it.
+const UPHILL_X = Math.SQRT1_2;
+const UPHILL_Z = Math.SQRT1_2;
+// How much faster the ground falls heading downhill than uphill. 0 gives
+// back the symmetric dome this replaced; at 0.35 the southeast reaches flat
+// ground around radius 25 while the northwest carries on to about 44.
+const TILT_BIAS = 0.35;
+
 export function terrainHeight(x, z) {
-  const d = Math.hypot(x - TERRAIN_CENTER_X, z - TERRAIN_CENTER_Z);
-  if (d <= TERRAIN_PAD) return TERRAIN_HEIGHT;
-  if (d >= TERRAIN_RADIUS) return 0;
-  const t = (d - TERRAIN_PAD) / (TERRAIN_RADIUS - TERRAIN_PAD);
-  return TERRAIN_HEIGHT * (1 - smootherstep(t));
+  const dx = x - TERRAIN_CENTER_X;
+  const dz = z - TERRAIN_CENTER_Z;
+  const d = Math.hypot(dx, dz);
+  let h;
+  if (d <= TERRAIN_PAD) h = TERRAIN_HEIGHT;
+  else {
+    // +1 heading straight downhill (southeast), -1 straight uphill.
+    const downhill = -(dx * UPHILL_X + dz * UPHILL_Z) / d;
+    const t = (d - TERRAIN_PAD) / (TERRAIN_RADIUS - TERRAIN_PAD);
+    // Clamped, so this also covers what used to be the d >= TERRAIN_RADIUS
+    // early return: smootherstep(1) is 1, which lands on h = 0 anyway.
+    const biased = Math.min(1, Math.max(0, t * (1 + TILT_BIAS * downhill)));
+    h = TERRAIN_HEIGHT * (1 - smootherstep(biased));
+  }
+  // The drainage swale is cut *into* whatever the dome gives rather than
+  // set at a fixed height, so it stays a ditch running across the slope
+  // near the road instead of a level trench slicing through the hill.
+  return h - ditchDepthAt(x, z);
 }
 
 // Segments per world unit across the lawn. The dome's slope is gentle, so
 // this only has to be fine enough that the silhouette doesn't facet.
+// Raised from 120 (1 m per segment) once the drainage swale went in: a
+// 3.2 m ditch only spanned three segments at the old density and came out
+// as a hard crease, and grass/trees sampling terrainHeight showed the
+// ditch long before the lawn mesh did.
 const LAWN_SIZE = 120;
-const LAWN_SEGMENTS = 120;
+const LAWN_SEGMENTS = 200;
 
 function createLawn() {
   // No normalMap/roughnessMap here — those came from the old photo
@@ -1905,8 +1406,17 @@ export function createYard() {
   group.userData.lawn = lawn;
 
   const house = createHouse();
-  house.position.set(0, terrainHeight(0, -11), -11);
+  house.position.set(0, terrainHeight(0, HOUSE_Z), HOUSE_Z);
   group.add(house);
+
+  // "FORT DARLA" — staked in the front lawn beside the walk rather than
+  // hung on the house, and clear of the walk's outer edge so it reads as
+  // planted in grass. The board's default orientation faces back toward the
+  // house, hence the flip to greet someone coming up from the street.
+  const fortSign = buildYardSign('FORT DARLA');
+  fortSign.position.set(-8.5, terrainHeight(-8.5, -18), -18);
+  fortSign.rotation.y = Math.PI + 0.3;
+  group.add(fortSign);
 
   // Trees are streamed in as chunks (see createTreeChunk / CHUNK_SIZE),
   // managed from main.js based on Darla's position, not added here.
@@ -1941,14 +1451,33 @@ export function createYard() {
   const road = createRoad();
   group.add(road);
 
-  const leftTree = createTree('pine', Math.random);
-  leftTree.scale.multiplyScalar(2.1);
-  leftTree.position.set(-3.4, terrainHeight(-3.4, -30.5), -30.5);
+  // Both pines stand right at the road, one either side of the apron,
+  // which is how the photos read: you see the frontage framed between two
+  // trunks with the drive opening out between them. z is set just uphill
+  // of the swale (which now spans z -37.9 to -33.1) rather than in it —
+  // real trees sit on the crown of the lawn, not down in the drainage.
+  //
+  // These two are the only createSouthernPine in the world (see pine.js).
+  // Everything else is the cheap cone tree, which is fine out among the
+  // forest but was never going to pass for these at ten metres.
+  const pineRand = mulberry32(20260727);
+  const leftTree = createSouthernPine(pineRand, {
+    height: 6,
+    spread: 0.2,
+    trunkRadius: 0.33,
+  });
+  leftTree.position.set(-3.4, terrainHeight(-3.4, -32), -32);
   group.add(leftTree);
 
-  const rightTree = createTree('pine', Math.random);
-  rightTree.scale.multiplyScalar(2.3);
-  rightTree.position.set(9.6, terrainHeight(9.6, -29.5), -29.5);
+  const rightTree = createSouthernPine(pineRand, {
+    height: 6.6,
+    spread: 0.175,
+    trunkRadius: 0.36,
+    // The taller of the two carries its crown a little higher, which is
+    // what separates them in the photos.
+    crownBase: 0.6,
+  });
+  rightTree.position.set(9.6, terrainHeight(9.6, -32), -32);
   group.add(rightTree);
 
   // Across the road from the house, not the near shoulder — the far edge

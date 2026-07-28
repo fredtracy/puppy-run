@@ -18,6 +18,8 @@ import {
   setGrassFog,
   setGrassTime,
 } from './yard.js';
+import { HOUSE_SOLIDS, HOUSE_BACK_WALK_Z } from './house.js';
+import { createSky } from './sky.js';
 import {
   initAudio,
   startMusic,
@@ -42,10 +44,18 @@ import * as net from './net.js';
 // GRASS_ENABLED, which checks the same query param) purely for faster
 // reloads while iterating — normal loads still get grass as usual.
 const DEBUG_MODE = new URLSearchParams(window.location.search).has('debug');
-// Currently the chimney (see createHouse in yard.js): the house group
-// sits at world (0, *, -11), and the chimney's local (x, 0, z) there is
-// currently (-3.0, 0, 0.8) -> world (-3.0, ~5 [roof height], -10.2).
-const DEBUG_FOCUS = new THREE.Vector3(-3.0, 5, -10.2);
+// Currently the middle of the driveway — x on the garage centreline, z
+// halfway between where the house's own slab ends (world -28.2) and the
+// road's near edge (world -38.3, see ROAD_Z in yard.js). Orbiting this
+// frames the whole run from garage door to curb, which is what the front
+// of the property is being judged on right now. Was (0, 1.5, -12.2), the
+// middle of the house, while the elevations were being matched to the
+// reference photos.
+const DEBUG_FOCUS = new THREE.Vector3(0, 2.6, -21);
+// Where the debug camera starts relative to DEBUG_FOCUS. Out in front of
+// the house at roughly roof height, rather than the old bird's-eye offset,
+// which is the view the front elevation actually gets judged from.
+const DEBUG_EYE = new THREE.Vector3(0, 1.8, -11);
 
 // Browsers block audio until a user gesture — kick it off on the first
 // keypress or tap/click, whichever comes first.
@@ -82,17 +92,23 @@ document.body.appendChild(renderer.domElement);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 0.5, 0);
 controls.enableDamping = true;
-controls.minDistance = 0.8;
-controls.maxDistance = 26;
+// Small enough that the camera can pull right in to the character's own
+// position when you tilt all the way up — see clampOrbitToGround.
+controls.minDistance = 0.12;
+// The zoom-out limit you actually control with the scroll wheel.
+// controls.maxDistance is driven per-frame off this, so it can be
+// temporarily tightened without losing what it's meant to be.
+let orbitMaxDistance = 26;
+controls.maxDistance = orbitMaxDistance;
 
 if (DEBUG_MODE) {
   // Steep-but-not-quite-vertical (OrbitControls doesn't like sitting
   // exactly at the polar singularity) so it still reads as a 3D view
   // rather than a flat map. maxDistance raised since eyeballing a whole
   // roof from up here needs more room than the normal follow-cam ever did.
-  controls.maxDistance = 60;
+  orbitMaxDistance = 60;
   controls.target.copy(DEBUG_FOCUS);
-  camera.position.set(DEBUG_FOCUS.x, DEBUG_FOCUS.y + 14, DEBUG_FOCUS.z + 9);
+  camera.position.copy(DEBUG_FOCUS).add(DEBUG_EYE);
 }
 
 // Image-based lighting from a real photographed sky (CC0, polyhaven.com) —
@@ -150,6 +166,20 @@ const DAY_LIGHTING = {
   sun: { color: 0xfff2e0, intensity: 2.2, direction: SUN_DIRECTION },
   fill: { color: 0xcfe8ff, intensity: 0.4 },
   hemi: { sky: 0x87ceeb, ground: 0x6b8e4e, intensity: 0.6 },
+  sky: {
+    // Deep, saturated blue overhead washing out to a pale band at the
+    // skyline. The first pass was far too milky — it read as haze rather
+    // than sky, and the clouds had nothing to sit against.
+    horizon: 0x7cbde9,
+    zenith: 0x1150b0,
+    cloudLit: 0xfffdf8,
+    cloudShade: 0xb9c9dc,
+    glow: 0xffe0ac,
+    // Higher coverage threshold = less cloud. 0.52 gives scattered fair-
+    // weather cumulus with plenty of open blue between them.
+    coverage: 0.52,
+    opacity: 0.95,
+  },
 };
 const NIGHT_LIGHTING = {
   background: 0x060a18,
@@ -162,6 +192,18 @@ const NIGHT_LIGHTING = {
   sun: { color: 0xcdd8ff, intensity: 0.55, direction: MOON_DIRECTION },
   fill: { color: 0x4a5f8a, intensity: 0.15 },
   hemi: { sky: 0x1a2340, ground: 0x0d1a12, intensity: 0.25 },
+  sky: {
+    horizon: 0x14203c,
+    zenith: 0x05080f,
+    // Moonlit cloud, not white — and dim enough that the starfield behind
+    // still carries the night sky rather than being washed out by it.
+    cloudLit: 0x38456b,
+    cloudShade: 0x151d33,
+    glow: 0x9fb4e8,
+    // Thinner cover at night, so there's more open sky for the stars.
+    coverage: 0.6,
+    opacity: 0.8,
+  },
 };
 
 // One directional light doubles as both sun and moon — only its color,
@@ -214,7 +256,13 @@ darla.add(darlaGlow);
 
 // Darla's mom, hanging out by the fire pit
 const mom = createMom();
-mom.position.set(-1.9, 0, 4.4);
+// y from the terrain, not 0. Her height is only ever recomputed while she's
+// walking to a poop (see updateMomWalk) or landing out of flight, so a
+// literal 0 left her standing 2.4 m under the graded pad — buried, and
+// completely invisible for the whole game unless something made her move.
+// Playing *as* her hid the bug, because the player movement path re-grounds
+// her every frame; it only showed up when Darla was the one being driven.
+mom.position.set(-1.9, terrainHeight(-1.9, 4.4), 4.4);
 mom.rotation.y = 0.7;
 scene.add(mom);
 
@@ -953,6 +1001,11 @@ function createStarfield() {
 const starfield = createStarfield();
 scene.add(starfield);
 
+// Must exist before the first applyDayNight() below, which drives its
+// colours. Recentred on the camera every frame in animate().
+const sky = createSky();
+scene.add(sky.mesh);
+
 // Day/night toggle: re-tunes the shared lights/fog/exposure/sprites in
 // place rather than rebuilding the scene — see DAY_LIGHTING/NIGHT_LIGHTING
 // above for the actual values.
@@ -962,7 +1015,10 @@ function applyDayNight(day) {
   const cfg = day ? DAY_LIGHTING : NIGHT_LIGHTING;
   setMusicMode(day ? 'day' : 'night');
 
+  // Still set, though the sky dome covers it — it's what shows for the one
+  // frame before the dome draws, and what any future no-dome path falls to.
   scene.background.set(cfg.background);
+  sky.apply(cfg.sky, cfg.sun.direction);
   scene.fog.color.set(cfg.fogColor);
   scene.fog.near = cfg.fogNear;
   scene.fog.far = cfg.fogFar;
@@ -1403,6 +1459,41 @@ window.addEventListener('keyup', (e) => pressedKeys.delete(e.code));
 // camera.position each frame so controls.update() (still running
 // normally every frame) reconstructs the same position instead of
 // snapping the camera back to orbit around a stale target.
+// Lets you tilt the camera all the way up to vertical without it ever
+// going through the ground.
+//
+// Limiting the polar angle is the obvious approach and it's the wrong one:
+// it stops the tilt dead at whatever angle the current orbit distance
+// allows, so you still can't look up. Instead this leaves the angle free
+// and squeezes the *radius*. camera.y = target.y + r * cos(phi), so
+// staying above a floor means r <= (floor - target.y) / cos(phi) whenever
+// cos(phi) is negative — i.e. once the camera has swung below the target.
+// As the tilt approaches vertical that limit shrinks toward zero, so the
+// camera rolls in closer and closer, ends up inside the character (who
+// therefore stops being drawn in the way), and looks straight up.
+// Camera-to-target distance below which the player stops being drawn. Set
+// above the ~0.25 m the tilt-up clamp bottoms out at, so they're already
+// gone by the time you reach vertical rather than popping out at the last
+// moment.
+const PLAYER_HIDE_DISTANCE = 1.4;
+
+function clampOrbitToGround() {
+  const distance = camera.position.distanceTo(controls.target);
+  if (distance < 0.0001) return;
+  const cosPhi = (camera.position.y - controls.target.y) / distance;
+  // Sampled under the camera rather than under the target, since that's
+  // the bit of ground it's actually in danger of dipping into.
+  const floor = terrainHeight(camera.position.x, camera.position.z) + 0.25;
+  const drop = floor - controls.target.y;
+
+  let limit = orbitMaxDistance;
+  // Only bites when the camera is below the target *and* the target is
+  // above the floor; otherwise there's no radius that would help and the
+  // expression would flip sign.
+  if (cosPhi < -0.0001 && drop < 0) limit = Math.min(limit, drop / cosPhi);
+  controls.maxDistance = Math.max(controls.minDistance, limit);
+}
+
 const debugFlyDir = new THREE.Vector3();
 const debugFlyForward = new THREE.Vector3();
 const debugFlyRight = new THREE.Vector3();
@@ -2302,19 +2393,18 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 const WALK_SPEED = 4.2;
 const YARD_BOUNDS = { xMin: -9, xMax: 9, zMin: -4, zMax: 14 };
 
-// The house is a solid obstacle you walk around — it used to have a
-// walkable doorway leading to a free-roam interior, but the back door is
-// closed now and the interior's gone (see createHouse in yard.js), so
-// this is just a plain box.
-const HOUSE_SOLID = { xMin: -6.3, xMax: 6.3, zMin: -14.9, zMax: -7.5 };
-
+// The house is a solid obstacle you walk around. It's a list of boxes
+// rather than one, because the building isn't rectangular: the garage and
+// the front bay stick out past the main mass, and the screened porch is a
+// notch cut *into* the back of it that she's meant to be able to walk into.
+// house.js owns those numbers (it's what builds the walls) and exports them
+// in world coordinates.
 function isInHouseFootprint(x, z) {
-  return (
-    x > HOUSE_SOLID.xMin &&
-    x < HOUSE_SOLID.xMax &&
-    z > HOUSE_SOLID.zMin &&
-    z < HOUSE_SOLID.zMax
-  );
+  return HOUSE_SOLIDS.some((b) => x > b.xMin && x < b.xMax && z > b.zMin && z < b.zMax);
+}
+
+function houseBoxAt(x, z) {
+  return HOUSE_SOLIDS.find((b) => x > b.xMin && x < b.xMax && z > b.zMin && z < b.zMax);
 }
 
 // Resolves a per-frame move against the house as a solid box using
@@ -2337,16 +2427,27 @@ function pushOutOfHouse(prevX, prevZ, x, z) {
 // "previous position" to slide from — just projects an arbitrary clicked
 // point to the nearest valid point outside the house footprint.
 function nearestPointOutsideHouse(x, z) {
-  if (!isInHouseFootprint(x, z)) return { x, z };
-  const distLeft = x - HOUSE_SOLID.xMin;
-  const distRight = HOUSE_SOLID.xMax - x;
-  const distFront = HOUSE_SOLID.zMax - z;
-  const distBack = z - HOUSE_SOLID.zMin;
-  const minDist = Math.min(distLeft, distRight, distFront, distBack);
-  if (minDist === distFront) return { x, z: HOUSE_SOLID.zMax };
-  if (minDist === distBack) return { x, z: HOUSE_SOLID.zMin };
-  if (minDist === distLeft) return { x: HOUSE_SOLID.xMin, z };
-  return { x: HOUSE_SOLID.xMax, z };
+  const box = houseBoxAt(x, z);
+  if (!box) return { x, z };
+  const distLeft = x - box.xMin;
+  const distRight = box.xMax - x;
+  const distFront = box.zMax - z;
+  const distBack = z - box.zMin;
+  // Try the four ways out in order of how far each one is, and take the
+  // first that isn't inside some *other* part of the house — pushing
+  // straight out of the garage, say, can land you inside the main mass it's
+  // attached to. Falling all the way through means she was somewhere deep
+  // inside the building, so put her out front by the door.
+  const exits = [
+    { d: distFront, p: { x, z: box.zMax } },
+    { d: distBack, p: { x, z: box.zMin } },
+    { d: distLeft, p: { x: box.xMin, z } },
+    { d: distRight, p: { x: box.xMax, z } },
+  ].sort((a, b) => a.d - b.d);
+  const clear = exits.find((e) => !isInHouseFootprint(e.p.x, e.p.z));
+  // Last resort (every way out of this box lands in another): put her on the
+  // back walk, which is always outside the building and always reachable.
+  return clear ? clear.p : { x, z: HOUSE_BACK_WALK_Z };
 }
 
 // Keeps her within the generated world (see generateWorld/WORLD_RADIUS
@@ -3362,7 +3463,22 @@ function animate() {
   // reacting to input, but .update() still recomputes camera.position
   // from its own internal state every call regardless, which would
   // undo updateFlight's manual positioning this same frame.
-  if (!flightActive) controls.update();
+  // Every mode, not just debug — swinging the camera under the ground is
+  // never something you want, and normal play hits it too as soon as you
+  // try to look up at the pines or the roof.
+  if (!flightActive) {
+    clampOrbitToGround();
+    controls.update();
+    // Tilting all the way up rolls the camera in until it's inside the
+    // player (see clampOrbitToGround), at which point they're a wall of
+    // fur across the lens. Drop them once the camera is that close so the
+    // view is actually clear. Flight already manages mom.visible itself,
+    // hence staying out of its way here.
+    player.visible = camera.position.distanceTo(controls.target) > PLAYER_HIDE_DISTANCE;
+  }
+  // After controls.update(), so the dome is centred on where the camera
+  // actually ended up this frame rather than trailing it by one.
+  sky.update(elapsed, camera.position);
   composer.render();
 }
 
