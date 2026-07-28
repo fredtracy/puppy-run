@@ -1408,6 +1408,9 @@ export function createYard() {
   const house = createHouse();
   house.position.set(0, terrainHeight(0, HOUSE_Z), HOUSE_Z);
   group.add(house);
+  // Handed up so main.js's day/night toggle can switch the porch and garage
+  // lamps on after dark (see createHouse).
+  group.userData.nightLights = house.userData.nightLights;
 
   // "FORT DARLA" — staked in the front lawn beside the walk rather than
   // hung on the house, and clear of the walk's outer edge so it reads as

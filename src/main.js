@@ -7,7 +7,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { createDarla, createPoop } from './darla.js';
-import { createMom } from './mom.js';
+import { createMom, setHairTime } from './mom.js';
 import {
   createYard,
   createTreeChunk,
@@ -51,20 +51,27 @@ const DEBUG_MODE = new URLSearchParams(window.location.search).has('debug');
 // of the property is being judged on right now. Was (0, 1.5, -12.2), the
 // middle of the house, while the elevations were being matched to the
 // reference photos.
-const DEBUG_FOCUS = new THREE.Vector3(0, 2.6, -21);
-// Where the debug camera starts relative to DEBUG_FOCUS. Out in front of
-// the house at roughly roof height, rather than the old bird's-eye offset,
-// which is the view the front elevation actually gets judged from.
-const DEBUG_EYE = new THREE.Vector3(0, 1.8, -11);
+const DEBUG_FOCUS = new THREE.Vector3(-1, 2.65, 5);
+// Where the debug camera starts relative to DEBUG_FOCUS, rather than the old
+// fixed bird's-eye offset — being able to park it at eye level in front of
+// whatever's being worked on is most of what makes debug mode useful.
+const DEBUG_EYE = new THREE.Vector3(0.6, 0.9, -2.1);
 
 // Browsers block audio until a user gesture — kick it off on the first
 // keypress or tap/click, whichever comes first.
+//
+// Silent in debug mode. Debug is for staring at geometry and reloading every
+// few seconds, and the music restarting from the top on every reload gets
+// old fast. Same reasoning as skipping grass there.
 function beginAudioOnFirstInput() {
+  if (DEBUG_MODE) return;
   initAudio();
   startMusic();
 }
-window.addEventListener('keydown', beginAudioOnFirstInput, { once: true });
-window.addEventListener('pointerdown', beginAudioOnFirstInput, { once: true });
+if (!DEBUG_MODE) {
+  window.addEventListener('keydown', beginAudioOnFirstInput, { once: true });
+  window.addEventListener('pointerdown', beginAudioOnFirstInput, { once: true });
+}
 
 const scene = new THREE.Scene();
 // Actual values come from applyDayNight() once the scene is fully built.
@@ -100,6 +107,16 @@ controls.minDistance = 0.12;
 // temporarily tightened without losing what it's meant to be.
 let orbitMaxDistance = 26;
 controls.maxDistance = orbitMaxDistance;
+// Right-drag rotates, the way it does in most third-person RPGs. Left keeps
+// rotating too, so nothing that already worked stops working — the only
+// thing given up is panning, which was on the right button by default and
+// was never useful here anyway: it drags controls.target off the character,
+// and the follow-cam immediately hauls it back.
+controls.mouseButtons = {
+  LEFT: THREE.MOUSE.ROTATE,
+  MIDDLE: THREE.MOUSE.DOLLY,
+  RIGHT: THREE.MOUSE.ROTATE,
+};
 
 if (DEBUG_MODE) {
   // Steep-but-not-quite-vertical (OrbitControls doesn't like sitting
@@ -165,7 +182,13 @@ const DAY_LIGHTING = {
   envRotationY: ENV_ROTATION_Y,
   sun: { color: 0xfff2e0, intensity: 2.2, direction: SUN_DIRECTION },
   fill: { color: 0xcfe8ff, intensity: 0.4 },
-  hemi: { sky: 0x87ceeb, ground: 0x6b8e4e, intensity: 0.6 },
+  // Ground colour is the light bouncing up off the lawn onto everything's
+  // undersides. It was 0x6b8e4e — near the lawn's own green, and saturated
+  // enough that on pale skin it landed squarely on olive: Miranda's underjaw
+  // and collarbone came out looking bruised. Bounce light is always far less
+  // saturated than the surface it bounced off, so this is both the fix and
+  // the more correct value.
+  hemi: { sky: 0x87ceeb, ground: 0x84876c, intensity: 0.6 },
   sky: {
     // Deep, saturated blue overhead washing out to a pale band at the
     // skyline. The first pass was far too milky — it read as haze rather
@@ -1043,6 +1066,13 @@ function applyDayNight(day) {
   hemiLight.groundColor.set(cfg.hemi.ground);
   hemiLight.intensity = cfg.hemi.intensity;
 
+  // The house's exterior lamps only throw real light after dark. By day the
+  // sun overwhelms them anyway, and leaving five point lights burning would
+  // be pure cost for something nobody can see.
+  yard.userData.nightLights.forEach((light) => {
+    light.intensity = day ? 0 : 4.5;
+  });
+
   sunSprite.visible = day;
   moonSprite.visible = !day;
   starfield.visible = !day;
@@ -1244,32 +1274,28 @@ let psychedelicActive = false;
 const psychedelicButton = document.getElementById('psychedelic-button');
 const PSYCHEDELIC_DURATION_MS = 15000;
 
-// Darla's own reaction to Miranda taking off — plays locally and
-// broadcasts, same as the other one-shot cosmetic events (bark, moo,
-// callBark, etc.), so both screens see/hear it regardless of who
-// triggered it.
-function darlaShoutAtMiranda() {
-  playBarkSound();
-  showSpeechBubble(darla, 'Get down here!');
-  sendFx('darlaShout');
-}
-
+// The trip is now purely a change in how the world looks: the wiggle/colour
+// shader and the slowed music, nothing else. It used to also take Miranda
+// into first-person flight and have Darla bark "Get down here!" at her
+// twice on a timer — both are gone, so you stay on the ground and keep
+// normal control of her for the whole fifteen seconds.
+//
+// The flight system below is left intact but is no longer reached from
+// anywhere. It's the only first-person camera rig in the codebase, so it's
+// worth keeping around rather than deleting outright.
 psychedelicButton.addEventListener('pointerdown', (e) => {
   e.preventDefault();
   if (playerKind !== 'miranda' || psychedelicActive) return;
   psychedelicActive = true;
   psychedelicButton.classList.add('aiming');
   setMusicPsychedelic(true);
-  enterFlight();
-  setTimeout(darlaShoutAtMiranda, 5000);
-  setTimeout(darlaShoutAtMiranda, 10000);
   setTimeout(() => {
     psychedelicActive = false;
     psychedelicButton.classList.remove('aiming');
     setMusicPsychedelic(false);
-    exitFlight();
-    // Coming down — plays locally and broadcasts, same as darlaShoutAt
-    // Miranda above, so both screens see it regardless of who was flying.
+    // Miranda's own "coming down" beat stays — it's hers, not Darla's, and
+    // it's what marks the end of the effect. Plays locally and broadcasts,
+    // so both screens see it regardless of who triggered the skill.
     showSpeechBubble(mom, 'Whoa..');
     sendFx('mirandaComeDown');
   }, PSYCHEDELIC_DURATION_MS);
@@ -2483,6 +2509,26 @@ const moveDir = new THREE.Vector3();
 const worldUp = new THREE.Vector3(0, 1, 0);
 const followOffset = new THREE.Vector3();
 
+// How far above the player's feet the camera aims, which is not one number:
+// zoomed out you want the whole character framed, so it sits mid-body;
+// zoomed in you want their face, so it climbs to eye height. A fixed 0.5 put
+// the pivot at Miranda's waist, so zooming in got you a close-up of her
+// corset while her head sat off the top of the screen.
+//
+// It's per-character because they're wildly different heights — Miranda's
+// eyes are at 1.55, Darla's are barely off the grass.
+const CAMERA_AIM = {
+  darla: { eye: 0.6, body: 0.45 },
+  miranda: { eye: 1.53, body: 0.95 },
+};
+function cameraAimHeight() {
+  const aim = CAMERA_AIM[playerKind] ?? CAMERA_AIM.darla;
+  const distance = camera.position.distanceTo(controls.target);
+  // Fully at eye height by 1.5 units out, fully at body height from 5.
+  const t = THREE.MathUtils.clamp((distance - 1.5) / 3.5, 0, 1);
+  return THREE.MathUtils.lerp(aim.eye, aim.body, t);
+}
+
 function wrapAngle(angle) {
   return Math.atan2(Math.sin(angle), Math.cos(angle));
 }
@@ -3130,9 +3176,6 @@ function applyRemoteFx(msg) {
     // — without this it just gets overwritten by Darla's next position
     // sync, since her real client never actually turned.
     faceEachOther();
-  } else if (msg.name === 'darlaShout') {
-    playBarkSound();
-    showSpeechBubble(darla, 'Get down here!');
   } else if (msg.name === 'mirandaComeDown') {
     showSpeechBubble(mom, 'Whoa..');
   }
@@ -3416,7 +3459,7 @@ function animate() {
     // place that's an absolute world height, so standing on the crown the
     // camera would have been staring at a point two metres below her.
     followOffset
-      .set(player.position.x, player.position.y + 0.5, player.position.z)
+      .set(player.position.x, player.position.y + cameraAimHeight(), player.position.z)
       .sub(controls.target)
       .multiplyScalar(0.08);
     controls.target.add(followOffset);
@@ -3441,6 +3484,8 @@ function animate() {
   firePit.userData.light.intensity = 1.1 + Math.sin(elapsed * 17) * 0.2 + Math.random() * 0.15;
 
   setGrassTime(elapsed);
+  // Miranda's hair sways on the same clock — see the strand system in mom.js.
+  setHairTime(elapsed);
 
   // The lawn used to be a flat plane that chased the player around, with
   // its texture offset scrolled to compensate — necessary back when the

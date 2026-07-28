@@ -1588,6 +1588,11 @@ export function createHouse() {
   ));
 
   // ── street elevation ─────────────────────────────────────────────────
+  // Where each exterior lamp ends up, collected as they're placed so real
+  // point lights can be hung on them after the bake. bakeByMaterial only
+  // keeps meshes, so anything that isn't geometry has to be added to the
+  // group it returns rather than to this one.
+  const lampSpots = [];
   const garageDoorW = 4.9;
   const garageDoorH = 2.16;
   const garageDoor = buildGarageDoor(garageDoorW, garageDoorH);
@@ -1602,7 +1607,11 @@ export function createHouse() {
   [-1, 1].forEach((side) => {
     const s = buildSconce();
     s.rotation.y = Math.PI;
-    group.add(place(s, GARAGE_CX + side * (garageDoorW / 2 + 0.38), 1.95, GARAGE_FRONT_Z - 0.01));
+    const sx = GARAGE_CX + side * (garageDoorW / 2 + 0.38);
+    group.add(place(s, sx, 1.95, GARAGE_FRONT_Z - 0.01));
+    // Stood off the wall, or half the light is buried in the brick and the
+    // pool it throws comes out lopsided.
+    lampSpots.push([sx, 1.95, GARAGE_FRONT_Z - 0.3]);
   });
 
   // The three arched front windows, the centre one taller — the house's one
@@ -1658,6 +1667,9 @@ export function createHouse() {
   const alcoveSconce = buildSconce();
   alcoveSconce.rotation.y = -Math.PI / 2;
   group.add(place(alcoveSconce, GARAGE.xMin - 0.02, 1.95, -HALF_D - 1.2));
+  lampSpots.push([GARAGE.xMin - 0.32, 1.95, -HALF_D - 1.2]);
+  // The entry pendant, which is the one that actually lights the recess.
+  lampSpots.push([doorX, pendantY - 0.55, pendantZ]);
 
   // ── east elevation (-x) ──────────────────────────────────────────────
   [
@@ -1693,6 +1705,7 @@ export function createHouse() {
   const serviceSconce = buildSconce();
   serviceSconce.rotation.y = Math.PI / 2;
   group.add(place(serviceSconce, GARAGE.xMax + 0.02, 1.98, serviceZ + 0.7));
+  lampSpots.push([GARAGE.xMax + 0.32, 1.98, serviceZ + 0.7]);
 
   const meterMat = new THREE.MeshStandardMaterial({
     color: 0x8e8b84, roughness: 0.85, envMapIntensity: MATTE_ENV,
@@ -1879,5 +1892,24 @@ export function createHouse() {
     (ALCOVE.xMin + ALCOVE.xMax) / 2, (SLAB + 0.02) / 2, -HALF_D - GARAGE.proj / 2
   ));
 
-  return bakeByMaterial(group);
+  const baked = bakeByMaterial(group);
+
+  // Real light from the exterior lamps, added after the bake since that
+  // only carries meshes through. Left at zero intensity — main.js's
+  // applyDayNight is what turns them on, so they cost nothing by day.
+  //
+  // No shadow casting: a shadow-casting point light renders six faces, and
+  // five of them here would be paying for shadows of a wall the lamp is
+  // bolted to. The earlier note above buildSconce called real lights for
+  // these "silly" and leaned on emissive plus the bloom pass instead; that
+  // reads fine at dusk but leaves the porch and the garage apron pitch
+  // black at night, with four bright lamps illuminating nothing.
+  baked.userData.nightLights = lampSpots.map(([x, y, z]) => {
+    const light = new THREE.PointLight(0xffc98a, 0, 7.5, 2);
+    light.position.set(x, y, z);
+    baked.add(light);
+    return light;
+  });
+
+  return baked;
 }
