@@ -2261,82 +2261,33 @@ function valueNoise(x, z) {
   );
 }
 
-// Clover colonies, placed on a jittered grid rather than by thresholding
-// noise. This is the only way to actually guarantee they stay apart: noise
-// peaks cluster wherever they like, so two colonies routinely landed beside
-// each other and merged into one broad sweep — which is exactly what reads
-// as painted rather than as patches.
+// How much clover grows at a point, 0 to 1. Three octaves, and the reason
+// there are three is the whole design.
 //
-// One candidate colony per CLOVER_CELL square, positioned at a hashed offset
-// *inside* its own cell and kept only if the cell's own hash passes
-// CLOVER_DENSITY. Because every colony is confined to its own cell and the
-// offset is clamped to the middle half of it, two centres can never be
-// closer than half a cell — a hard floor of 5m at these numbers, where noise
-// gave no floor at all.
+// The owner's photos of the real lawn settled this: clover does not grow in
+// discrete colonies with edges. It mixes into the turf at every scale at
+// once — broad drifts several metres across, denser clumps within those, and
+// single plants scattered between them, with the frequency varying
+// continuously rather than being in or out.
 //
-// Only the 3x3 neighbourhood needs checking, since nothing outside it can
-// reach: max radius is well under one cell.
-const CLOVER_CELL = 10;
-const CLOVER_DENSITY = 0.55;
-
-function cloverClump(x, z, radius, seed) {
-  const cx = Math.floor(x / CLOVER_CELL);
-  const cz = Math.floor(z / CLOVER_CELL);
-  let best = 0;
-  for (let i = -1; i <= 1; i++) {
-    for (let j = -1; j <= 1; j++) {
-      const gx = cx + i;
-      const gz = cz + j;
-      const host = latticeHash(gx + seed, gz - seed);
-      if (host > CLOVER_DENSITY) continue;
-      // Offset within the cell, clamped to its middle half — that clamp is
-      // what preserves the spacing floor.
-      const ox = latticeHash(gx * 7 + seed, gz * 13 - seed);
-      const oz = latticeHash(gx * 31 - seed, gz * 17 + seed);
-      const px = (gx + 0.25 + ox * 0.5) * CLOVER_CELL;
-      const pz = (gz + 0.25 + oz * 0.5) * CLOVER_CELL;
-
-      // Size varies off its own hash rather than reusing `host`, which is
-      // already spoken for deciding whether the cell hosts anything at all —
-      // sharing it would tie a colony's size to its existence and put all
-      // the small ones in the same cells every time.
-      const sizeH = latticeHash(gx * 53 + seed, gz * 97 + seed);
-      const r = radius * (0.78 + sizeH * 0.44);
-
-      const dx = x - px;
-      const dz = z - pz;
-      // Cheap reject before the trigonometry below. Nothing past the largest
-      // the lobed radius can reach can possibly be inside, and this runs for
-      // every candidate blade position in the world — roughly nine times per
-      // position — so it has to bail early for the ~90% of ground that isn't
-      // near a colony at all.
-      const reach = r * 1.35;
-      if (dx * dx + dz * dz > reach * reach) continue;
-
-      // Irregular outline. Three harmonics of the angle around the centre,
-      // each with its own phase from the cell's hashes, so every colony is a
-      // different lopsided blob rather than the same disc: one low-frequency
-      // term to make it egg-shaped, and two higher ones for smaller bulges
-      // and dents. Kept modest — it should read as a natural clump, not as
-      // a starfish.
-      const ang = Math.atan2(dz, dx);
-      const lobes =
-        Math.sin(ang * 2.0 + ox * 6.2831) * 0.13 +
-        Math.sin(ang * 3.0 - oz * 6.2831) * 0.09 +
-        Math.sin(ang * 5.0 + sizeH * 6.2831) * 0.06;
-      const rLobed = r * (1 + lobes);
-
-      // Fine noise on top frays the edge at leaf-clump scale. The lobes give
-      // the colony its shape; this stops that shape having a smooth drawn
-      // line around it.
-      const wobble = 0.82 + valueNoise(x / 1.1 + seed, z / 1.1 - seed) * 0.42;
-      const d = Math.sqrt(dx * dx + dz * dz) * wobble;
-      // Linear falloff from the centre, so density ramps down to nothing at
-      // the rim and the patch has no edge to see.
-      if (d < rLobed) best = Math.max(best, 1 - d / rLobed);
-    }
-  }
-  return best;
+// This replaced a jittered-grid placement that put down lobed, feathered,
+// well-separated blobs. That was a good solution to the wrong problem: it
+// guaranteed colonies stayed apart and gave each an irregular outline, but
+// a colony with an outline at all is the thing the real lawn doesn't have.
+//
+// The fine octave (~1.15m, roughly leaf-clump scale) is what stops any
+// continuous boundary forming: it breaks up every isoline the broader
+// octaves would otherwise draw, so there is nowhere an edge can read.
+//
+// Cuts are solved per seed rather than shared. The seed offsets the sample
+// coordinates, so the same threshold yields anywhere from 0.8% to 3.5%
+// coverage over a yard this size — a shared cut is meaningless.
+function cloverField(x, z, seed, cut) {
+  const broad = valueNoise(x / 8.5 + seed, z / 8.5 - seed);
+  const mid = valueNoise(x / 3.1 - seed, z / 3.1 + seed);
+  const fine = valueNoise(x / 1.15 + seed * 1.7, z / 1.15 - seed * 1.3);
+  const n = broad * 0.42 + mid * 0.34 + fine * 0.24;
+  return Math.max(0, n - cut) * 1.5;
 }
 
 // --- Per-chunk field cache -------------------------------------------
@@ -2590,9 +2541,14 @@ function createChunkGrass(cx, cz, rand) {
   const fDuff = sampleChunkField(pineDuff, originX, originZ);
   const fVigour = sampleChunkField((x, z) => lawnVigour(x, z), originX, originZ);
   const fWild = sampleChunkField(lawnWildness, originX, originZ);
-  const fClover = sampleChunkField((x, z) => cloverClump(x, z, 2.55, 88), originX, originZ);
-  const fPale = sampleChunkField((x, z) => cloverClump(x, z, 2.85, 214), originX, originZ);
-  const fBlue = sampleChunkField((x, z) => cloverClump(x, z, 1.0, 401), originX, originZ);
+  // Cuts are solved per seed against a target share of the yard — pale 12%,
+  // dark 9%, blue 5%. Because one roll picks between them they compete
+  // rather than stack, landing around 24% of the yard carrying visible
+  // clover: roughly double the colony version, and much closer to the real
+  // lawn, which is mixed rather than patched.
+  const fPale = sampleChunkField((x, z) => cloverField(x, z, 214, 0.587), originX, originZ);
+  const fClover = sampleChunkField((x, z) => cloverField(x, z, 88, 0.646), originX, originZ);
+  const fBlue = sampleChunkField((x, z) => cloverField(x, z, 401, 0.603), originX, originZ);
   const fCoarse = sampleChunkField(
     (x, z) => valueNoise(x / 4.2 + 7.4, z / 4.2 - 55.6), originX, originZ
   );
@@ -2704,29 +2660,16 @@ function createChunkGrass(cx, cz, rand) {
       // used to do that job was removed for drawing visible regions (see the
       // note in the fragment shader).
       //
-      // All three colonies come from cloverClump, which places them on a
-      // jittered grid instead of thresholding noise. Measured, the noise
-      // version had clover on 65% of the yard between the three of them
-      // (dark 23%, pale 38%, blue 5%) — hence how much of it there seemed to
-      // be. These radii put each at about a fifth of that, and the grid
-      // guarantees a 5m floor between colony centres, which noise could not:
-      // its peaks cluster freely, so two patches regularly landed touching
-      // and merged into one broad sweep.
+      // Cuts are solved per seed (see the sampling block above). The 0.55
+      // strength is why clover never fully takes over anywhere: even at the
+      // densest point of the field, turf still grows through it. That reads
+      // as clover *in* a lawn, where total takeover reads as a different
+      // material laid on top of one.
       //
-      // The 0.55 strength is the other half of why a patch has no visible
-      // edge. Combined with cloverClump's linear falloff, density runs from
-      // 55% clover at a colony's centre down to nothing at its rim, so turf
-      // and clover interleave the whole way out. An early version used a
-      // multiplier steep enough to saturate immediately past the threshold,
-      // which made every patch ~100% clover inside and 0% outside — a hard
-      // boundary by construction, whatever shape it was. Leaving grass
-      // visible through the middle also matters: it reads as clover *in* a
-      // lawn, where total takeover reads as a different material laid on top.
-      //
-      // Separate seeds so the three don't stack on the same ground, and
-      // deliberately independent of vigour — real clover does favour poor
-      // ground, but that would tie the colonies back to the field that kept
-      // generating region shapes.
+      // Separate seeds so the three don't sit on the same ground, and
+      // deliberately independent of vigour. Real clover does favour poor
+      // soil, but tying it to that field would put clover and thin grass in
+      // the same places and reintroduce visible regions.
       const cloverChance = field(fClover, x, z) * 0.55;
       const paleChance = field(fPale, x, z) * 0.55;
       const blueChance = field(fBlue, x, z) * 0.55;

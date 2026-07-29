@@ -97,6 +97,17 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       `SPAWN_AT` in `main.js`) — it's the main thing making close-quarters
       inspection painful.
 
+- [ ] **Pine bark reads as grey stone blocks up close.** The plate lattice in
+      `makeBarkTextures` (pine.js) is right in structure but too regular and
+      too grey — the plates are near-uniform rectangles with even mortar-like
+      fissures, so it looks like a stone column rather than wood. Wants more
+      size variation between plates, warmer tone, and fissures that vary in
+      width along their length.
+- [ ] **Fog is heavy enough to wash out the frontage.** From across the road
+      the house and pines go pale blue-grey and lose most of their contrast.
+      Fine as an edge-of-world device, too strong at 30-40m. See
+      `DAY_FOG`/`NIGHT_FOG` in main.js.
+
 ## Done
 
 - [x] Sky no longer stops halfway down. Three separate causes: the lower
