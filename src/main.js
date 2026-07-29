@@ -9,6 +9,7 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { createDarla, createPoop } from './darla.js';
 import { createMom, setHairTime, setMomNight } from './mom.js';
 import { initNightTransition, playNightTransition } from './transition.js';
+import { drawMirandaFace } from './portrait-miranda.js';
 import {
   createYard,
   createTreeChunk,
@@ -484,10 +485,9 @@ mom.position.set(-1.9, terrainHeight(-1.9, 4.4), 4.4);
 mom.rotation.y = 0.7;
 scene.add(mom);
 
-// Shoots her face twice, bare and made up, for the day/night fade to wipe
-// between. Same reasoning as Darla's capture above — it's two quick renders
-// taken here, at load, so the transition itself never has to touch 3D.
-initNightTransition(renderer, mom);
+// The day/night fade draws her portrait rather than her model, so this only
+// needs the canvas to exist — no capture, and nothing here depends on `mom`.
+initNightTransition();
 
 // Hover highlight for click-to-interact targets (Darla/Miranda/hammock): a
 // soft yellow glow sprite floating around them, rather than tinting their
@@ -598,62 +598,16 @@ function drawDarlaPortrait(ctx, size) {
   ctx.restore();
 }
 
-function drawMirandaPortrait(ctx, size) {
-  const c = size / 2;
-  ctx.clearRect(0, 0, size, size);
-  ctx.save();
-  ctx.translate(c, c);
-
-  // Long hair volume behind the head
-  ctx.fillStyle = '#1f1613';
-  ctx.beginPath();
-  ctx.ellipse(0, c * 0.05, c * 0.82, c * 0.92, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Face
-  ctx.fillStyle = '#f0c9a8';
-  ctx.beginPath();
-  ctx.arc(0, c * 0.02, c * 0.58, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Blunt bangs across the forehead
-  ctx.fillStyle = '#1f1613';
-  ctx.beginPath();
-  ctx.ellipse(0, -c * 0.32, c * 0.56, c * 0.2, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Blush
-  ctx.fillStyle = 'rgba(217, 154, 138, 0.5)';
-  [-1, 1].forEach((side) => {
-    ctx.beginPath();
-    ctx.ellipse(side * c * 0.38, c * 0.14, c * 0.12, c * 0.08, 0, 0, Math.PI * 2);
-    ctx.fill();
-  });
-
-  // Eyes
-  ctx.fillStyle = '#2f7fd1';
-  [-1, 1].forEach((side) => {
-    ctx.beginPath();
-    ctx.arc(side * c * 0.24, -c * 0.02, c * 0.08, 0, Math.PI * 2);
-    ctx.fill();
-  });
-
-  // Lips
-  ctx.fillStyle = '#6b1c2e';
-  ctx.beginPath();
-  ctx.ellipse(0, c * 0.28, c * 0.14, c * 0.06, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.restore();
-}
-
 drawDarlaPortrait(document.getElementById('portrait-darla').getContext('2d'), 128);
-drawMirandaPortrait(document.getElementById('portrait-miranda').getContext('2d'), 128);
+// Her daytime face — bare-eyed, warm ground, no sparkles. The night version of
+// the same drawing is what the day/night fade transforms into; see
+// portrait-miranda.js and transition.js.
+drawMirandaFace(document.getElementById('portrait-miranda').getContext('2d'), 128, { night: 0 });
 
 // Same two portraits, small and overlapping, standing in for a generic
 // "two players" icon on the multiplayer button — reuses the exact same
 // drawing functions rather than a separate composited image.
-drawMirandaPortrait(document.getElementById('mp-icon-miranda').getContext('2d'), 32);
+drawMirandaFace(document.getElementById('mp-icon-miranda').getContext('2d'), 32, { night: 0 });
 drawDarlaPortrait(document.getElementById('mp-icon-darla').getContext('2d'), 32);
 
 // Favicon: Darla's same hand-drawn portrait, just rendered small — reuses

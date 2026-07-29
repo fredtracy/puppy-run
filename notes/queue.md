@@ -119,6 +119,13 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       tooth emoji, but they're crude — two flat white triangles floating on a
       dark red circle.
 
+- [ ] **Backspace should jump too**, alongside the existing jump key — see the
+      `pressedKeys` handling and the jump branch in `main.js`.
+
+- [ ] **Holding both mouse buttons should walk forward.** Right-drag already
+      rotates the camera, so this needs to coexist with that: both buttons down
+      means walk, and releasing one shouldn't leave her stuck walking.
+
 ## Done
 
 - [x] **Miranda's night face, and the day/night swap plays the change.**

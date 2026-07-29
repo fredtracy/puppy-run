@@ -24,9 +24,8 @@ export function makeCanvas(w, h) {
 // that's a left-facing profile; `yaw` turns the subject on the spot to pick
 // any other angle against that fixed camera.
 //
-// Returns the image plus a `project` for turning a world position into a pixel
-// coordinate in it — which is how the transition knows where on her face to
-// put the wings without hardcoding anything.
+// Returns the rendered ImageData; measureBounds below finds where the subject
+// actually landed within it.
 export function captureObject(renderer, object, options) {
   const {
     width,
@@ -39,7 +38,6 @@ export function captureObject(renderer, object, options) {
     lights = defaultLights,
     frame = null,
     pose = null,
-    points = null,
   } = options;
 
   const scene = new THREE.Scene();
@@ -134,20 +132,6 @@ export function captureObject(renderer, object, options) {
   camera.bottom = bottom;
   camera.updateProjectionMatrix();
 
-  // Project any requested markers *now*, while the subject is still standing
-  // in the shot. Doing it afterwards would mean undoing the restore below to
-  // work out where anything was, which is exactly the kind of matrix algebra
-  // that silently produces plausible-looking wrong answers.
-  const projected = [];
-  if (points) {
-    const v = new THREE.Vector3();
-    for (const node of points(object)) {
-      node.getWorldPosition(v);
-      v.applyMatrix4(camera.matrixWorldInverse).applyMatrix4(camera.projectionMatrix);
-      projected.push({ x: ((v.x + 1) / 2) * width, y: ((1 - v.y) / 2) * height });
-    }
-  }
-
   const target = new THREE.WebGLRenderTarget(width, height, { samples: 4 });
   target.texture.colorSpace = THREE.SRGBColorSpace;
 
@@ -198,7 +182,7 @@ export function captureObject(renderer, object, options) {
     }
   }
 
-  return { image, points: projected };
+  return { image };
 }
 
 // A warm key from the front and a cool fill from behind. Roughly the daytime

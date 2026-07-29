@@ -766,9 +766,7 @@ export function createMom() {
   // the mouth and jaw do more of the work.
   const EYE_X = 0.051;
   const EYE_Y = 0.006;
-  // Collected for the day/night transition, which needs to know where on her
-  // face the wings actually are so it can wipe them on in place.
-  const eyes = [];
+  // Collected so setMomNight can show and hide them together.
   const flicks = [];
   [-1, 1].forEach((side) => {
     const eye = new THREE.Group();
@@ -837,7 +835,6 @@ export function createMom() {
     flick.rotation.z = side * -1.05;
     eye.add(flick);
     flicks.push(flick);
-    eyes.push(eye);
 
     // Thin, high and arched. A heavy brow reads as stern or comic; a fine one
     // set well above the eye is what makes the face read as composed.
@@ -930,7 +927,6 @@ export function createMom() {
   group.userData.torso = bodice;
   group.userData.legs = { legL: legPivots[-1], legR: legPivots[1] };
   group.userData.arms = { armL: armPivots[-1], armR: armPivots[1] };
-  group.userData.eyes = eyes;
   group.userData.flicks = flicks;
 
   setMomNight(group, false);

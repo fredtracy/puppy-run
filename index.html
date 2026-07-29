@@ -507,8 +507,12 @@
         background: radial-gradient(circle at 50% 42%, #3a2b2a 0%, #1d1518 55%, #09070a 100%);
       }
       #transition-face {
-        width: min(62vw, 340px);
+        width: min(66vw, 360px);
         height: auto;
+        /* The portrait is drawn clipped to a circle, so a soft ring under it
+           stops it reading as a bubble floating on the dark. */
+        border-radius: 50%;
+        box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.1), 0 18px 50px rgba(0, 0, 0, 0.55);
       }
 
       /* ---- Loading screen -------------------------------------------------
@@ -776,7 +780,7 @@
     </div>
     <div id="daynight-fade"></div>
     <div id="transition-screen">
-      <canvas id="transition-face" width="520" height="580"></canvas>
+      <canvas id="transition-face" width="480" height="480"></canvas>
     </div>
     <button id="daynight-button">&#9728;&#65039;</button>
     <button id="moo-button" class="action-button">&#128046;</button>
