@@ -2491,7 +2491,79 @@ function lawnWildness(x, z) {
   return Math.min(1, Math.max(0, w));
 }
 
-const GRASS_SPACING = 0.03;
+// --- Quality tier -----------------------------------------------------
+//
+// Grass spacing is the single biggest cost in the game, in both directions:
+// world generation is ~97% grass (see notes/load-times.md) and the blades
+// are most of what the GPU draws every frame. Spacing works against area, so
+// halving it is four times the blades — which cuts both ways, and makes it
+// the right dial for weak hardware.
+//
+// The choice has to be made *before* generateWorld, because the world is
+// built once at startup rather than streamed. That rules out reacting to a
+// measured frame rate: by the time there are frames to measure, the load
+// time has already been spent and the instances already exist.
+//
+// So this is a guess from what the browser will tell us up front. It is a
+// guess — the signals are coarse and some are missing on some browsers —
+// which is why it errs toward the middle tier rather than the low one when
+// it can't tell, and why ?quality= exists to force it.
+function detectQualityTier() {
+  const forced = new URLSearchParams(window.location.search).get('quality');
+  if (forced === 'low' || forced === 'medium' || forced === 'high') return forced;
+
+  let score = 0;
+
+  // Cores. Present essentially everywhere; a phone or a netbook is usually
+  // 4 or fewer, a desktop 8+.
+  const cores = navigator.hardwareConcurrency ?? 4;
+  if (cores >= 8) score += 2;
+  else if (cores >= 6) score += 1;
+  else if (cores <= 2) score -= 2;
+  else if (cores <= 4) score -= 1;
+
+  // Memory, in GB. Chrome-only and capped at 8, so its absence says nothing.
+  const mem = navigator.deviceMemory;
+  if (mem !== undefined) {
+    if (mem >= 8) score += 1;
+    else if (mem <= 4) score -= 1;
+    else if (mem <= 2) score -= 2;
+  }
+
+  // Touch plus a small screen. Touch alone is a bad signal now that plenty
+  // of capable laptops have it, so both have to hold.
+  const touch = (navigator.maxTouchPoints ?? 0) > 0;
+  // The `> 0` guard is load-bearing: some embedded browsers report a screen
+  // size of 0, and a bare `<= 500` treats that as a phone.
+  const shortEdge = Math.min(window.screen.width, window.screen.height);
+  const small = shortEdge > 0 && shortEdge <= 500;
+  if (touch && small) score -= 3;
+
+  // The GPU's own name, where the browser will part with it. Far more
+  // informative than anything above when available, and often masked.
+  try {
+    const gl = document.createElement('canvas').getContext('webgl2');
+    const ext = gl?.getExtension('WEBGL_debug_renderer_info');
+    const name = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : '';
+    if (/rtx|radeon rx|geforce gtx 1[6-9]|apple m[1-9]/i.test(name)) score += 3;
+    else if (/adreno|mali|powervr|intel.*(hd|uhd) graphics/i.test(name)) score -= 3;
+  } catch {
+    // Blocked or unavailable — the other signals stand on their own.
+  }
+
+  if (score <= -3) return 'low';
+  if (score >= 3) return 'high';
+  return 'medium';
+}
+
+const QUALITY_TIER = detectQualityTier();
+
+// Blade counts go as the inverse square of this, so the tiers are further
+// apart than they look: medium is about half the blades of high, low about
+// a fifth. Low is deliberately still dense enough to read as turf rather
+// than as bristles — a phone that can't manage it is better served by the
+// lawn looking thin than by it looking like a hairbrush.
+const GRASS_SPACING = { high: 0.03, medium: 0.042, low: 0.068 }[QUALITY_TIER];
 // Full density out to FULL_RADIUS, then thinning linearly to nothing by
 // FADE_RADIUS. FULL_RADIUS is set to clear the whole yard clearing (whose
 // far corners sit at radius ~22-27, see inOpenArea) so the lawn itself is
