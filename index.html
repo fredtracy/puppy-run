@@ -510,16 +510,6 @@
         width: min(62vw, 340px);
         height: auto;
       }
-      #transition-caption {
-        margin: 0;
-        opacity: 0;
-        color: #cbb8e6;
-        font-size: clamp(15px, 3.6vw, 21px);
-        letter-spacing: 0.06em;
-      }
-      #transition-screen.to-day #transition-caption {
-        color: #e8cfae;
-      }
 
       /* ---- Loading screen -------------------------------------------------
          Deliberately plain CSS with no JS behind it, so the title and
@@ -787,7 +777,6 @@
     <div id="daynight-fade"></div>
     <div id="transition-screen">
       <canvas id="transition-face" width="520" height="580"></canvas>
-      <p id="transition-caption"></p>
     </div>
     <button id="daynight-button">&#9728;&#65039;</button>
     <button id="moo-button" class="action-button">&#128046;</button>

@@ -2,19 +2,17 @@
 //
 // The swap was already hidden behind a five-second fade to black (instant
 // relighting reads as a jarring flash-cut), so there was a five-second hole in
-// the middle of it with nothing in it. This fills it: her winged eyeliner goes
-// on and her fangs come down for the night, and both come back off on the way
-// to morning.
+// the middle of it with nothing in it. This fills it: her winged eyeliner draws
+// itself on for the night, and comes back off on the way to morning.
 //
 // How it's done, and why it isn't animated 3D: her head is shot twice up front
 // (see portrait.js) — once bare, once made up — and the transformation is a
 // directional wipe from one still to the other. The two images are identical
-// everywhere except the wings and the fangs, which is exactly what makes the
-// trick invisible: a wipe can be as generous as it likes around each feature
-// and still only ever reveal that feature. It also means the real geometry
-// does the drawing, so what appears on her face here is the same eyeliner the
-// model wears in the yard, not a 2D approximation of it that would have to be
-// kept in sync by hand.
+// everywhere except the wings, which is exactly what makes the trick
+// invisible: a wipe can be as generous as it likes around each eye and still
+// only ever reveal the eyeliner. It also means the real geometry does the
+// drawing, so what appears on her face here is the same wing the model wears in
+// the yard, not a 2D approximation that would have to be kept in sync by hand.
 
 import * as THREE from 'three';
 import { captureObject, makeCanvas } from './portrait.js';
@@ -25,36 +23,32 @@ import { setMomNight } from './mom.js';
 const BACKDROP_IN = 1100;
 const FACE_IN_START = 700;
 const FACE_IN_END = 1700;
-const WING_START = 1800;
-const WING_END = 3100;
-const FANG_START = 2900;
-const FANG_END = 3800;
+const WING_START = 1700;
+const WING_END = 3400;
 const HOLD_UNTIL = 4300;
 
 let screenEl = null;
-let captionEl = null;
 let ctx = null;
 let bareCanvas = null;
 let nightCanvas = null;
 let maskCanvas = null;
-// The union of the wipe regions, built separately from the mask it's applied
-// to. It has to be its own canvas: `destination-in` *intersects*, so painting
-// three regions straight onto the mask leaves only what all three have in
-// common — which for two wings at opposite corners of her face and a pair of
-// fangs is nothing at all. Union them here with source-over first, then apply
-// the result once.
+// The union of the two wing regions, built separately from the mask it's
+// applied to. It has to be its own canvas: `destination-in` *intersects*, so
+// painting both regions straight onto the mask leaves only what the two have in
+// common — which for wings at opposite corners of her face is nothing at all.
+// Union them here with source-over first, then apply the result once.
 let regionCanvas = null;
-// Pixel coordinates, within the captured image, of the things that move: each
-// eye's centre and the tip of its wing, and both fangs. Measured by projecting
-// the real meshes rather than hardcoded, so nudging her face in mom.js can't
-// leave the wipes pointing at the wrong part of her.
+// Pixel coordinates, within the captured image, of each eye's centre and the
+// tip of its wing. Measured by projecting the real meshes rather than
+// hardcoded, so nudging her face in mom.js can't leave the wipes pointing at
+// the wrong part of her.
 let marks = null;
 let playing = null;
 
 // ?face=0.55 freezes the transition at that fraction of its run and holds it
 // there, so the wipes can be looked at without chasing a five-second animation
-// with a screenshot. `&faceto=day` plays it as the morning direction (fangs
-// retracting) instead of the night one. Same spirit as ?load= and ?at=.
+// with a screenshot. `&faceto=day` plays it as the morning direction (the wings
+// coming off) instead of the night one. Same spirit as ?load= and ?at=.
 const FACE_PIN = (() => {
   const params = new URLSearchParams(location.search);
   const raw = params.get('face');
@@ -79,9 +73,9 @@ function transitionLights() {
 }
 
 // Shoot her head both ways. Framed on the head mesh alone — deliberately not
-// on everything visible, because the fangs and wings are themselves visible
-// geometry, so framing to the whole subject would produce a slightly different
-// crop for the two shots and the wipe between them would jump.
+// on everything visible, because the wings are themselves visible geometry, so
+// framing to the whole subject would produce a slightly different crop for the
+// two shots and the wipe between them would jump.
 function captureFace(renderer, mom, width, height, night) {
   setMomNight(mom, night);
   return captureObject(renderer, mom, {
@@ -96,17 +90,12 @@ function captureFace(renderer, mom, width, height, night) {
     padTop: 0.42,
     padBottom: 0.62,
     lights: transitionLights,
-    points: (object) => [
-      ...object.userData.eyes,
-      ...object.userData.flicks,
-      ...object.userData.fangs,
-    ],
+    points: (object) => [...object.userData.eyes, ...object.userData.flicks],
   });
 }
 
 export function initNightTransition(renderer, mom) {
   screenEl = document.getElementById('transition-screen');
-  captionEl = document.getElementById('transition-caption');
   const canvas = document.getElementById('transition-face');
   if (!screenEl || !canvas || !mom.userData.head) return;
 
@@ -125,11 +114,10 @@ export function initNightTransition(renderer, mom) {
   maskCanvas = makeCanvas(w, h);
   regionCanvas = makeCanvas(w, h);
 
-  // Same order as the `points` list above: two eyes, two wing tips, two fangs.
-  // Taken from the night shot, which is the one that actually has wings and
-  // fangs in it to point at.
+  // Same order as the `points` list above: two eyes, then two wing tips. Taken
+  // from the night shot, which is the one that actually has wings in it.
   const p = night.points;
-  marks = { eyes: [p[0], p[1]], flicks: [p[2], p[3]], fangs: [p[4], p[5]] };
+  marks = { eyes: [p[0], p[1]], flicks: [p[2], p[3]] };
 
   if (FACE_PIN) {
     // The two stills and the projected marks, for poking at from the console
@@ -139,10 +127,6 @@ export function initNightTransition(renderer, mom) {
     // frame at the end of the transformation rather than on the fade-out.
     screenEl.classList.toggle('to-day', !FACE_PIN.toNight);
     screenEl.style.opacity = '1';
-    if (captionEl) {
-      captionEl.textContent = FACE_PIN.toNight ? 'Fangs out' : 'Fangs away';
-      captionEl.style.opacity = '1';
-    }
     draw(HOLD_UNTIL * FACE_PIN.t, FACE_PIN.toNight);
   }
 }
@@ -177,35 +161,14 @@ function paintWingRegion(m, i, t, outward) {
   m.fillRect(x0, top, x1 - x0, bottom - top);
 }
 
-function paintFangRegion(m, t, downward) {
-  const [a, b] = marks.fangs;
-  const gap = Math.abs(b.x - a.x);
-  const pad = gap * 1.3;
-  const left = Math.min(a.x, b.x) - pad;
-  const right = Math.max(a.x, b.x) + pad;
-  const mid = (a.y + b.y) / 2;
-  const from = mid - gap * 1.5;
-  const to = mid + gap * 2.2;
-  const soft = (to - from) * 0.18;
-
-  const edge = downward ? from + (to - from) * t : to + (from - to) * t;
-  const ahead = downward ? 1 : -1;
-  const g = m.createLinearGradient(0, edge, 0, edge + ahead * soft);
-  g.addColorStop(0, 'rgba(0, 0, 0, 1)');
-  g.addColorStop(1, 'rgba(0, 0, 0, 0)');
-  m.fillStyle = g;
-  m.fillRect(left, from - soft, right - left, to - from + soft * 2);
-}
-
 function draw(now, toNight) {
   const w = ctx.canvas.width;
   const h = ctx.canvas.height;
 
   const faceAlpha = easeInOut(span(now, FACE_IN_START, FACE_IN_END));
   const wing = easeInOut(span(now, WING_START, WING_END));
-  const fang = easeInOut(span(now, FANG_START, FANG_END));
 
-  // Base is where she's coming *from*; the wipes reveal where she's going.
+  // Base is where she's coming *from*; the wipe reveals where she's going.
   const base = toNight ? bareCanvas : nightCanvas;
   const reveal = toNight ? nightCanvas : bareCanvas;
 
@@ -213,15 +176,15 @@ function draw(now, toNight) {
   ctx.globalAlpha = faceAlpha;
   ctx.drawImage(base, 0, 0);
 
-  if (wing > 0 || fang > 0) {
+  if (wing > 0) {
+    // Unioned onto their own canvas first: `destination-in` intersects rather
+    // than accumulates, so painting both eyes straight onto the mask would
+    // leave only what the two have in common, which is nothing.
     const r = regionCanvas.getContext('2d');
     r.globalCompositeOperation = 'source-over';
     r.clearRect(0, 0, w, h);
-    if (wing > 0) {
-      paintWingRegion(r, 0, wing, toNight);
-      paintWingRegion(r, 1, wing, toNight);
-    }
-    if (fang > 0) paintFangRegion(r, fang, toNight);
+    paintWingRegion(r, 0, wing, toNight);
+    paintWingRegion(r, 1, wing, toNight);
 
     const m = maskCanvas.getContext('2d');
     m.globalCompositeOperation = 'source-over';
@@ -245,7 +208,6 @@ export function playNightTransition(toNight, total) {
   playing = token;
 
   screenEl.classList.toggle('to-day', !toNight);
-  if (captionEl) captionEl.textContent = toNight ? 'Fangs out' : 'Fangs away';
 
   const step = () => {
     // A second toggle can't land mid-transition (the button is disabled for
@@ -257,9 +219,6 @@ export function playNightTransition(toNight, total) {
     const fadeIn = Math.min(1, now / BACKDROP_IN);
     const fadeOut = 1 - span(now, HOLD_UNTIL, total);
     screenEl.style.opacity = String(Math.min(fadeIn, fadeOut));
-    if (captionEl) {
-      captionEl.style.opacity = String(Math.min(span(now, FACE_IN_START, FACE_IN_END), fadeOut));
-    }
     draw(now, toNight);
 
     if (now < total) {

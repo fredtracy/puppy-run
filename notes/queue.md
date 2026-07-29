@@ -122,13 +122,19 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
 ## Done
 
 - [x] **Miranda's night face, and the day/night swap plays the change.**
-      Winged eyeliner and fangs are night-only; she's bare by day
-      (`setMomNight` in `mom.js`, driven from `applyDayNight`). The swap was
-      already a five-second fade to black with nothing in it, so the fade now
-      shows her face and the transformation across it — wings drawn on inner
-      to outer, then fangs down, and both reversed on the way to morning.
-      `src/transition.js`. `?face=0.6` pins it at any point, `&faceto=day`
-      for the morning direction.
+      Winged eyeliner is night-only; she's bare-eyed by day (`setMomNight` in
+      `mom.js`, driven from `applyDayNight`). The swap was already a
+      five-second fade to black with nothing in it, so the fade now shows her
+      face and the wings drawing themselves on, inner corner to tip, and
+      coming back off on the way to morning. `src/transition.js`.
+      `?face=0.6` pins it at any point, `&faceto=day` for the morning
+      direction.
+
+      **Fangs were built and then removed** (they were in the first commit of
+      this if they're ever wanted back): a small ivory cone per side hanging
+      from the upper lip, with its own beat in the transition after the wings
+      and a "Fangs out"/"Fangs away" caption. Cut on the owner's call — the
+      eyeliner alone is the night change now.
 
       It's a wipe between two stills of her head, shot once at load (bare and
       made up) rather than animated 3D — the two images are identical
@@ -137,14 +143,14 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       drawing, so nothing has to be kept in sync by hand.
 
       Two things that cost time and would again:
-      - **`destination-in` intersects, it doesn't accumulate.** Painting the
-        two wing regions and the fang region straight onto the mask left only
-        what all three had in common, which is nothing. The regions have to
-        be unioned onto their own canvas first (`regionCanvas`).
-      - **The fangs were buried in her lower lip.** Her lower lip's front
-        surface is at z 0.1176 and they were first placed at 0.1135, so they
-        existed, rendered, and were invisible. Anything added to her mouth
-        has to clear that.
+      - **`destination-in` intersects, it doesn't accumulate.** Painting both
+        wing regions straight onto the mask left only what they had in
+        common, which is nothing. Regions have to be unioned onto their own
+        canvas first (`regionCanvas`).
+      - **Anything added to her mouth has to clear z 0.1176**, which is where
+        her lower lip's front surface sits. The fangs were first placed at
+        0.1135 and were completely invisible despite existing and rendering —
+        a confusing thing to debug.
 
 - [x] **Loading screen** — "Puppy Run" over Darla colouring in from nose to
       tail; her rightmost pixel is progress 1.0, which with her nose to the

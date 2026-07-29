@@ -1353,7 +1353,7 @@ function applyDayNight(day) {
   // strange halo stuck to her.
   darlaGlow.visible = !day;
 
-  // Winged eyeliner and fangs are night-only. Applied here rather than by the
+  // Her winged eyeliner is night-only. Applied here rather than by the
   // transition so the state is right even when the transition never runs —
   // the very first applyDayNight below, ?debug reloads, a peer's swap arriving
   // before her face has been captured.

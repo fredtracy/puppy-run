@@ -474,9 +474,6 @@ export function createMom() {
   const irisMat = toonMat(COLORS.eye);
   const irisDeepMat = new THREE.MeshBasicMaterial({ color: COLORS.eyeDeep });
   const glintMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-  // Unlit, like the sclera and glints — a shaded white against a dark lip goes
-  // grey and stops reading as a tooth at all.
-  const fangMat = new THREE.MeshBasicMaterial({ color: 0xfffaf2 });
 
   // ── legs and boots ────────────────────────────────────────────────────
   // Each leg is a pivot group hinged at the hip so the walk cycle can swing
@@ -770,10 +767,9 @@ export function createMom() {
   const EYE_X = 0.051;
   const EYE_Y = 0.006;
   // Collected for the day/night transition, which needs to know where on her
-  // face the wings and fangs actually are so it can wipe them on in place.
+  // face the wings actually are so it can wipe them on in place.
   const eyes = [];
   const flicks = [];
-  const fangs = [];
   [-1, 1].forEach((side) => {
     const eye = new THREE.Group();
     eye.position.set(side * EYE_X, EYE_Y, 0.098);
@@ -876,21 +872,6 @@ export function createMom() {
     upper.scale.set(1.05, 0.5, 0.4);
     upper.position.set(side * 0.0085, -0.0725, 0.109);
     headGroup.add(upper);
-
-    // Fangs, hanging from the upper lip over the lower one. Night-only, same
-    // as the wings, and kept small — her mouth is closed, so this is a hint of
-    // fang, not a snarl.
-    //
-    // z matters more than it looks. Her lower lip is a wide sphere whose front
-    // surface reaches z 0.1176, so at the 0.1135 this was first written at, the
-    // fangs sat *inside* the lip with about a thousandth of a unit poking out —
-    // present in the geometry, invisible on screen, and a confusing thing to
-    // debug. They have to sit clearly proud of the lip.
-    const fang = mesh(new THREE.ConeGeometry(0.0058, 0.021, 8), fangMat);
-    fang.rotation.x = Math.PI;
-    fang.position.set(side * 0.013, -0.084, 0.1195);
-    headGroup.add(fang);
-    fangs.push(fang);
   });
 
   // ── hair ──────────────────────────────────────────────────────────────
@@ -951,18 +932,16 @@ export function createMom() {
   group.userData.arms = { armL: armPivots[-1], armR: armPivots[1] };
   group.userData.eyes = eyes;
   group.userData.flicks = flicks;
-  group.userData.fangs = fangs;
 
   setMomNight(group, false);
 
   return group;
 }
 
-// Her after-dark face: winged eyeliner and fangs. Bare by day.
+// Her after-dark face: winged eyeliner. Bare-eyed by day.
 //
 // Visibility rather than a swapped material, so the day/night fade can capture
 // the same head both ways and wipe between the two — see transition.js.
 export function setMomNight(group, night) {
   for (const flick of group.userData.flicks ?? []) flick.visible = night;
-  for (const fang of group.userData.fangs ?? []) fang.visible = night;
 }
