@@ -110,14 +110,25 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
 
 ## Done
 
+- [x] **Hammock look-drag was inverted on both axes.** Dragging right turned
+      her head left and dragging down looked up — opposite to the OrbitControls
+      feel the drag has everywhere else in the game. Both terms in the
+      `pointermove` handler were subtracting: increasing `loungeYaw` swings the
+      look direction toward the camera's own right, and `loungePitch` is
+      measured from the zenith, so adding to it is what tilts the view down
+
 - [x] **Bark and bite icons.** Bark keeps the 🐕 emoji but gains two
-      sound-wave arcs off her muzzle (CSS `::before`/`::after`, each a circle
-      with only its right border drawn), so it says "bark" and not just "dog".
-      Bite is now inline SVG — a gum line with two slim splayed fangs. Two
-      earlier attempts made the teeth wide and gave them a lower jaw to bite
-      against; both read as the letter **W**, because wide teeth on a
-      full-width bar merge into one mass with a notch in it. Long, narrow and
-      nothing else competing is what reads as fangs
+      sound-wave arcs (CSS `::before`/`::after`, each a circle with only one
+      border drawn), so it says "bark" and not just "dog". They must be on the
+      **left**: the emoji faces left, so arcs off its right come out of the
+      tail end and read as a fart.
+
+      Bite is inline SVG — angry brows over a snarling fanged muzzle. Three
+      dead ends worth not repeating: wide teeth on a full-width gum bar read as
+      the letter **W** (twice, at two sizes), and adding a dog nose between the
+      brows and the mouth turns into a white blob at button size. Brows are
+      what carry "mad"; a lip peaking in the centre with a fang at each outer
+      corner is what keeps it a snarl rather than a vampire bite
 
 - [x] **Backspace jumps, and both mouse buttons walk forward.** Backspace was
       already taken — it made Darla poop — so poop moved to **P** (Backspace is

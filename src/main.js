@@ -2613,10 +2613,16 @@ window.addEventListener('pointermove', (e) => {
   const dy = e.clientY - loungeLastY;
   loungeLastX = e.clientX;
   loungeLastY = e.clientY;
-  loungeYaw = clampLoungeYaw(loungeYaw - dx * 0.005);
+  // Both axes match OrbitControls' feel, which is what the drag does
+  // everywhere else in the game: drag right and her head turns right, drag
+  // down and she looks down toward the treeline. Both were subtracting, so
+  // both were backwards — increasing yaw swings the look direction toward the
+  // camera's own right, and pitch is measured from the zenith, so *adding* to
+  // it is what tilts the view down.
+  loungeYaw = clampLoungeYaw(loungeYaw + dx * 0.005);
   loungePitch = Math.min(
     LOUNGE_PITCH_MAX,
-    Math.max(LOUNGE_PITCH_MIN, loungePitch - dy * 0.005)
+    Math.max(LOUNGE_PITCH_MIN, loungePitch + dy * 0.005)
   );
   applyLoungeLook();
 });
