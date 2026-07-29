@@ -84,7 +84,11 @@ function bangsPath(c) {
 function star(ctx, x, y, r, colour, alpha) {
   if (alpha <= 0.01) return;
   ctx.save();
-  ctx.globalAlpha = alpha;
+  // Multiplied into whatever the caller already set, never assigned. The
+  // transition fades the whole portrait in by setting globalAlpha before
+  // calling, and anything in here that assigns instead of multiplying opts
+  // itself out of that fade — see the note in drawMirandaFace.
+  ctx.globalAlpha *= alpha;
   ctx.fillStyle = colour;
   ctx.translate(x, y);
   ctx.beginPath();
@@ -174,6 +178,13 @@ function drawEye(ctx, c, side, wing, night, small) {
   ctx.restore();
 }
 
+// Honours whatever `globalAlpha` the caller has already set — every alpha in
+// here multiplies into it rather than assigning over it. That matters because
+// the day/night transition fades the whole portrait in that way: the first
+// version assigned absolute alphas for the burst, the rim light and the
+// sparkles, so on the night-to-day pass those three arrived at full strength
+// over a face that hadn't faded in yet, and the screen showed decoration
+// floating on the yard with no Miranda behind it.
 export function drawMirandaFace(ctx, size, options = {}) {
   const night = Math.max(0, Math.min(1, options.night ?? 0));
   const wing = Math.max(0, options.wing ?? night);
@@ -199,7 +210,8 @@ export function drawMirandaFace(ctx, size, options = {}) {
 
   if (!small && night > 0.01) {
     // Radiating burst — big simple shapes, so it survives being shrunk.
-    ctx.globalAlpha = night * 0.22;
+    ctx.save();
+    ctx.globalAlpha *= night * 0.22;
     ctx.fillStyle = '#ffffff';
     for (let i = 0; i < 20; i += 2) {
       ctx.beginPath();
@@ -208,7 +220,7 @@ export function drawMirandaFace(ctx, size, options = {}) {
       ctx.closePath();
       ctx.fill();
     }
-    ctx.globalAlpha = 1;
+    ctx.restore();
   }
   ctx.restore();
 
@@ -230,7 +242,7 @@ export function drawMirandaFace(ctx, size, options = {}) {
   ctx.fill();
   if (night > 0.01) {
     ctx.save();
-    ctx.globalAlpha = night;
+    ctx.globalAlpha *= night;
     ctx.strokeStyle = HAIR_LIGHT;
     ctx.lineWidth = 0.085 * c;
     ctx.beginPath();

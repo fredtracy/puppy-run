@@ -188,37 +188,55 @@
       #dress-button {
         bottom: 168px;
       }
+      /* The dog emoji on its own said "dog", not "bark" — nothing about it
+         suggested noise. Two sound-wave arcs off her muzzle fix that. The
+         padding-right is what shifts the emoji left to make room for them,
+         since a flex box centres its content inside the padding. */
       #bark-button {
         bottom: 242px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding-right: 16px;
       }
+      /* Each arc is a circle with only its right-hand border drawn. */
+      #bark-button::before,
+      #bark-button::after {
+        content: '';
+        position: absolute;
+        border: 3px solid transparent;
+        border-right-color: #fff;
+        border-radius: 50%;
+        filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.5));
+      }
+      #bark-button::before {
+        right: 15px;
+        width: 10px;
+        height: 10px;
+      }
+      #bark-button::after {
+        right: 7px;
+        width: 20px;
+        height: 20px;
+      }
+      /* The jaw itself is inline SVG in the markup, replacing two CSS
+         border-triangles. The triangles were an improvement on a tooth emoji
+         but they hung in mid-air with nothing to grow out of, so they read as
+         two loose spikes. Giving them gums top and bottom makes it a bite. */
       #bite-button {
         bottom: 316px;
         background: rgba(90, 10, 10, 0.55);
+        display: flex;
+        align-items: center;
+        justify-content: center;
       }
       #bite-button:active {
         background: rgba(90, 10, 10, 0.8);
       }
-      /* Two snarling fangs instead of an emoji — a plain tooth read as
-         dental, not menacing. */
-      #bite-button::before,
-      #bite-button::after {
-        content: '';
-        position: absolute;
-        top: 17px;
-        width: 0;
-        height: 0;
-        border-left: 7px solid transparent;
-        border-right: 7px solid transparent;
-        border-top: 17px solid #fff;
-        filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.5));
-      }
-      #bite-button::before {
-        left: 13px;
-        transform: rotate(6deg);
-      }
-      #bite-button::after {
-        right: 13px;
-        transform: rotate(-6deg);
+      #bite-button svg {
+        width: 38px;
+        height: 38px;
+        filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.55));
       }
       #ball-button {
         bottom: 20px;
@@ -787,7 +805,18 @@
     <button id="poop-button" class="action-button">&#128169;</button>
     <button id="dress-button" class="action-button">&#128087;</button>
     <button id="bark-button" class="action-button">&#128021;</button>
-    <button id="bite-button" class="action-button"></button>
+    <button id="bite-button" class="action-button" aria-label="Bite">
+      <svg viewBox="0 0 32 32" aria-hidden="true" fill="#fff">
+        <!-- A gum line with two slim fangs. Both earlier attempts made the
+             teeth wide and gave them a lower jaw to bite against, and both
+             read as the letter W — wide teeth on a full-width bar merge into
+             one mass with a notch in it. Long and narrow, with nothing else
+             competing, is what reads as fangs. -->
+        <rect x="7" y="9.5" width="18" height="3.6" rx="1.8" />
+        <path d="M9 12.5h4.6L10 27z" />
+        <path d="M18.4 12.5h4.6L22 27z" />
+      </svg>
+    </button>
     <button id="ball-button" class="action-button"></button>
     <button id="cheese-button" class="action-button">&#129472;</button>
     <button id="call-button" class="action-button">&#128227;</button>

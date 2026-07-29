@@ -1804,9 +1804,25 @@ jumpButtonEl.addEventListener('pointerdown', (e) => {
   });
 });
 
-// Space bar jumps (hold to fly), Enter makes her moo, Backspace makes her poop
+function isTypingTarget(target) {
+  if (!target || !target.tagName) return false;
+  return target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+}
+
+// Space and Backspace both jump (hold to fly), Enter makes her moo, P makes
+// her poop.
+//
+// Poop moved off Backspace to make room for the second jump key. Backspace is
+// the more natural thumb reach of the two and jumping is the far more common
+// action, so it wins the good key; P is at least mnemonic.
 window.addEventListener('keydown', (e) => {
-  if (e.code === 'Space') {
+  // Not while typing. This matters more than it used to: the multiplayer
+  // join-code field is a real text input, and swallowing Backspace there would
+  // stop anyone correcting a typo in the code.
+  if (isTypingTarget(e.target)) return;
+  if (e.code === 'Space' || e.code === 'Backspace') {
+    // Backspace navigates back in some browser/focus combinations, so this
+    // wants preventing whether or not it ends up jumping.
     e.preventDefault();
     // Space is "ascend" during flight instead — see updateFlight.
     if (flightActive) return;
@@ -1818,14 +1834,41 @@ window.addEventListener('keydown', (e) => {
     playMooSound();
     sendFx('moo');
   }
-  if (e.code === 'Backspace' && !e.repeat && playerKind === 'darla') {
+  if (e.code === 'KeyP' && !e.repeat && playerKind === 'darla') {
     e.preventDefault();
     spawnPoop();
   }
 });
 window.addEventListener('keyup', (e) => {
-  if (e.code === 'Space') jumpHeld = false;
+  if (e.code === 'Space' || e.code === 'Backspace') jumpHeld = false;
 });
+
+// Holding both mouse buttons walks forward, so the mouse alone can drive her:
+// right-drag already rotates the camera, so with both down you steer and walk
+// at once.
+//
+// Read off `e.buttons` (a bitmask of what's currently held) rather than
+// counting `button` presses, because that can't drift out of sync — every
+// pointer event carries the true current state, so a button released over
+// another element, or a chord broken up in an odd order, still resolves
+// correctly. The blur handler covers the one case events don't: alt-tabbing
+// away mid-chord, which would otherwise leave her walking forever.
+let bothMouseButtonsHeld = false;
+const LEFT_AND_RIGHT = 1 | 2;
+function trackMouseChord(e) {
+  bothMouseButtonsHeld = (e.buttons & LEFT_AND_RIGHT) === LEFT_AND_RIGHT;
+}
+renderer.domElement.addEventListener('pointerdown', trackMouseChord);
+window.addEventListener('pointermove', trackMouseChord);
+window.addEventListener('pointerup', trackMouseChord);
+window.addEventListener('pointercancel', trackMouseChord);
+window.addEventListener('blur', () => {
+  bothMouseButtonsHeld = false;
+});
+// Without this the right button opens the browser's context menu, which both
+// interrupts the chord and leaves a menu sitting over the yard. OrbitControls
+// already uses the right button to rotate, so this was overdue regardless.
+renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
 document.getElementById('moo-button').addEventListener('pointerdown', (e) => {
   e.preventDefault();
@@ -3227,7 +3270,11 @@ function updateMovement(delta) {
     return false;
   }
 
-  const keyUp = pressedKeys.has('KeyW') || pressedKeys.has('ArrowUp');
+  // Both mouse buttons held counts as forward, and deliberately goes in here
+  // rather than beside it: everything downstream that treats forward as "the
+  // player is driving" — cancelling a click-to-move target, waking her out of
+  // the hammock — then applies to the mouse chord for free.
+  const keyUp = pressedKeys.has('KeyW') || pressedKeys.has('ArrowUp') || bothMouseButtonsHeld;
   const keyDown = pressedKeys.has('KeyS') || pressedKeys.has('ArrowDown');
   const keyRight = pressedKeys.has('KeyD') || pressedKeys.has('ArrowRight');
   const keyLeft = pressedKeys.has('KeyA') || pressedKeys.has('ArrowLeft');

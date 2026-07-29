@@ -108,25 +108,30 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       Worth pairing with a debug-panel readout of measured FPS so the
       trimming is visible rather than mysterious.
 
-- [ ] **Darla's bark icon should read as barking**, not just as a dog. It's
-      the 🐕 emoji on `#bark-button` in `index.html`, so right now it says
-      "dog" rather than "bark" — nothing about it suggests noise. The bite
-      button next to it is a hand-drawn pair of fangs in CSS rather than an
-      emoji, for the same reason; that's the precedent to follow.
-
-- [ ] **The bite icon should be better.** The CSS fangs on `#bite-button`
-      (two `border`-triangles in `index.html`) were an improvement on a plain
-      tooth emoji, but they're crude — two flat white triangles floating on a
-      dark red circle.
-
-- [ ] **Backspace should jump too**, alongside the existing jump key — see the
-      `pressedKeys` handling and the jump branch in `main.js`.
-
-- [ ] **Holding both mouse buttons should walk forward.** Right-drag already
-      rotates the camera, so this needs to coexist with that: both buttons down
-      means walk, and releasing one shouldn't leave her stuck walking.
-
 ## Done
+
+- [x] **Bark and bite icons.** Bark keeps the 🐕 emoji but gains two
+      sound-wave arcs off her muzzle (CSS `::before`/`::after`, each a circle
+      with only its right border drawn), so it says "bark" and not just "dog".
+      Bite is now inline SVG — a gum line with two slim splayed fangs. Two
+      earlier attempts made the teeth wide and gave them a lower jaw to bite
+      against; both read as the letter **W**, because wide teeth on a
+      full-width bar merge into one mass with a notch in it. Long, narrow and
+      nothing else competing is what reads as fangs
+
+- [x] **Backspace jumps, and both mouse buttons walk forward.** Backspace was
+      already taken — it made Darla poop — so poop moved to **P** (Backspace is
+      the better key and jumping is much the more common action). The mouse
+      chord is read off `e.buttons` rather than by counting presses, so it
+      can't drift out of sync, with a `blur` handler for alt-tabbing away
+      mid-chord and `contextmenu` suppressed on the canvas (the right button
+      already rotated the camera, so that was overdue). It feeds into
+      `updateMovement`'s `keyUp` specifically, so everything that treats
+      forward as "the player is driving" — cancelling click-to-move, waking her
+      out of the hammock — covers the chord for free. The keydown handler now
+      also ignores events from text inputs, without which Backspace-to-jump
+      would have made the multiplayer join-code field impossible to correct
+
 
 - [x] **Miranda's night face, and the day/night swap plays the change.**
       Winged eyeliner is night-only; she's bare-eyed by day (`setMomNight` in
