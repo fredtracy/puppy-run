@@ -1,3 +1,6 @@
 node_modules
 dist
 .DS_Store
+# Recorded demo GIFs. Kept out of history on purpose — they're a few megabytes
+# each and every re-record would add another copy rather than replace the last.
+gifs

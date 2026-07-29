@@ -12,9 +12,6 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       stalk everywhere.
 - [ ] **Fire pit** — serious pass. Wood in it during the day (not burning); at
       night the wood burns and smoke rises. Ignore the chairs.
-- [ ] **Miranda's model** — rebuild from the photos in
-      `C:\Users\fredt\Desktop\temp\pics for claude\miranda`. Current model is
-      very lacking.
 - [ ] **Trees** — match the bark much more closely to the photos, and start the
       branches lower on the trunk.
 - [ ] **Music** — rework day and night tracks to match the themes: cute happy
@@ -25,10 +22,6 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
 - [ ] **Front flower bed** — it runs straight for a while and *then* curves
       around the corner, with the sidewalk following it. Currently it cuts
       across the sidewalk. See the front-of-house photos.
-- [ ] **Winged eyeliner is night-only.** Miranda goes bare-eyed by day and puts
-      it on for the night. And since the day/night swap has a load pause, use
-      that pause as a transition: her face, applying the wing, as the
-      "loading" beat. Ties into the loading-screen item below.
 - [ ] **Discuss using subagents** to work queue items in parallel — which items
       actually parallelise (they mostly touch different files, but several
       share `yard.js`), and whether the visual-iteration loop survives being
@@ -40,9 +33,6 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       emissive around the clock, so the fixtures still look lit at noon.
 - [ ] **Back patio lights** should glow at night like the front ones now do
       (see `lampSpots` in `house.js` — the patio fixtures aren't in that list).
-- [ ] **Loading screen** — the bundle is big enough to need one. "Puppy Town"
-      in a cute font, with Darla drawing in progressively as load progresses;
-      when the fill reaches her tail she's fully loaded.
 - [ ] **Roof bar** — dark bar on the roof above the arched windows. Confirmed to
       be `SOLDIER_MAT` geometry (magenta-tint test). Ruled out: roof vents,
       chimney (stucco), backface culling through the roof void, the core
@@ -50,14 +40,11 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       roof surface where the bay's hip crosses it, showing the back wall's band
       through. Needs one focused pass.
 
-- [ ] **Miranda's loading-screen portrait** — the cute image of her on the
-      loading screen still shows the old model. Redraw it to match the
-      anime/cel-shaded rebuild.
-- [ ] **Night loading screen: her face transforming.** Winged eyeliner going
-      on *and* vampire teeth coming out, played across the load pause. Extends
-      the winged-eyeliner item above — that one covers the eyeliner as the
-      day→night transition beat; this adds the fangs and makes the whole
-      transformation the night loading screen.
+- [ ] **Miranda's character-select portrait** — the cute image of her still
+      shows the old model. Redraw it to match the anime/cel-shaded rebuild.
+      (`drawMirandaPortrait` in `main.js`. This was filed as "loading-screen
+      portrait" before there was a loading screen; the new one has only
+      Darla on it, so this is the character-select card.)
 
 - [ ] **Tint the lawn mesh by the vigour field.** Bald patches cull the grass
       blades but reveal the lawn mesh underneath, which is painted green grass
@@ -121,7 +108,71 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       Worth pairing with a debug-panel readout of measured FPS so the
       trimming is visible rather than mysterious.
 
+- [ ] **Darla's bark icon should read as barking**, not just as a dog. It's
+      the 🐕 emoji on `#bark-button` in `index.html`, so right now it says
+      "dog" rather than "bark" — nothing about it suggests noise. The bite
+      button next to it is a hand-drawn pair of fangs in CSS rather than an
+      emoji, for the same reason; that's the precedent to follow.
+
+- [ ] **The bite icon should be better.** The CSS fangs on `#bite-button`
+      (two `border`-triangles in `index.html`) were an improvement on a plain
+      tooth emoji, but they're crude — two flat white triangles floating on a
+      dark red circle.
+
 ## Done
+
+- [x] **Miranda's night face, and the day/night swap plays the change.**
+      Winged eyeliner and fangs are night-only; she's bare by day
+      (`setMomNight` in `mom.js`, driven from `applyDayNight`). The swap was
+      already a five-second fade to black with nothing in it, so the fade now
+      shows her face and the transformation across it — wings drawn on inner
+      to outer, then fangs down, and both reversed on the way to morning.
+      `src/transition.js`. `?face=0.6` pins it at any point, `&faceto=day`
+      for the morning direction.
+
+      It's a wipe between two stills of her head, shot once at load (bare and
+      made up) rather than animated 3D — the two images are identical
+      everywhere except the wings and fangs, which is what lets a generous
+      rectangular wipe reveal only the feature. Real geometry does the
+      drawing, so nothing has to be kept in sync by hand.
+
+      Two things that cost time and would again:
+      - **`destination-in` intersects, it doesn't accumulate.** Painting the
+        two wing regions and the fang region straight onto the mask left only
+        what all three had in common, which is nothing. The regions have to
+        be unioned onto their own canvas first (`regionCanvas`).
+      - **The fangs were buried in her lower lip.** Her lower lip's front
+        surface is at z 0.1176 and they were first placed at 0.1135, so they
+        existed, rendered, and were invisible. Anything added to her mouth
+        has to clear that.
+
+- [x] **Loading screen** — "Puppy Run" over Darla colouring in from nose to
+      tail; her rightmost pixel is progress 1.0, which with her nose to the
+      left is her tail. It's the **real 3D model**, shot side-on into a
+      texture once (mid-trot, matching the in-game walk cycle's diagonal leg
+      pairing) and treated as a flat image after that — so the reveal keeps
+      repainting even while the main thread is blocked building chunks. A
+      hand-drawn canvas dog was tried first and is in the history if the
+      model ever reads worse than the drawing did. `src/loading.js`; the
+      overlay markup and CSS live in `index.html` so the title is up on the
+      browser's first paint. The build was one long synchronous top-level
+      module, so the browser never got a paint in during the ~8s — the three
+      `await`s in `main.js` (before construction, per world chunk, before the
+      first render) are what make it able to redraw at all. Costs ~0.5s of
+      frames. Needs `build.target: 'esnext'` for top-level await.
+      `?load=0.6` pins it at any stage for a look.
+
+      The sweep is CSS transforms on two stacked canvases, not a canvas
+      redraw — the main thread is blocked in ~200ms lumps during world
+      generation, so a JS-drawn sweep only gets ~5fps and staircases, while
+      the compositor keeps interpolating regardless. `createTreeChunk` can't
+      be split finer to buy more frames; it's one atomic grass call.
+
+      The three status messages are `LOADING_STATUS` in `loading.js` and
+      switch on thirds of the bar, which works only because the bar's phase
+      weights track elapsed time. The first is duplicated as static text in
+      `index.html` so there's a caption before the module evaluates — change
+      one, change the other.
 
 - [x] Sky no longer stops halfway down. Three separate causes: the lower
       hemisphere was clamped to a flat fill, the cloud deck's divisor was

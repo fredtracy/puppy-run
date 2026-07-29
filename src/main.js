@@ -7,7 +7,8 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { createDarla, createPoop } from './darla.js';
-import { createMom, setHairTime } from './mom.js';
+import { createMom, setHairTime, setMomNight } from './mom.js';
+import { initNightTransition, playNightTransition } from './transition.js';
 import {
   createYard,
   createTreeChunk,
@@ -39,6 +40,43 @@ import {
   setMusicPsychedelic,
 } from './audio.js';
 import * as net from './net.js';
+import {
+  initLoadingScreen,
+  setLoadingModel,
+  setLoadingProgress,
+  setLoadingStatus,
+  nextFrame,
+  finishLoading,
+} from './loading.js';
+
+// Everything below here runs top-level and synchronously, which is why the
+// page used to sit frozen on a blank character-select for the whole ~9s build
+// (see notes/load-times.md) — the browser never got a paint in edgeways. The
+// three `await`s further down are the fix: they're the only points where the
+// main thread is handed back, and each one is what makes the loading screen
+// able to redraw. Top-level await keeps the module's execution order exactly
+// as it was, so nothing below has to care that it now happens across several
+// frames instead of one. It does require build.target 'esnext' in
+// vite.config.js — plain es2020 can't express it.
+//
+// The split of the bar between phases, taken from the measurements in
+// notes/load-times.md: construction before the world is ~10% of the wait,
+// world generation ~80%, and the first frame's shader compile the last ~10%.
+//
+// These are shares of *elapsed time*, not of work done, and that distinction
+// matters now — loading.js gives each of its three status messages a third of
+// the bar, so the bar has to track the clock for them to get a third of the
+// wait each. An earlier split weighted the pre-world phase at 0.05 and the
+// shader compile at 0.17, which was fine as a progress bar but left the first
+// message up for 41% of the load and the last for 23%.
+const LOAD_WORLD_FROM = 0.1;
+const LOAD_WORLD_TO = 0.9;
+const LOAD_SHADERS_TO = 0.99;
+
+initLoadingScreen();
+// Paints the title and her uncoloured outline before the house, lawn and
+// characters get built below.
+await nextFrame();
 
 // Debug mode: add ?debug to the URL. Skips straight past the mode-select
 // and character-select screens and parks the camera in a fixed bird's-eye
@@ -418,6 +456,12 @@ darla.position.set(-0.1, 0, 5.6);
 darla.rotation.y = 0.7 + Math.PI;
 scene.add(darla);
 
+// The loading screen's dog is this exact model, shot side-on right here. Has
+// to be after she's built and after the renderer exists, and it wants to be
+// before generateWorld — which it is by a wide margin, since the whole tail of
+// construction below still costs less than one grass chunk.
+setLoadingModel(renderer, darla);
+
 // A soft glow that follows her everywhere — now that it's actually dark,
 // this is what lets you see her and the ground immediately around her.
 // Added as a child of Darla so it tracks her position/rotation for free,
@@ -439,6 +483,11 @@ const mom = createMom();
 mom.position.set(-1.9, terrainHeight(-1.9, 4.4), 4.4);
 mom.rotation.y = 0.7;
 scene.add(mom);
+
+// Shoots her face twice, bare and made up, for the day/night fade to wipe
+// between. Same reasoning as Darla's capture above — it's two quick renders
+// taken here, at load, so the transition itself never has to touch 3D.
+initNightTransition(renderer, mom);
 
 // Hover highlight for click-to-interact targets (Darla/Miranda/hammock): a
 // soft yellow glow sprite floating around them, rather than tinting their
@@ -956,19 +1005,36 @@ const WORLD_RADIUS = 55;
 // clampToWalkable).
 const CHUNK_GRID_RADIUS = Math.ceil(WORLD_RADIUS / CHUNK_SIZE) + 1;
 
-function generateWorld() {
+// Async purely so the loading screen can breathe between chunks — the work
+// itself is the same synchronous per-chunk build it always was. The chunk list
+// is collected up front rather than built inside the loops so the progress
+// fraction has a real denominator instead of a guess.
+async function generateWorld() {
+  const pending = [];
   for (let cx = -CHUNK_GRID_RADIUS; cx <= CHUNK_GRID_RADIUS; cx++) {
     for (let cz = -CHUNK_GRID_RADIUS; cz <= CHUNK_GRID_RADIUS; cz++) {
       const centerX = cx * CHUNK_SIZE + CHUNK_SIZE / 2;
       const centerZ = cz * CHUNK_SIZE + CHUNK_SIZE / 2;
       if (Math.hypot(centerX, centerZ) > WORLD_RADIUS) continue;
-      const chunk = createTreeChunk(cx, cz);
-      scene.add(chunk);
+      pending.push([cx, cz]);
     }
+  }
+
+  for (let i = 0; i < pending.length; i++) {
+    scene.add(createTreeChunk(pending[i][0], pending[i][1]));
+    setLoadingProgress(
+      LOAD_WORLD_FROM + (LOAD_WORLD_TO - LOAD_WORLD_FROM) * ((i + 1) / pending.length)
+    );
+    // One frame per chunk. At ~30 chunks that's roughly half a second added to
+    // a ~9s load, which buys the only visible progress there is — each chunk
+    // is a couple of hundred milliseconds of solidly blocked main thread, so
+    // yielding any less often means a screen that just sits there.
+    await nextFrame();
   }
 }
 
-generateWorld();
+setLoadingProgress(LOAD_WORLD_FROM);
+await generateWorld();
 
 // A surprised little moon, hand-drawn onto a canvas texture and billboarded
 // so it always faces the camera. Pale and soft-edged with a gentle glow
@@ -1287,6 +1353,12 @@ function applyDayNight(day) {
   // strange halo stuck to her.
   darlaGlow.visible = !day;
 
+  // Winged eyeliner and fangs are night-only. Applied here rather than by the
+  // transition so the state is right even when the transition never runs —
+  // the very first applyDayNight below, ?debug reloads, a peer's swap arriving
+  // before her face has been captured.
+  setMomNight(mom, !day);
+
   // Shows the icon for the mode a click will switch *to*.
   dayNightButton.textContent = day ? '🌙' : '☀️';
 }
@@ -1302,6 +1374,9 @@ const DAY_NIGHT_FADE_MS = 2500; // half of the 5s round trip: fade out, swap, fa
 function toggleDayNight() {
   dayNightButton.disabled = true;
   dayNightFade.style.opacity = '1';
+  // Her face, transforming, played across the whole round trip — the fade is
+  // otherwise five seconds of nothing. See transition.js.
+  playNightTransition(isDay, DAY_NIGHT_FADE_MS * 2);
   if (isMultiplayer) net.send({ t: 'daynight', isDay: !isDay });
   setTimeout(() => {
     applyDayNight(!isDay);
@@ -3467,6 +3542,7 @@ function applyRemoteDayNight(day) {
   if (day === isDay) return;
   dayNightButton.disabled = true;
   dayNightFade.style.opacity = '1';
+  playNightTransition(!day, DAY_NIGHT_FADE_MS * 2);
   setTimeout(() => {
     applyDayNight(day);
     dayNightFade.style.opacity = '0';
@@ -3863,4 +3939,18 @@ function animate() {
   composer.render();
 }
 
+// The first rendered frame costs a fixed ~1.9s of shader compilation
+// (notes/load-times.md, and it barely varies run to run). Paying it here,
+// with the loading screen still up, is the whole reason that screen can be
+// dismissed onto a yard that's immediately smooth — otherwise the first
+// second of play is a freeze on a world that looks ready.
+// Given the measured ~1.9s as the sweep duration, so the edge keeps gliding
+// across this last stretch instead of arriving early and freezing — there are
+// no progress updates inside a single compile.
+setLoadingProgress(LOAD_SHADERS_TO, 1900);
+await nextFrame();
+composer.render();
+
+setLoadingStatus('Ready!');
+finishLoading();
 animate();

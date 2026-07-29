@@ -134,5 +134,44 @@ for the next attempt**, not synthetic timing — a real sampling profile of
   **Done, and it was worth 6%** — see the section above. Matrix composition
   turned out to be roughly a third of that line, and removing its overhead
   barely moved it. Where the rest of item 2 goes is still unestablished.
-- There's a **loading screen** in the queue ("Puppy Town", Darla drawing in
-  as load progresses). At ~6s that's polish; at 39s it was a necessity.
+- ~~There's a **loading screen** in the queue ("Puppy Town", Darla drawing in
+  as load progresses). At ~6s that's polish; at 39s it was a necessity.~~
+  **Built** (2026-07-29, `src/loading.js`, and it's "Puppy Run"). Two things
+  it changed about the numbers above:
+
+  1. **The load now costs ~0.5s more**, deliberately. World generation yields
+     a frame per chunk (32 of them) so the screen can actually repaint —
+     without that the main thread is blocked solid and the screen sits still.
+     Roughly 6% for the only visible progress there is.
+  2. **Item 3 has moved, not gone.** The ~1.9s first-frame shader compile is
+     now paid *before* the screen is dismissed, so it lands inside the wait
+     instead of as a freeze on the first second of play. Still worth
+     attacking, but it no longer looks like a bug when it happens.
+
+  A third thing worth recording, since it looked like a measurement and
+  isn't: **`domContentLoadedEventEnd` no longer means "the world is built".**
+  DOMContentLoaded does not wait for a top-level `await` to settle, so it now
+  fires at ~0.4s — the moment the module first suspends, not the moment it
+  finishes. Timing a load off it will tell you the build got twenty times
+  faster. It didn't. Measure the loading screen's own dismissal instead.
+
+  The bar's phase weights (`LOAD_WORLD_FROM` / `LOAD_WORLD_TO` /
+  `LOAD_SHADERS_TO` at the top of `main.js`) are shares of **elapsed time**,
+  not of work done: 10% pre-world construction, 80% world generation, 10%
+  shader compile. That distinction is load-bearing — the loading screen gives
+  each of its three status messages a third of the bar, so the bar has to
+  track the clock or the messages don't get a third of the wait each. They
+  were first weighted 0.05 / 0.75 / 0.17, which was a fine progress bar but
+  left the first message up for 41% of the load and the last for 23%. If the
+  shape of this table changes a lot, move those constants with it.
+
+  **The sweep across Darla is CSS transforms, not canvas redraws**, and that
+  is forced rather than chosen. Each chunk blocks the main thread for ~200ms
+  and there are 32 of them, so anything drawn from JS gets about five frames
+  a second and visibly staircases. `createTreeChunk` can't usefully be split
+  finer either — it's a trees loop plus one atomic `createChunkGrass` call
+  that is essentially all of the cost. Transform transitions are interpolated
+  by the compositor, which keeps running at full rate while the main thread
+  is stuck, so the sweep is smooth no matter how lumpy the work behind it is.
+  Each progress update sets a transition roughly as long as the gap between
+  updates, measured live.
