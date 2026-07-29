@@ -108,6 +108,19 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       Fine as an edge-of-world device, too strong at 30-40m. See
       `DAY_FOG`/`NIGHT_FOG` in main.js.
 
+- [ ] **Thin the lawn at runtime when the frame rate says to.** The quality
+      tier (`detectQualityTier` in yard.js) is a guess made *before*
+      generateWorld from core count, memory and GPU name, because grass
+      density is baked into the instance buffers at startup. When the guess
+      is wrong there's currently no recovery.
+      `InstancedMesh.count` can be lowered at runtime without rebuilding, so
+      measuring frame rate over the first few seconds and trimming each grass
+      mesh's count would claw back framerate on a device that turns out worse
+      than it looked. Won't help load time — the blades are already built by
+      then — so it complements the tier rather than replacing it.
+      Worth pairing with a debug-panel readout of measured FPS so the
+      trimming is visible rather than mysterious.
+
 ## Done
 
 - [x] Sky no longer stops halfway down. Three separate causes: the lower

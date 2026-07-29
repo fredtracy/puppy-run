@@ -76,13 +76,63 @@ For reference, before the lawn rebuild the scatter loop did only jitter,
 exclusion and a distance check — no field lookups at all — so it was never
 this expensive to begin with.
 
+## 2026-07-28 — the "skip the dummy Object3D" lever, measured
+
+The lever named below was tried. **It is worth about 6%, not the large win it
+was written up as.** Details, so nobody spends the afternoon on it again.
+
+Blade matrices are now written straight into `instanceMatrix.array` by
+`writeInstanceMatrix` in `yard.js`, composing a YXZ euler + uniform scale by
+hand instead of going through `Object3D.updateMatrix()`. Verified against
+`THREE.Object3D` over 20k random inputs: worst element difference exactly 0,
+so it is the same numbers by a shorter route, not an approximation.
+
+Benchmarked properly — 500k iterations, alternating passes, median of three,
+both paths warmed first:
+
+| path | ms / 500k |
+|---|---|
+| direct write | 87.0 |
+| Object3D + updateMatrix | 92.4 |
+
+**1.06x.** V8 already optimises the euler → quaternion → matrix detour well
+enough that removing it barely registers. The change is kept because it is
+verified-identical and marginally faster, but it is not a lever.
+
+### A caution about how this was measured
+
+Two wrong conclusions were reached before the right one, both from bad
+measurement, and both looked convincing:
+
+1. **Comparing against the table above.** A run measured 1,537ms against the
+   recorded 2,566ms and looked like a 40% win. It was neither — run-to-run
+   variance here is ~1.7x, and the table predates
+   `detectQualityTier`, so its blade count is probably not the 3,902,522 this
+   machine now builds. **Never compare a number to a differently-configured
+   historical one.**
+2. **Micro-benchmarking the pieces.** Timing `rand()`, `terrainHeight`, the
+   matrix write and the `forEach` separately gave a total that matched the
+   whole almost exactly — and was still wrong. `rand()` measured 116ms in one
+   test and 37ms in another for the *same call count*, because the first ran
+   with 500k small arrays live and was really measuring GC pressure. The
+   pieces do not compose: cache behaviour, GC and inlining all differ between
+   a micro-benchmark and the real loop.
+
+The apparent agreement in (2) was a coincidence and nearly led to "the PRNG is
+the bottleneck", which is not supported. **Use the DevTools Performance panel
+for the next attempt**, not synthetic timing — a real sampling profile of
+`generateWorld` would settle in one run what several benchmarks here didn't.
+
 ### Remaining levers
 
 - `GRASS_SPACING = 0.03` is the only one of consequence. Going to 0.035 drops
   ~27% of loop iterations *and* ~27% of instances, hitting items 1 and 2
   together. It changes how the lawn looks, so it hasn't been touched.
-- Item 2 (InstancedMesh build) is `Object3D` matrix composition per blade.
+- ~~Item 2 (InstancedMesh build) is `Object3D` matrix composition per blade.
   Writing the matrices directly into the instance buffer, skipping the
-  intermediate `dummy` object, would cut it without changing appearance.
+  intermediate `dummy` object, would cut it without changing appearance.~~
+  **Done, and it was worth 6%** — see the section above. Matrix composition
+  turned out to be roughly a third of that line, and removing its overhead
+  barely moved it. Where the rest of item 2 goes is still unestablished.
 - There's a **loading screen** in the queue ("Puppy Town", Darla drawing in
   as load progresses). At ~6s that's polish; at 39s it was a necessity.
