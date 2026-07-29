@@ -69,10 +69,6 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       — fine enough to bake `lawnVigour`/`pineDuff` into vertex colours and
       turn on `vertexColors`, rather than needing a second texture.
 
-- [ ] **Sky stops about halfway down.** Below that it's a single flat colour
-      with some light streaming down, instead of sky. The existing sky looks
-      great in both day and night — keep it exactly as it is and continue it
-      across the whole sky, rather than replacing it.
 
 - [ ] **Comment out the dialogue options** — clunky and not being used. Keep
       the existing speech bubbles that appear above characters' heads; clicking
@@ -102,6 +98,13 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       inspection painful.
 
 ## Done
+
+- [x] Sky no longer stops halfway down. Three separate causes: the lower
+      hemisphere was clamped to a flat fill, the cloud deck's divisor was
+      clamped near the horizon (stripes), and the deck projection ran away
+      toward the horizon and smeared clouds into vertical shafts. Zoom is
+      also capped at 13 in normal play, which keeps the world edge and the
+      mirrored lower sky out of shot to begin with
 
 - [x] Queue editing no longer prompts — the cause was Claude Code's
       sensitive-file gate on `.claude/**`, which sits *above* the

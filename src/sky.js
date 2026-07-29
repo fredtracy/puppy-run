@@ -66,7 +66,17 @@ const fragmentShader = /* glsl */ `
 
   void main() {
     vec3 dir = normalize(vDir);
-    float h = clamp(dir.y, 0.0, 1.0);
+    // Everything below works off |dir.y|, so the lower half of the dome is a
+    // mirror of the upper rather than a dead zone.
+    //
+    // It used to clamp dir.y to 0, which left the entire hemisphere below
+    // the horizon as one flat fill of uHorizon with the sun glow smeared
+    // across it — the "sky stops halfway down and turns into a single colour
+    // with light streaming through it". You see that hemisphere whenever the
+    // camera looks out past the edge of the terrain, which on a 55m world is
+    // most of the time.
+    float ay = abs(dir.y);
+    float h = clamp(ay, 0.0, 1.0);
 
     // Gradient. The low exponent keeps a wide band of pale colour sitting on
     // the horizon instead of the zenith blue crushing straight down to it.
@@ -76,7 +86,7 @@ const fragmentShader = /* glsl */ `
     float sd = max(dot(dir, normalize(uSunDir)), 0.0);
     sky += uGlow * (pow(sd, 6.0) * 0.16 + pow(sd, 40.0) * 0.35);
 
-    if (dir.y > 0.008) {
+    if (ay > 0.008) {
       // Project the view ray onto a flat cloud deck overhead. This is what
       // gives the clouds real perspective — they crowd together and flatten
       // out toward the horizon the way a real deck does, which a plain
@@ -87,11 +97,28 @@ const fragmentShader = /* glsl */ `
       // single flat magnified blob. The max() stops the divisor collapsing
       // near the horizon, where the projection would otherwise run off to
       // infinity and alias into hard streaks.
-      // The floor is set just under where the horizon fade below finishes
-      // killing the clouds anyway. Any lower and adjacent pixels near the
-      // horizon land in wildly different parts of the noise field, which
-      // aliases into hard vertical streaks along the skyline.
-      vec2 uv = dir.xz / max(dir.y, 0.12) * 3.0;
+      // Two things about this divisor, and they cause different artefacts.
+      //
+      // It is *added* rather than clamped. With max(ay, 0.12) every ray
+      // below 0.12 divides by the same number, so uv stops depending on
+      // elevation entirely and varies only with compass direction — every
+      // pixel in a vertical line samples identical noise and the skyline
+      // turns to hard stripes.
+      //
+      // And it is large. A true deck projection divides by ay alone, which
+      // runs away toward the horizon: uv covers enormous distances for tiny
+      // changes in elevation, so a single cloud gets smeared into a vertical
+      // curtain hanging down out of the deck. That is geometrically honest —
+      // a real deck really does converge like that — but a real deck also
+      // has internal structure to converge, where smooth fbm blobs just
+      // stretch. Those curtains read as light shafts, and they were the
+      // "light streaming down", not anything near the horizon.
+      //
+      // 0.32 keeps enough perspective that clouds crowd toward the skyline,
+      // while holding the stretch to about 3x across the whole dome instead
+      // of unbounded. The scale is raised to match, or the gentler divisor
+      // would simply magnify every cloud.
+      vec2 uv = dir.xz / (ay + 0.32) * 7.0;
       // Offset so the zenith doesn't sit exactly on a noise cell corner,
       // which reads as a seam directly overhead.
       uv += vec2(17.3, 23.9);
@@ -103,9 +130,23 @@ const fragmentShader = /* glsl */ `
       float n = fbm(uv + warp * 1.35);
 
       float cover = smoothstep(uCoverage, uCoverage + 0.22, n);
-      // Fade out near the horizon, where the projection stretches to
-      // infinity and would otherwise smear into hard streaks.
-      cover *= smoothstep(0.008, 0.13, dir.y);
+      // A short fade right at the skyline. It no longer has to hide the
+      // streaking — the divisor above handles that — so it can stay low and
+      // let cloud run most of the way down, which is where it needs to be:
+      // the sky band you actually see while playing is nearly all within a
+      // few degrees of the horizon. This is just haze.
+      cover *= smoothstep(0.012, 0.14, ay);
+
+      // Cloud only above the horizon. The *gradient* mirrors below it, which
+      // is what stops the lower dome being a flat fill — but mirroring the
+      // deck as well means you see the same cloud twice, with a reflection
+      // line along the skyline. From a high vantage point that reads as
+      // water, or as the whole yard being a floating island.
+      //
+      // Below the horizon you get the bare gradient instead, which passes as
+      // distant haze. (The world edge being visible at all is a separate
+      // thing — that's the 55m terrain simply running out.)
+      cover *= smoothstep(-0.035, 0.015, dir.y);
 
       // Denser interior reads as shadowed base, thin edges as lit top.
       float lit = smoothstep(0.0, 0.42, n - uCoverage);

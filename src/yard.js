@@ -2560,7 +2560,17 @@ const GRASS_FADE_RADIUS = 44;
 // main.js, since both files agree on the same URL regardless. Nothing
 // else about the grass system changes; this just short-circuits chunk
 // generation before it builds any blades.
-const GRASS_ENABLED = !new URLSearchParams(window.location.search).has('debug');
+//
+// `?debug&grass` puts it back. Debug mode is otherwise the natural place to
+// inspect the yard from — free camera, far zoom, no menus — and dropping the
+// grass made it useless for exactly the thing the yard is mostly made of.
+// Opt-in rather than default, because grass generation is nearly all of the
+// load time (see notes/load-times.md) and the fast reload is the whole point
+// of debug mode the rest of the time.
+const GRASS_ENABLED = (() => {
+  const params = new URLSearchParams(window.location.search);
+  return !params.has('debug') || params.has('grass');
+})();
 
 function createChunkGrass(cx, cz, rand) {
   if (!GRASS_ENABLED) return null;

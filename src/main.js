@@ -107,16 +107,10 @@ const DEBUG_EYE = new THREE.Vector3(0.5, 0.05, 0.6);
 // Silent in debug mode. Debug is for staring at geometry and reloading every
 // few seconds, and the music restarting from the top on every reload gets
 // old fast. Same reasoning as skipping grass there.
-// Music is off for now — the same restarting-from-the-top annoyance debug
-// mode already avoids, but it bites just as hard during any long visual
-// iteration pass. SFX still initialise; only the soundtrack is held back.
-// Flip this back to false to restore it.
-const MUSIC_MUTED = true;
-
 function beginAudioOnFirstInput() {
   if (DEBUG_MODE) return;
   initAudio();
-  if (!MUSIC_MUTED) startMusic();
+  startMusic();
 }
 if (!DEBUG_MODE) {
   window.addEventListener('keydown', beginAudioOnFirstInput, { once: true });
@@ -155,7 +149,13 @@ controls.minDistance = 0.12;
 // The zoom-out limit you actually control with the scroll wheel.
 // controls.maxDistance is driven per-frame off this, so it can be
 // temporarily tightened without losing what it's meant to be.
-let orbitMaxDistance = 26;
+//
+// Kept deliberately short for normal play. Past roughly this distance the
+// camera clears the treeline and you start looking out over the edge of the
+// 55m world, which reads as the yard being a floating island — and the sky
+// dome's lower half comes into view with it. Debug mode raises it below,
+// since inspecting a whole roof or a treeline genuinely needs the room.
+let orbitMaxDistance = 13;
 controls.maxDistance = orbitMaxDistance;
 // Right-drag rotates, the way it does in most third-person RPGs. Left keeps
 // rotating too, so nothing that already worked stops working — the only

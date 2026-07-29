@@ -238,7 +238,14 @@ function taperedTube(curve, rStart, rEnd, along, radial, power = 1, flare = 0) {
     for (let j = 0; j < radial; j++) {
       const a = i * (radial + 1) + j;
       const b = a + radial + 1;
-      indices.push(a, b, a + 1, b, b + 1, a + 1);
+      // Wound so the *outside* of the tube is the front face. It was
+      // a,b,a+1 / b,b+1,a+1, which is the opposite: the normals pushed
+      // above point outward correctly, but the triangle order told the GPU
+      // the inside was front. Backface culling then threw away the near
+      // wall and drew the far interior instead, so trunks looked hollow and
+      // their surface appeared to slide against the camera as you orbited —
+      // and thin branches lost faces entirely and read as sparse.
+      indices.push(a, a + 1, b, b, a + 1, b + 1);
     }
   }
 
