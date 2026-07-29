@@ -11,6 +11,8 @@ import { createMom, setHairTime } from './mom.js';
 import {
   createYard,
   createTreeChunk,
+  QUALITY_TIER,
+  GRASS_SPACING,
   CHUNK_SIZE,
   FIRE_PIT,
   terrainHeight,
@@ -176,6 +178,93 @@ if (DEBUG_MODE) {
   orbitMaxDistance = 60;
   controls.target.copy(DEBUG_FOCUS);
   camera.position.copy(DEBUG_FOCUS).add(DEBUG_EYE);
+  buildDebugPanel();
+}
+
+// A small panel of the switches worth flipping while looking at something,
+// debug only. Built here rather than in index.html so it costs nothing —
+// and isn't in the DOM at all — for real players.
+//
+// Every option reloads, because all of them change how the world is *built*
+// rather than how it's drawn: grass density is baked into the instance
+// buffers at startup. The reload preserves at/cam/as so you keep the shot
+// you were looking at, which is the whole reason this beats editing the URL
+// by hand.
+function buildDebugPanel() {
+  const params = new URLSearchParams(window.location.search);
+  const go = (changes) => {
+    const next = new URLSearchParams(window.location.search);
+    for (const [k, v] of Object.entries(changes)) {
+      if (v === null) next.delete(k);
+      else next.set(k, v);
+    }
+    window.location.search = next.toString();
+  };
+
+  const panel = document.createElement('div');
+  panel.style.cssText =
+    'position:fixed;top:8px;right:8px;z-index:9999;font:11px/1.5 ui-monospace,monospace;' +
+    'background:rgba(16,18,22,0.86);color:#dfe4ea;padding:8px 10px;border-radius:8px;' +
+    'max-width:230px;pointer-events:auto;user-select:none';
+
+  const row = (label) => {
+    const d = document.createElement('div');
+    d.style.cssText = 'margin:6px 0 3px;opacity:0.55;letter-spacing:0.04em';
+    d.textContent = label;
+    panel.appendChild(d);
+    const holder = document.createElement('div');
+    holder.style.cssText = 'display:flex;gap:4px;flex-wrap:wrap';
+    panel.appendChild(holder);
+    return holder;
+  };
+
+  const button = (holder, label, active, onClick) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.style.cssText =
+      'font:inherit;padding:3px 7px;border-radius:5px;cursor:pointer;border:1px solid ' +
+      (active ? '#7ec96f' : 'rgba(255,255,255,0.18)') +
+      ';background:' +
+      (active ? 'rgba(126,201,111,0.22)' : 'rgba(255,255,255,0.06)') +
+      ';color:inherit';
+    b.addEventListener('click', onClick);
+    holder.appendChild(b);
+  };
+
+  const grassOn = params.has('grass');
+
+  const head = document.createElement('div');
+  head.style.cssText = 'font-weight:700;letter-spacing:0.06em;opacity:0.9';
+  head.textContent = 'DEBUG';
+  panel.appendChild(head);
+
+  const tierRow = row(`quality — detected "${QUALITY_TIER}", spacing ${GRASS_SPACING}`);
+  for (const t of ['low', 'medium', 'high']) {
+    button(tierRow, t, params.get('quality') === t, () => go({ quality: t }));
+  }
+  // Clearing the override is worth its own button: it's the only way to see
+  // what the detection actually picks on this machine, which is the thing
+  // most likely to be wrong.
+  button(tierRow, 'auto', !params.has('quality'), () => go({ quality: null }));
+
+  const grassRow = row(
+    grassOn ? 'grass — on (slow reloads)' : 'grass — off (fast reloads)'
+  );
+  button(grassRow, 'off', !grassOn, () => go({ grass: null }));
+  button(grassRow, 'on', grassOn, () => go({ grass: '' }));
+
+  const whoRow = row('play as');
+  button(whoRow, 'miranda', SPAWN_AS !== 'darla', () => go({ as: 'miranda' }));
+  button(whoRow, 'darla', SPAWN_AS === 'darla', () => go({ as: 'darla' }));
+
+  const shotRow = row('shot');
+  button(shotRow, 'copy view url', false, () => {
+    const url = globalThis.camView();
+    navigator.clipboard?.writeText(url);
+  });
+  button(shotRow, 'leave debug', false, () => go({ debug: null, grass: null }));
+
+  document.body.appendChild(panel);
 }
 
 // Image-based lighting from a real photographed sky (CC0, polyhaven.com) —

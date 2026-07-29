@@ -2556,14 +2556,14 @@ function detectQualityTier() {
   return 'medium';
 }
 
-const QUALITY_TIER = detectQualityTier();
+export const QUALITY_TIER = detectQualityTier();
 
 // Blade counts go as the inverse square of this, so the tiers are further
 // apart than they look: medium is about half the blades of high, low about
 // a fifth. Low is deliberately still dense enough to read as turf rather
 // than as bristles — a phone that can't manage it is better served by the
 // lawn looking thin than by it looking like a hairbrush.
-const GRASS_SPACING = { high: 0.03, medium: 0.042, low: 0.068 }[QUALITY_TIER];
+export const GRASS_SPACING = { high: 0.03, medium: 0.042, low: 0.068 }[QUALITY_TIER];
 // Full density out to FULL_RADIUS, then thinning linearly to nothing by
 // FADE_RADIUS. FULL_RADIUS is set to clear the whole yard clearing (whose
 // far corners sit at radius ~22-27, see inOpenArea) so the lawn itself is
