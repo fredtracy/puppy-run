@@ -607,10 +607,15 @@ document.getElementById('pick-miranda').addEventListener('click', () => {
   if (isHost) net.send({ t: 'assign', hostKind: 'miranda' });
 });
 
-// Debug mode skips both menus entirely — see DEBUG_MODE above.
-if (DEBUG_MODE) startGame('darla');
-// So does ?at=, since its whole purpose is getting to a spot in one load.
-else if (SPAWN_AT) startGame(SPAWN_AS === 'miranda' ? 'miranda' : 'darla');
+// Debug mode and ?at= both skip the menus entirely — see DEBUG_MODE above.
+// Both honour ?as=, which matters more than it looks: debug used to force
+// Darla, so anything Miranda-only (the hammock, the shovel, her skills) had
+// to be tested in normal mode, which loads the full grass field and turns
+// every reload into a ~6 second wait.
+//
+// Miranda is the default because she's who most of the interactive work is
+// on — the hammock, the shovel, the skill buttons. `&as=darla` for the dog.
+if (DEBUG_MODE || SPAWN_AT) startGame(SPAWN_AS === 'darla' ? 'darla' : 'miranda');
 
 // --- Multiplayer lobby (mode-select screen, before character-select) ----
 const mpMenuEl = document.getElementById('mp-menu');
@@ -2340,7 +2345,13 @@ function enterHammockLounge() {
   const restLift = 0.15;
   mom.position.set(
     hammock.position.x - lengthDir.x * halfHeight,
-    hammock.userData.lieHeight + restLift,
+    // hammock.position.y matters: lieHeight is a height *within* the hammock
+    // (attachHeight minus the fabric's sag), not a world position. Without
+    // the hammock's own y added, she was placed that far above the world
+    // origin instead of above the hammock — which was harmless while the
+    // yard was flat and buried her about two metres underground once the
+    // terrain got its hill. That's the "she disappears".
+    hammock.position.y + hammock.userData.lieHeight + restLift,
     hammock.position.z - lengthDir.z * halfHeight
   );
 
@@ -2348,11 +2359,122 @@ function enterHammockLounge() {
   mom.userData.legs.legR.rotation.x = 0;
   mom.userData.arms.armL.rotation.x = 0;
   mom.userData.arms.armR.rotation.x = 0;
+
+  // First person, from her head, looking at the sky. Lying in a hammock is
+  // one of the few things in the game with nothing to *do* — the point is
+  // the view, and a third-person camera of someone lying still isn't it.
+  //
+  // Orbit is switched off so the framing holds; the follow-cam is skipped
+  // for the same reason (see the guard in animate). Clicking anywhere gets
+  // her up again, which restores both.
+  controls.enabled = false;
+  const headOffset = lengthDir.clone().multiplyScalar(1.24);
+  camera.position.set(
+    mom.position.x + headOffset.x,
+    mom.position.y + 0.18,
+    mom.position.z + headOffset.z
+  );
+  // Deliberately a few degrees off vertical rather than dead-on. Aiming
+  // exactly along the camera's own up vector is a degenerate lookAt — the
+  // orientation is undefined and the view rolls arbitrarily. The tilt is
+  // small enough to read as straight up, and leans back over her head so
+  // the horizon sits just out of frame.
+  controls.target.set(
+    camera.position.x + lengthDir.x * 0.35,
+    camera.position.y + 6,
+    camera.position.z + lengthDir.z * 0.35
+  );
+  // Where she's looking, as yaw/pitch about her own head. Yaw starts along
+  // her body so the initial view leans back over her; pitch is measured from
+  // straight up, so 0 is the zenith.
+  // Aimed back down her body toward her feet, not up over her head. Looking
+  // straight up is a degenerate lookAt, so the aim is tilted a few degrees
+  // to give the roll something to resolve against — and screen-up ends up
+  // being world-up projected onto the view, which points *opposite* the
+  // tilt. Tilting toward her head therefore put screen-up at her feet and
+  // mirrored left and right: the house appeared on the wrong side.
+  loungeYaw = Math.atan2(-lengthDir.z, -lengthDir.x);
+  loungePitch = LOUNGE_PITCH_MIN;
+  loungeYawHome = loungeYaw;
+  applyLoungeLook();
+  // Otherwise the camera sits inside her head and renders its backfaces.
+  mom.visible = false;
+}
+
+// Look-around while lying down, driven by dragging.
+//
+// This can't go through OrbitControls even with it enabled, because orbit
+// swings the *camera* around a fixed target — and here the target sits six
+// metres above her head, so dragging would carry her viewpoint in a wide arc
+// through the air instead of turning her head. First person needs the
+// opposite: camera pinned, target moved. So it's a small custom handler.
+//
+// Pitch is clamped short of the horizon: she can look up, and out at the
+// treeline, but not down past her own body at the ground — which both looks
+// wrong lying in a hammock and would show the camera clipping through her.
+// Yaw is limited either side of her body axis rather than free, because a
+// person lying down can turn their head, not spin it.
+const LOUNGE_PITCH_MIN = 0.05; // ~3 degrees off the zenith
+const LOUNGE_PITCH_MAX = 1.32; // ~76 degrees, a little above the horizon
+const LOUNGE_YAW_RANGE = 1.85; // ~106 degrees either side
+let loungeYaw = 0;
+let loungeYawHome = 0;
+let loungePitch = LOUNGE_PITCH_MIN;
+let loungeDragging = false;
+let loungeLastX = 0;
+let loungeLastY = 0;
+
+function applyLoungeLook() {
+  const sinP = Math.sin(loungePitch);
+  controls.target.set(
+    camera.position.x + sinP * Math.cos(loungeYaw) * 6,
+    camera.position.y + Math.cos(loungePitch) * 6,
+    camera.position.z + sinP * Math.sin(loungeYaw) * 6
+  );
+  // lookAt rather than controls.update(): update() recomputes the camera
+  // position from OrbitControls' own internal state and would immediately
+  // undo the head placement.
+  camera.lookAt(controls.target);
+}
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (!mirandaLounging) return;
+  loungeDragging = true;
+  loungeLastX = e.clientX;
+  loungeLastY = e.clientY;
+});
+window.addEventListener('pointerup', () => {
+  loungeDragging = false;
+});
+window.addEventListener('pointermove', (e) => {
+  if (!mirandaLounging || !loungeDragging) return;
+  const dx = e.clientX - loungeLastX;
+  const dy = e.clientY - loungeLastY;
+  loungeLastX = e.clientX;
+  loungeLastY = e.clientY;
+  loungeYaw = clampLoungeYaw(loungeYaw - dx * 0.005);
+  loungePitch = Math.min(
+    LOUNGE_PITCH_MAX,
+    Math.max(LOUNGE_PITCH_MIN, loungePitch - dy * 0.005)
+  );
+  applyLoungeLook();
+});
+
+// Kept as a signed difference from her body axis so the limit works across
+// the -pi/pi wrap, which a plain min/max on the raw angle does not.
+function clampLoungeYaw(yaw) {
+  let d = yaw - loungeYawHome;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return loungeYawHome + Math.min(LOUNGE_YAW_RANGE, Math.max(-LOUNGE_YAW_RANGE, d));
 }
 
 function exitHammockLounge() {
   mirandaLounging = false;
+  loungeDragging = false;
   mom.quaternion.identity();
+  mom.visible = true;
+  controls.enabled = true;
 }
 
 const hammockGlow = createHoverGlow(3.4, 1.7, yard.userData.hammock.userData.attachHeight);
@@ -3354,7 +3476,17 @@ let elapsed = 0;
 
 function animate() {
   requestAnimationFrame(animate);
-  const delta = clock.getDelta();
+  // Clamped, because requestAnimationFrame stops entirely while the tab is
+  // hidden or the window minimised. The first frame back would otherwise
+  // carry a delta of however long you were away — minimise for two minutes
+  // and every `position += speed * delta` in here advances by two minutes'
+  // worth in a single step, which teleported Darla and Miranda to wherever
+  // that landed. Timers built on `elapsed` jumped with them.
+  //
+  // 1/15s is low enough that nothing can cross a wall or a trigger in one
+  // frame, and high enough that a genuine slow frame still animates rather
+  // than stuttering in slow motion.
+  const delta = Math.min(clock.getDelta(), 1 / 15);
   elapsed += delta;
 
   // Sent to the peer once, at the very end of this function, once every
@@ -3565,7 +3697,9 @@ function animate() {
   // itself every frame — this would just fight it. Also skipped in debug
   // mode, which wants the camera to stay parked over DEBUG_FOCUS rather
   // than drift toward wherever the player wanders off to.
-  if (gameStarted && !flightActive && !DEBUG_MODE) {
+  // ...and not while she's in the hammock, which parks the camera at her
+  // head looking up and wants it left exactly there.
+  if (gameStarted && !flightActive && !DEBUG_MODE && !mirandaLounging) {
     // Aim just above the player's feet, wherever those actually are. This
     // used to be a flat 0.5 — fine on level ground, but with the hill in
     // place that's an absolute world height, so standing on the crown the
@@ -3620,7 +3754,11 @@ function animate() {
   // Every mode, not just debug — swinging the camera under the ground is
   // never something you want, and normal play hits it too as soon as you
   // try to look up at the pines or the roof.
-  if (!flightActive) {
+  // Skipped while lounging for the same reason as flying: .update() would
+  // recompute camera.position from OrbitControls' own state and undo the
+  // manual head placement, and the player.visible line below would keep
+  // switching her back on while the camera sits inside her head.
+  if (!flightActive && !mirandaLounging) {
     clampOrbitToGround();
     controls.update();
     // Tilting all the way up rolls the camera in until it's inside the
