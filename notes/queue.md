@@ -110,6 +110,19 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
 
 ## Done
 
+- [x] **The fire pit is solid.** A radial push-out rather than the house's
+      axis-separated box slide, because it's round — projecting back out along
+      its own radius is what makes her skirt smoothly around it instead of
+      catching on invisible corners. Being stateless, the same function serves
+      the per-frame move, the click-to-move destination, and Miranda's AI walk
+      (her existing steer-around repulsion only nudges her, and a poop sitting
+      against the stones could overpower it).
+
+      Blocked radius is `FIRE_PIT.radius + 0.3` = 1.0, and it can't go much
+      above that: `MOM_HOME` sits 1.08 from the centre and hanging out by the
+      fire is the whole point of her, so a wider margin would push her out of
+      her own spot.
+
 - [x] **Hammock look-drag was inverted on both axes.** Dragging right turned
       her head left and dragging down looked up — opposite to the OrbitControls
       feel the drag has everywhere else in the game. Both terms in the

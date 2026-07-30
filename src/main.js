@@ -2877,6 +2877,32 @@ function nearestPointOutsideHouse(x, z) {
   return clear ? clear.p : { x, z: HOUSE_BACK_WALK_Z };
 }
 
+// The fire pit is solid too. It gets a radial push-out rather than the house's
+// axis-separated slide, because it's round: projecting the point back out along
+// its own radius is both simpler and what makes her skirt smoothly around it,
+// where a box would catch on invisible corners.
+//
+// Stateless, unlike pushOutOfHouse, which is why the same function serves both
+// the per-frame move and the click-to-move destination.
+//
+// The margin is deliberately tight. Miranda's home spot beside the fire is
+// 1.08 out from the centre (see MOM_HOME) and hanging out by the fire is the
+// whole point of her, so the blocked radius has to stay under that or she can
+// never stand where she belongs.
+const FIRE_PIT_CLEARANCE = FIRE_PIT.radius + 0.3;
+
+function pushOutOfFirePit(x, z) {
+  const dx = x - FIRE_PIT.x;
+  const dz = z - FIRE_PIT.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist >= FIRE_PIT_CLEARANCE) return { x, z };
+  // Dead centre has no direction to push along. Only reachable by spawning
+  // exactly on it with ?at=, but it would divide by zero if it happened.
+  if (dist < 1e-4) return { x: FIRE_PIT.x + FIRE_PIT_CLEARANCE, z: FIRE_PIT.z };
+  const scale = FIRE_PIT_CLEARANCE / dist;
+  return { x: FIRE_PIT.x + dx * scale, z: FIRE_PIT.z + dz * scale };
+}
+
 // Keeps her within the generated world (see generateWorld/WORLD_RADIUS
 // above) — pulled in a bit short of the actual generation radius, so she
 // always stays comfortably inside real trees/fog rather than able to walk
@@ -2893,7 +2919,8 @@ function clampToWorldRadius(x, z) {
 // Used for the per-frame movement step.
 function clampToWalkable(prevX, prevZ, x, z) {
   const pushed = pushOutOfHouse(prevX, prevZ, x, z);
-  return clampToWorldRadius(pushed.x, pushed.z);
+  const clear = pushOutOfFirePit(pushed.x, pushed.z);
+  return clampToWorldRadius(clear.x, clear.z);
 }
 
 // Used for picking a click-to-move destination — a stateless best-guess
@@ -2901,7 +2928,8 @@ function clampToWalkable(prevX, prevZ, x, z) {
 // slide from.
 function clampTargetPoint(x, z) {
   const outside = nearestPointOutsideHouse(x, z);
-  return clampToWorldRadius(outside.x, outside.z);
+  const clear = pushOutOfFirePit(outside.x, outside.z);
+  return clampToWorldRadius(clear.x, clear.z);
 }
 
 const cameraForward = new THREE.Vector3();
@@ -3223,6 +3251,12 @@ function updateMom(delta) {
     momMoveDir.normalize();
     mom.position.x += momMoveDir.x * MOM_WALK_SPEED * delta;
     mom.position.z += momMoveDir.z * MOM_WALK_SPEED * delta;
+    // The repulsion above only steers her; it can still be overpowered by a
+    // poop sitting right against the stones. This is the hard stop, and it's
+    // the same one the player gets.
+    const momClear = pushOutOfFirePit(mom.position.x, mom.position.z);
+    mom.position.x = momClear.x;
+    mom.position.z = momClear.z;
     mom.position.y =
       terrainHeight(mom.position.x, mom.position.z) + Math.abs(Math.sin(elapsed * 9)) * 0.02;
     const targetAngle = Math.atan2(momMoveDir.x, momMoveDir.z);
