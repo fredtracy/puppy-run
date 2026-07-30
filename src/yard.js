@@ -2446,8 +2446,8 @@ export const FRONT_PINES = [
   // road. They gather on the near side of the drive instead of spreading to
   // the corners, which is where the photo shows them bunched. Kept uphill of
   // the swale (z -37.9 to -33.1) like the others.
-  { x: -6.9, z: -31.4, height: 5.4, spread: 0.34, trunkRadius: 0.34 },
-  { x: -9.8, z: -32.6, height: 4.9, spread: 0.33, trunkRadius: 0.31, crownBase: 0.45 },
+  { x: -15.5, z: -31.4, height: 5.4, spread: 0.34, trunkRadius: 0.34 },
+  { x: -18.2, z: -32.4, height: 4.9, spread: 0.33, trunkRadius: 0.31, crownBase: 0.45 },
 ];
 
 const PINE_DUFF = FRONT_PINES.map((p) => [p.x, p.z]);
