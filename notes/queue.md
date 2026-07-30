@@ -199,12 +199,13 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       **left**: the emoji faces left, so arcs off its right come out of the
       tail end and read as a fart.
 
-      Bite is inline SVG — angry brows over a snarling fanged muzzle. Three
-      dead ends worth not repeating: wide teeth on a full-width gum bar read as
-      the letter **W** (twice, at two sizes), and adding a dog nose between the
-      brows and the mouth turns into a white blob at button size. Brows are
-      what carry "mad"; a lip peaking in the centre with a fang at each outer
-      corner is what keeps it a snarl rather than a vampire bite
+      Bite is inline SVG — a snarling dog's head, front on. Four dead ends
+      worth not repeating: wide teeth on a full-width gum bar read as the
+      letter **W** (twice); a dog nose added between brows and mouth turns to a
+      white blob at button size; and a *profile* head with an open jaw reads as
+      a shark, because a pointed muzzle plus one spiky ear is a fin. Front-on
+      with floppy ears either side is what settles it as a dog, and angled
+      brows are what make it a bite rather than a friendly one
 
 - [x] **Backspace jumps, and both mouse buttons walk forward.** Backspace was
       already taken — it made Darla poop — so poop moved to **P** (Backspace is
