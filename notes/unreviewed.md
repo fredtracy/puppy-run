@@ -8,7 +8,15 @@ because nobody remembered they were choices.
 Move an item to "Settled" once it's been looked at. Delete the section when it
 empties.
 
+Note that being settled and being tested are different things — a call can be
+approved on description while the code implementing it still hasn't been run by
+a human. Those stay in the untested list until someone actually plays them.
+
 ## Judgement calls that could have gone the other way
+
+*(none outstanding — all reviewed 2026-07-30, see Settled)*
+
+## Settled — reviewed and kept, 2026-07-30
 
 - **Poop moved from Backspace to `P`.** Backspace was asked for as a second
   jump key; it already spawned a poop. Jumping is much the more common action
