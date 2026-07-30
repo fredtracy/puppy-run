@@ -129,6 +129,24 @@ const SPAWN_CAM = (() => {
   const [radius, phi, theta] = raw.split(',').map(Number);
   return [radius, phi, theta].every(Number.isFinite) ? { radius, phi, theta } : null;
 })();
+
+// `?eye=x,y,z&look=yaw,pitch` — debug's equivalent of ?cam=, and only used
+// there. The free-fly camera isn't tied to the player at all, so an orbit
+// around them can't describe where it is; this is the camera's own world
+// position and heading, in metres and degrees. camView() emits this form
+// instead of ?cam= whenever debug is on.
+const SPAWN_EYE = (() => {
+  const raw = new URLSearchParams(window.location.search).get('eye');
+  if (!raw) return null;
+  const [x, y, z] = raw.split(',').map(Number);
+  return [x, y, z].every(Number.isFinite) ? { x, y, z } : null;
+})();
+const SPAWN_LOOK = (() => {
+  const raw = new URLSearchParams(window.location.search).get('look');
+  if (!raw) return null;
+  const [yaw, pitch] = raw.split(',').map(Number);
+  return [yaw, pitch].every(Number.isFinite) ? { yaw, pitch } : null;
+})();
 // Currently the middle of the driveway — x on the garage centreline, z
 // halfway between where the house's own slab ends (world -28.2) and the
 // road's near edge (world -38.3, see ROAD_Z in yard.js). Orbiting this
@@ -210,13 +228,13 @@ controls.mouseButtons = {
 };
 
 if (DEBUG_MODE) {
-  // Steep-but-not-quite-vertical (OrbitControls doesn't like sitting
-  // exactly at the polar singularity) so it still reads as a 3D view
-  // rather than a flat map. maxDistance raised since eyeballing a whole
-  // roof from up here needs more room than the normal follow-cam ever did.
+  // Only the starting shot — from here it's a free-fly (see updateDebugFly),
+  // so there's no orbit radius to cap and nothing stopping the camera going
+  // wherever it likes.
   orbitMaxDistance = 60;
   controls.target.copy(DEBUG_FOCUS);
   camera.position.copy(DEBUG_FOCUS).add(DEBUG_EYE);
+  camera.lookAt(DEBUG_FOCUS);
   buildDebugPanel();
 }
 
@@ -683,16 +701,32 @@ function startGame(kind) {
 // the view by hand, run this in the console, and the link is exact — which is
 // the half that made ?at= awkward on its own.
 globalThis.camView = () => {
+  const n = (v, d = 2) => Number(v.toFixed(d));
+  const base = `${location.origin}${location.pathname}`;
+  const at = `?at=${n(player?.position.x ?? 0)},${n(player?.position.z ?? 0)}`;
+  const as = playerKind === 'miranda' ? '&as=miranda' : '';
+
+  // Debug's camera flies free of the player, so an orbit around them can't
+  // describe it — the orbit target is parked a fixed few metres ahead of the
+  // lens and ?cam= would always come back as that same short radius. Its own
+  // position and heading are the only thing that round-trips.
+  if (DEBUG_MODE) {
+    const url =
+      `${base}?debug${at.replace('?', '&')}${as}` +
+      `&eye=${n(camera.position.x)},${n(camera.position.y)},${n(camera.position.z)}` +
+      `&look=${n(THREE.MathUtils.radToDeg(debugYaw), 1)},` +
+      `${n(THREE.MathUtils.radToDeg(debugPitch), 1)}`;
+    console.log(url);
+    return url;
+  }
+
   const sph = new THREE.Spherical().setFromVector3(
     camera.position.clone().sub(controls.target)
   );
-  const n = (v, d = 2) => Number(v.toFixed(d));
   const url =
-    `${location.origin}${location.pathname}?at=${n(player?.position.x ?? 0)},` +
-    `${n(player?.position.z ?? 0)}&cam=${n(sph.radius)},` +
+    `${base}${at}&cam=${n(sph.radius)},` +
     `${n(THREE.MathUtils.radToDeg(sph.phi), 1)},` +
-    `${n(THREE.MathUtils.radToDeg(sph.theta), 1)}` +
-    (playerKind === 'miranda' ? '&as=miranda' : '');
+    `${n(THREE.MathUtils.radToDeg(sph.theta), 1)}${as}`;
   console.log(url);
   return url;
 };
@@ -1762,24 +1796,95 @@ function clampOrbitToGround() {
   controls.maxDistance = Math.max(controls.minDistance, limit);
 }
 
+// The debug camera is a free-fly — Miranda's flight, without a character
+// attached and three times the speed.
+//
+// It used to drive WASD *through* OrbitControls, moving the camera and its
+// orbit target together. That looks like flying until you want to back off and
+// see something whole: the camera can never leave the target's orbit, the
+// ground clamp keeps hauling it in, and `?cam=` radii bigger than the orbit
+// allows quietly collapse. Owning the camera outright is the fix.
 const debugFlyDir = new THREE.Vector3();
 const debugFlyForward = new THREE.Vector3();
 const debugFlyRight = new THREE.Vector3();
-const DEBUG_FLY_SPEED = 14;
+const DEBUG_FLY_SPEED = 24;
+const DEBUG_BOOST = 3;
+const DEBUG_LOOK_SENSITIVITY = 0.0042;
+let debugYaw = 0;
+let debugPitch = 0;
+let debugLookReady = false;
+let debugLookDragging = false;
+let debugLookLastX = 0;
+let debugLookLastY = 0;
+
+if (DEBUG_MODE) {
+  // OrbitControls is off entirely — orbiting a target is the wrong model when
+  // what you want is to go and look at something.
+  controls.enabled = false;
+
+  // Drag to look, not pointer lock. Lock would swallow clicks on the debug
+  // panel, which is the other half of what debug mode is for. Directions match
+  // the rest of the game: drag right and the view turns right, drag down and
+  // it looks down.
+  renderer.domElement.addEventListener('pointerdown', (e) => {
+    debugLookDragging = true;
+    debugLookLastX = e.clientX;
+    debugLookLastY = e.clientY;
+  });
+  window.addEventListener('pointerup', () => {
+    debugLookDragging = false;
+  });
+  window.addEventListener('pointermove', (e) => {
+    if (!debugLookDragging) return;
+    debugYaw -= (e.clientX - debugLookLastX) * DEBUG_LOOK_SENSITIVITY;
+    debugPitch -= (e.clientY - debugLookLastY) * DEBUG_LOOK_SENSITIVITY;
+    debugPitch = THREE.MathUtils.clamp(debugPitch, -1.5, 1.5);
+    debugLookLastX = e.clientX;
+    debugLookLastY = e.clientY;
+  });
+}
+
 function updateDebugFly(delta) {
-  camera.getWorldDirection(debugFlyForward);
-  debugFlyRight.crossVectors(debugFlyForward, camera.up).normalize();
+  // Picked up from wherever the camera already is on the first frame, so a
+  // ?cam= starting shot still frames what it framed before the fly takes over.
+  if (!debugLookReady) {
+    debugLookReady = true;
+    if (SPAWN_EYE) camera.position.set(SPAWN_EYE.x, SPAWN_EYE.y, SPAWN_EYE.z);
+    if (SPAWN_LOOK) {
+      debugYaw = THREE.MathUtils.degToRad(SPAWN_LOOK.yaw);
+      debugPitch = THREE.MathUtils.degToRad(SPAWN_LOOK.pitch);
+    } else {
+      camera.rotation.reorder('YXZ');
+      debugYaw = camera.rotation.y;
+      debugPitch = camera.rotation.x;
+    }
+  }
+
+  camera.rotation.set(debugPitch, debugYaw, 0, 'YXZ');
+  debugFlyForward.set(0, 0, -1).applyEuler(camera.rotation);
+  debugFlyRight.set(1, 0, 0).applyEuler(camera.rotation);
+
   debugFlyDir.set(0, 0, 0);
   if (pressedKeys.has('KeyW') || pressedKeys.has('ArrowUp')) debugFlyDir.add(debugFlyForward);
   if (pressedKeys.has('KeyS') || pressedKeys.has('ArrowDown')) debugFlyDir.sub(debugFlyForward);
   if (pressedKeys.has('KeyD') || pressedKeys.has('ArrowRight')) debugFlyDir.add(debugFlyRight);
   if (pressedKeys.has('KeyA') || pressedKeys.has('ArrowLeft')) debugFlyDir.sub(debugFlyRight);
+  // Space and Shift are pure vertical regardless of pitch, for holding an
+  // altitude while looking around.
   if (pressedKeys.has('Space')) debugFlyDir.y += 1;
   if (pressedKeys.has('ShiftLeft') || pressedKeys.has('ShiftRight')) debugFlyDir.y -= 1;
-  if (debugFlyDir.lengthSq() < 0.0001) return;
-  debugFlyDir.normalize().multiplyScalar(DEBUG_FLY_SPEED * delta);
-  camera.position.add(debugFlyDir);
-  controls.target.add(debugFlyDir);
+
+  if (debugFlyDir.lengthSq() > 0.0001) {
+    // Crossing a 100 m world at a walking pace is most of what made the old
+    // one tedious, so Ctrl is a sprint on top of an already-quick base.
+    const boost = pressedKeys.has('ControlLeft') || pressedKeys.has('ControlRight') ? DEBUG_BOOST : 1;
+    debugFlyDir.normalize().multiplyScalar(DEBUG_FLY_SPEED * boost * delta);
+    camera.position.add(debugFlyDir);
+  }
+
+  // Parked a few metres ahead of the camera so anything still reading the
+  // orbit target — the sky dome, camView() — describes where we're looking.
+  controls.target.copy(camera.position).addScaledVector(debugFlyForward, 6);
 }
 
 // On-screen D-pad for touch devices, feeding the same pressedKeys set
@@ -4054,7 +4159,10 @@ function animate() {
   // recompute camera.position from OrbitControls' own state and undo the
   // manual head placement, and the player.visible line below would keep
   // switching her back on while the camera sits inside her head.
-  if (!flightActive && !mirandaLounging) {
+  // Debug is skipped for the same reason as the other two: updateDebugFly owns
+  // camera.position outright now, and .update() would recompute it from
+  // OrbitControls' spherical state and drag it straight back to the target.
+  if (!flightActive && !mirandaLounging && !DEBUG_MODE) {
     clampOrbitToGround();
     controls.update();
     // Tilting all the way up rolls the camera in until it's inside the
