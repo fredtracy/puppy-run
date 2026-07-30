@@ -452,8 +452,14 @@ scene.add(yard);
 // Darla — parked on the opposite side of the fire pit from Mom (mirrored
 // across its center) so when she's the idle NPC she reads as part of the
 // same fireside scene instead of standing alone off at the origin.
+//
+// Both of them sit 1.62 out from the pit's centre. They used to start at 1.08,
+// which is only 8cm outside the blocked radius the pit gained when it became
+// solid — close enough that the first step in any direction shoved them, and
+// close enough that any future nudge to either number would have them starting
+// inside a wall. This is still comfortably "sitting round the fire".
 const darla = createDarla();
-darla.position.set(-0.1, 0, 5.6);
+darla.position.set(0.35, 0, 5.9);
 darla.rotation.y = 0.7 + Math.PI;
 scene.add(darla);
 
@@ -481,7 +487,10 @@ const mom = createMom();
 // completely invisible for the whole game unless something made her move.
 // Playing *as* her hid the bug, because the player movement path re-grounds
 // her every frame; it only showed up when Darla was the one being driven.
-mom.position.set(-1.9, terrainHeight(-1.9, 4.4), 4.4);
+// Mirrored across the pit from Darla, and moved back with her — see the note
+// on darla.position above. MOM_HOME is taken from this, so the spot she walks
+// back to after collecting a poop moves with it.
+mom.position.set(-2.35, terrainHeight(-2.35, 4.1), 4.1);
 mom.rotation.y = 0.7;
 scene.add(mom);
 
@@ -2891,6 +2900,10 @@ function nearestPointOutsideHouse(x, z) {
 // never stand where she belongs.
 const FIRE_PIT_CLEARANCE = FIRE_PIT.radius + 0.3;
 
+function insideFirePit(x, z) {
+  return Math.hypot(x - FIRE_PIT.x, z - FIRE_PIT.z) < FIRE_PIT_CLEARANCE;
+}
+
 function pushOutOfFirePit(x, z) {
   const dx = x - FIRE_PIT.x;
   const dz = z - FIRE_PIT.z;
@@ -2919,7 +2932,13 @@ function clampToWorldRadius(x, z) {
 // Used for the per-frame movement step.
 function clampToWalkable(prevX, prevZ, x, z) {
   const pushed = pushOutOfHouse(prevX, prevZ, x, z);
-  const clear = pushOutOfFirePit(pushed.x, pushed.z);
+  // The pit stops you *walking* in, but you're allowed to jump in if you want
+  // to. Two exemptions make that work: airborne, so a jump can carry you over
+  // the rim instead of hitting an invisible wall mid-flight; and already
+  // inside, so having landed in there you can move about and walk back out
+  // under your own steam rather than being spat straight out again.
+  const exempt = isJumping || insideFirePit(prevX, prevZ);
+  const clear = exempt ? pushed : pushOutOfFirePit(pushed.x, pushed.z);
   return clampToWorldRadius(clear.x, clear.z);
 }
 

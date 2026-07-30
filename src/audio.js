@@ -99,6 +99,64 @@ export function initAudio() {
   loadMooBuffer();
   loadBarkBuffer();
   loadCallDarlaBuffer();
+  bindVisibilitySuspend();
+}
+
+// Browsers do not stop Web Audio when the page goes away. Lock your phone or
+// switch apps and the music plays on out of a screen nobody is looking at,
+// which is what a player reported.
+//
+// Suspending the context is what actually silences it. Stopping the scheduler
+// alone would not: every note of the current phrase is scheduled ahead on the
+// audio clock the moment the phrase starts (see scheduleDayLoop), so those are
+// already queued and would keep sounding.
+//
+// Clearing the timer matters just as much, and not for tidiness. setTimeout
+// still fires while hidden, only throttled, while audioCtx.currentTime is
+// frozen for as long as the context is suspended — so a loop left rescheduling
+// would stack every phrase at the same frozen instant and dump the lot in one
+// blast on resume.
+let visibilityBound = false;
+
+function bindVisibilitySuspend() {
+  if (visibilityBound) return;
+  visibilityBound = true;
+
+  const silence = () => {
+    if (!audioCtx || audioCtx.state === 'suspended') return;
+    if (musicTimer) {
+      clearTimeout(musicTimer);
+      musicTimer = null;
+    }
+    audioCtx.suspend();
+  };
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      silence();
+      return;
+    }
+    if (!audioCtx) return;
+    // resume() rejects on iOS if the browser wants a fresh user gesture. Not
+    // worth handling beyond staying quiet: the next tap starts it again.
+    audioCtx
+      .resume()
+      .then(() => {
+        if (!musicPlaying) return;
+        // The phrase that was mid-flight resumes from wherever the clock
+        // froze, but nothing is left to schedule the *next* one, so it would
+        // play out and then stop for good. Cutting it and starting a fresh
+        // phrase is both simpler than tracking where it got to and a clearer
+        // signal that the game is live again.
+        cutMusicShort();
+        scheduleLoop();
+      })
+      .catch(() => {});
+  });
+
+  // iOS doesn't reliably deliver visibilitychange when the app is swiped away
+  // rather than merely backgrounded.
+  window.addEventListener('pagehide', silence);
 }
 
 // Real recorded animal sounds (see ATTRIBUTIONS.md), converted to WAV for

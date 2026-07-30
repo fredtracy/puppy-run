@@ -110,6 +110,28 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
 
 ## Done
 
+- [x] **Music kept playing with the browser closed / phone locked.** Reported
+      by a player. Nothing suspended the AudioContext, and pausing the
+      scheduler alone would not have helped — every note of the current phrase
+      is scheduled ahead on the audio clock the moment the phrase starts, so
+      they were already queued and would have sounded regardless.
+      `visibilitychange` now suspends and resumes it (`bindVisibilitySuspend`
+      in `audio.js`), plus `pagehide`, since iOS doesn't reliably fire
+      visibilitychange when the app is swiped away.
+
+      The subtle half: the loop timer has to be cleared as well. `setTimeout`
+      still fires while hidden (just throttled) and `currentTime` is frozen
+      while suspended, so a loop left rescheduling would stack every phrase at
+      the same frozen instant and dump the lot in one blast on resume.
+
+- [x] **You can jump into the fire pit.** It still blocks you walking in, but
+      the push-out is skipped while airborne (so a jump clears the rim instead
+      of hitting an invisible wall) and while already inside (so having landed
+      in there you can move about and walk out rather than being spat straight
+      back). Both characters' starting spots also moved from 1.08 out to 1.62 —
+      at 1.08 they began 8cm from the blocked radius, so the first step in any
+      direction shoved them.
+
 - [x] **The fire pit is solid.** A radial push-out rather than the house's
       axis-separated box slide, because it's round — projecting back out along
       its own radius is what makes her skirt smoothly around it instead of
