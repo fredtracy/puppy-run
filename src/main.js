@@ -2825,7 +2825,13 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 });
 
 const WALK_SPEED = 4.2;
-const YARD_BOUNDS = { xMin: -9, xMax: 9, zMin: -4, zMax: 14 };
+// Where a thrown ball or wedge of cheese is allowed to land, and (widened by
+// 15 m) how far Miranda's flight can carry her. Back-yard only.
+//
+// zMin follows the house: it used to be -4, which sat behind the old back wall
+// at -7.5, but the house moved back to -1.5 (see HOUSE_Z) and -4 is now inside
+// the building — a throw short of the wall would have put the ball indoors.
+const YARD_BOUNDS = { xMin: -9, xMax: 9, zMin: 0, zMax: 14 };
 
 // The house is a solid obstacle you walk around. It's a list of boxes
 // rather than one, because the building isn't rectangular: the garage and

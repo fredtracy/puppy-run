@@ -110,6 +110,27 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
 
 ## Done
 
+- [x] **Yard proportions matched to the satellite view.** The back yard was too
+      deep and the driveway too short. Both fixed by moving the house 6 m back
+      off the road — `HOUSE_Z` from -7.5 to -1.5 — since the road (`ROAD_Z`) and
+      the tree line (`inOpenArea`) stay put: the front grows 19 m → 25 m and the
+      back yard shrinks 25.5 m → 19.5 m from one number.
+
+      Deliberately *not* done by pushing the road out, which would have been
+      truer to the map but needed a bigger `WORLD_RADIUS`, and grass is 97% of
+      world generation — a bigger world is directly a slower load.
+
+      Most things follow `HOUSE_Z` on their own, which is why this was cheap:
+      `TERRAIN_CENTER_Z` derives from it, so the graded pad, the lawn shading
+      and the mown radius all moved too, and the driveway run is measured off
+      `HOUSE_DRIVEWAY`. A side benefit — the drive's grade went from about 15%
+      to 7.3%, because the same climb is now spread over 16 m instead of 10.
+
+      What does *not* follow is anything with a hardcoded world z. Checked
+      rather than moved: fire pit, hammock, both spawns, `MOM_HOME`. The one
+      that genuinely broke was `YARD_BOUNDS.zMin` at -4, which ended up inside
+      the building.
+
 - [x] **Music kept playing with the browser closed / phone locked.** Reported
       by a player. Nothing suspended the AudioContext, and pausing the
       scheduler alone would not have helped — every note of the current phrase

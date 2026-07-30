@@ -14,7 +14,20 @@ a human. Those stay in the untested list until someone actually plays them.
 
 ## Judgement calls that could have gone the other way
 
-*(none outstanding — all reviewed 2026-07-30, see Settled)*
+- **The back yard's props stayed put when the house moved back 6 m**, rather
+  than moving with it. The fire pit is now 6.5 m off the back wall instead of
+  12.5 m, and the hammock 10.5 m instead of 16.5 m, which suits a 19.5 m yard —
+  but it does mean the pit sits closer to the house than it used to. Miranda's
+  home spot and both spawns went along with the pit, unchanged.
+- **`YARD_BOUNDS.zMin` moved from -4 to 0.** It had to move at all — the house
+  moving back put z -4 inside the building, so a short throw would have landed
+  the ball indoors — but 0 rather than, say, -1 is a round number, not a
+  measured one.
+- **The tree line and the road both stayed where they were.** The satellite
+  showed a longer drive and a shallower yard, and moving the house delivered
+  both from one number without growing the world. It does mean the *total* lot
+  depth is unchanged, so if the real property is deeper front-to-back than the
+  game's, that's still wrong.
 
 ## Settled — reviewed and kept, 2026-07-30
 

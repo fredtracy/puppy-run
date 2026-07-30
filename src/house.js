@@ -1112,12 +1112,25 @@ const BACK_WALK_Z1 = HALF_D + FT * 3;
 // second, much deeper apron jutting into the lawn that doesn't exist. The
 // walk (and the wide parking run on the garage side) is the whole of it.
 
-// Where the house sits in the world. The back wall lands on z = -7.5, the
-// same place the old (much shallower) house's did, so the whole backyard —
-// fire pit, hammock, everything Darla actually plays in — is untouched by
-// the house growing to its real proportions. It grew forwards, into what
-// was empty driveway.
-export const HOUSE_Z = -7.5 - HALF_D;
+// Where the house sits in the world, expressed as where the back wall lands.
+//
+// Moved 6 m back off the road (-7.5 to -1.5) to match the satellite view,
+// which shows a longer driveway and a much shallower back yard than this had.
+// Both come from the one number: the front of the lot grows from about 19 m to
+// about 25 m and the back yard shrinks from about 25 m to about 19 m, since the
+// road (ROAD_Z in yard.js) and the tree line (inOpenArea) both stay put. Doing
+// it this way rather than pushing the road out keeps the world the same size,
+// which matters — grass is 97% of world generation, so a bigger world is
+// directly a slower load.
+//
+// Most things follow this on their own: yard.js derives TERRAIN_CENTER_Z from
+// it (so the graded pad, the lawn shading and the mown radius all move too) and
+// the driveway run is measured from HOUSE_DRIVEWAY below. What does *not*
+// follow is anything with a hardcoded world z — the fire pit, the hammock, both
+// characters' spawns and YARD_BOUNDS. Those were checked against the new
+// position rather than moved: the pit ends up 6.5 m off the back wall instead
+// of 12.5 m, which suits the shallower yard.
+export const HOUSE_Z = -1.5 - HALF_D;
 
 // Where the driveway leaves the property, so yard.js can pick it up and
 // carry it out to the road without either file guessing: the centreline it
