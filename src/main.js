@@ -453,13 +453,11 @@ scene.add(yard);
 // across its center) so when she's the idle NPC she reads as part of the
 // same fireside scene instead of standing alone off at the origin.
 //
-// Both of them sit 1.62 out from the pit's centre. They used to start at 1.08,
-// which is only 8cm outside the blocked radius the pit gained when it became
-// solid — close enough that the first step in any direction shoved them, and
-// close enough that any future nudge to either number would have them starting
-// inside a wall. This is still comfortably "sitting round the fire".
+// Both of them sit 1.35 out from the pit's centre, which is 0.35 clear of the
+// radius it blocks at. They originally started at 1.08 — only 8cm clear, close
+// enough that the first step in any direction shoved them.
 const darla = createDarla();
-darla.position.set(0.35, 0, 5.9);
+darla.position.set(0.12, 0, 5.75);
 darla.rotation.y = 0.7 + Math.PI;
 scene.add(darla);
 
@@ -490,7 +488,7 @@ const mom = createMom();
 // Mirrored across the pit from Darla, and moved back with her — see the note
 // on darla.position above. MOM_HOME is taken from this, so the spot she walks
 // back to after collecting a poop moves with it.
-mom.position.set(-2.35, terrainHeight(-2.35, 4.1), 4.1);
+mom.position.set(-2.12, terrainHeight(-2.12, 4.25), 4.25);
 mom.rotation.y = 0.7;
 scene.add(mom);
 
@@ -2900,8 +2898,19 @@ function nearestPointOutsideHouse(x, z) {
 // never stand where she belongs.
 const FIRE_PIT_CLEARANCE = FIRE_PIT.radius + 0.3;
 
+// Deliberately a smaller radius than the one the push-out uses, and the gap is
+// load-bearing rather than a fudge. Being pushed out leaves you resting at
+// *exactly* FIRE_PIT_CLEARANCE, and re-measuring that point with hypot can
+// come back a hair under it. Testing "am I inside?" against the same radius
+// therefore flips to true the moment you touch the rim, which exempts you from
+// the push, which lets you walk straight through — the collision worked right
+// up until you leaned on it. The margin means a point resting on the boundary
+// is unambiguously outside, and only being properly in the pit (having jumped
+// in) counts as inside.
+const FIRE_PIT_INSIDE = FIRE_PIT_CLEARANCE - 0.08;
+
 function insideFirePit(x, z) {
-  return Math.hypot(x - FIRE_PIT.x, z - FIRE_PIT.z) < FIRE_PIT_CLEARANCE;
+  return Math.hypot(x - FIRE_PIT.x, z - FIRE_PIT.z) < FIRE_PIT_INSIDE;
 }
 
 function pushOutOfFirePit(x, z) {

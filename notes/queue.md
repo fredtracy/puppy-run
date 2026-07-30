@@ -124,6 +124,18 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       while suspended, so a loop left rescheduling would stack every phrase at
       the same frozen instant and dump the lot in one blast on resume.
 
+- [x] **Fire pit collision broke the moment it gained the jump-in exemption**,
+      and the cause is worth remembering. "Already inside, so don't eject you"
+      was tested against the same radius the push-out places you at — but being
+      pushed leaves you resting at *exactly* that radius, and re-measuring the
+      point with `hypot` comes back `0.9999999999999999` for most angles. So
+      touching the rim flipped you to "inside", which exempted you, which let
+      you walk straight through. Measured: 1363 of 3600 approach angles
+      re-measure under, and 438 of 720 walked to the centre of the fire.
+      `FIRE_PIT_INSIDE` is now 0.08 smaller than `FIRE_PIT_CLEARANCE` so a
+      point on the boundary is unambiguously outside. **Any two-radius test
+      like this needs hysteresis** — equal radii will always chatter.
+
 - [x] **You can jump into the fire pit.** It still blocks you walking in, but
       the push-out is skipped while airborne (so a jump clears the rim instead
       of hitting an invisible wall) and while already inside (so having landed
