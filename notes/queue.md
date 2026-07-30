@@ -108,6 +108,16 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       Worth pairing with a debug-panel readout of measured FPS so the
       trimming is visible rather than mysterious.
 
+- [ ] **Darla can still walk into the fire pit when called.** The collision
+      lives in `clampToWalkable`, which only the *player's* movement goes
+      through — her AI paths (`updateDarlaFetch`, `updateDarlaCheese`,
+      `updateDarlaLeash`, the bite chase) set `darla.position` directly and
+      skip it. Miranda's AI walk got a `pushOutOfFirePit` call for exactly this
+      reason; Darla's didn't. Either give each of her AI paths the same
+      treatment or find the one place they all funnel through. Careful not to
+      apply it while she's airborne or already inside, the same exemptions the
+      player gets.
+
 ## Done
 
 - [x] **Yard proportions matched to the satellite view.** The back yard was too

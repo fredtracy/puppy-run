@@ -2428,14 +2428,13 @@ export const FRONT_PINES = [
   // The taller of the original pair carries its crown a little higher, which
   // is what separates them in the photos.
   { x: 9.6, z: -32, height: 5.6, spread: 0.31, trunkRadius: 0.36, crownBase: 0.5 },
-  // Two more out at the corners of the frontage. The reference photo has
-  // pines scattered along the road rather than just the pair flanking the
-  // drive, and staggering their z stops the four reading as a planted row.
-  { x: -10.8, z: -27.5, height: 5.4, spread: 0.34, trunkRadius: 0.34 },
-  // Kept uphill of the swale (z -37.9 to -33.1) like the others — at -35.5
-  // this one stood in the bottom of the ditch, 1.2 m below the rest of the
-  // lawn.
-  { x: 12.2, z: -30.5, height: 4.9, spread: 0.33, trunkRadius: 0.31, crownBase: 0.45 },
+  // Two more, and per the satellite they sit level with the first pair rather
+  // than staggered back — the clump is all about the same distance off the
+  // road. They gather on the near side of the drive instead of spreading to
+  // the corners, which is where the photo shows them bunched. Kept uphill of
+  // the swale (z -37.9 to -33.1) like the others.
+  { x: -6.9, z: -31.4, height: 5.4, spread: 0.34, trunkRadius: 0.34 },
+  { x: -9.8, z: -32.6, height: 4.9, spread: 0.33, trunkRadius: 0.31, crownBase: 0.45 },
 ];
 
 const PINE_DUFF = FRONT_PINES.map((p) => [p.x, p.z]);
