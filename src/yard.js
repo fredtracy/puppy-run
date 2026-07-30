@@ -1393,10 +1393,17 @@ const TERRAIN_HEIGHT = 2.4;
 // length — a 10% grade nobody would pour. The relief in the lot comes from
 // the northwest/southeast tilt below and from the drainage swale, not from
 // the drive itself being a ramp.
-const TERRAIN_PAD = 23;
+// Widened again to 33 once the house moved back off the road (HOUSE_Z), which
+// carried the pad's centre back with it and left the road a metre and a bit
+// down the hill. The owner's photo from the driveway shows the opposite: the
+// road runs level with the yard, and what relief there is comes from the
+// drainage swale, not from the lawn falling away to the kerb. 33 puts the road
+// (34.3 m out from the pad's centre) right at the edge of the flat, so the
+// frontage reads level and the dome only starts dropping out among the trees.
+const TERRAIN_PAD = 33;
 // Raised with it, or the 10 m of falloff left between pad and radius turns
 // the yard into a plateau with a cliff around the rim.
-const TERRAIN_RADIUS = 46;
+const TERRAIN_RADIUS = 52;
 
 // Flat at both ends, steepest in the middle — a rounded brow rather than a
 // cone, and it meets the flat outer ground without a crease.
@@ -2413,10 +2420,25 @@ function smoothBand(edge0, edge1, x) {
 // pine duff — the frontage photo shows bare reddish needle litter running
 // out several metres from each trunk, and it's the most recognisable bald
 // spot on the whole property.
-const PINE_DUFF = [
-  [-3.4, -32],
-  [9.6, -32],
+// One list for the front pines, used both to place the trees (createYard) and
+// to kill the grass under them. They have to be the same points or the bald
+// patches drift off the trunks.
+export const FRONT_PINES = [
+  { x: -3.4, z: -32, height: 5.1, spread: 0.36, trunkRadius: 0.33 },
+  // The taller of the original pair carries its crown a little higher, which
+  // is what separates them in the photos.
+  { x: 9.6, z: -32, height: 5.6, spread: 0.31, trunkRadius: 0.36, crownBase: 0.5 },
+  // Two more out at the corners of the frontage. The reference photo has
+  // pines scattered along the road rather than just the pair flanking the
+  // drive, and staggering their z stops the four reading as a planted row.
+  { x: -10.8, z: -27.5, height: 5.4, spread: 0.34, trunkRadius: 0.34 },
+  // Kept uphill of the swale (z -37.9 to -33.1) like the others — at -35.5
+  // this one stood in the bottom of the ditch, 1.2 m below the rest of the
+  // lawn.
+  { x: 12.2, z: -30.5, height: 4.9, spread: 0.33, trunkRadius: 0.31, crownBase: 0.45 },
 ];
+
+const PINE_DUFF = FRONT_PINES.map((p) => [p.x, p.z]);
 
 // How thick the pine litter is at a point, 0 (none) to 1 (bare needle mat
 // at the trunk). Pulled out of lawnVigour so the needles themselves can be
@@ -2912,13 +2934,15 @@ export function createYard() {
   const road = createRoad();
   group.add(road);
 
-  // Both pines stand right at the road, one either side of the apron,
-  // which is how the photos read: you see the frontage framed between two
-  // trunks with the drive opening out between them. z is set just uphill
-  // of the swale (which now spans z -37.9 to -33.1) rather than in it —
-  // real trees sit on the crown of the lawn, not down in the drainage.
+  // Positions and shapes come from FRONT_PINES above, which the pine-duff
+  // field reads from too. The middle pair flank the apron, which is how the
+  // photos read — the frontage framed between two trunks with the drive
+  // opening out between them — and the outer two carry that scatter along the
+  // road. z stays just uphill of the swale (which spans z -37.9 to -33.1)
+  // rather than in it: real trees sit on the crown of the lawn, not down in
+  // the drainage.
   //
-  // These two are the only createSouthernPine in the world (see pine.js).
+  // These are the only createSouthernPine in the world (see pine.js).
   // Everything else is the cheap cone tree, which is fine out among the
   // forest but was never going to pass for these at ten metres.
   // Shorter than the real ones. At 6/6.6 they were accurate to the photos
@@ -2928,24 +2952,11 @@ export function createYard() {
   // made them stubby; back up a quarter from there. Still clearly the
   // tallest thing on the property, without demanding you look up at them.
   const pineRand = mulberry32(20260727);
-  const leftTree = createSouthernPine(pineRand, {
-    height: 5.1,
-    spread: 0.36,
-    trunkRadius: 0.33,
-  });
-  leftTree.position.set(-3.4, terrainHeight(-3.4, -32), -32);
-  group.add(leftTree);
-
-  const rightTree = createSouthernPine(pineRand, {
-    height: 5.6,
-    spread: 0.31,
-    trunkRadius: 0.36,
-    // The taller of the two carries its crown a little higher, which is
-    // what separates them in the photos.
-    crownBase: 0.5,
-  });
-  rightTree.position.set(9.6, terrainHeight(9.6, -32), -32);
-  group.add(rightTree);
+  for (const { x, z, ...shape } of FRONT_PINES) {
+    const pine = createSouthernPine(pineRand, shape);
+    pine.position.set(x, terrainHeight(x, z), z);
+    group.add(pine);
+  }
 
   // Across the road from the house, not the near shoulder — the far edge
   // sits at ROAD_Z - ROAD_HALF_WIDTH, so this clears it by a step further.
