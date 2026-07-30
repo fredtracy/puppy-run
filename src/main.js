@@ -473,9 +473,11 @@ scene.add(yard);
 //
 // Both of them sit 1.35 out from the pit's centre, which is 0.35 clear of the
 // radius it blocks at. They originally started at 1.08 — only 8cm clear, close
-// enough that the first step in any direction shoved them.
+// enough that the first step in any direction shoved them. The offsets are
+// kept by hand rather than derived from FIRE_PIT so their facings stay
+// readable next to the numbers; if the pit moves again, move these with it.
 const darla = createDarla();
-darla.position.set(0.12, 0, 5.75);
+darla.position.set(0.42, 0, 10.95);
 darla.rotation.y = 0.7 + Math.PI;
 scene.add(darla);
 
@@ -506,7 +508,7 @@ const mom = createMom();
 // Mirrored across the pit from Darla, and moved back with her — see the note
 // on darla.position above. MOM_HOME is taken from this, so the spot she walks
 // back to after collecting a poop moves with it.
-mom.position.set(-2.12, terrainHeight(-2.12, 4.25), 4.25);
+mom.position.set(-1.82, terrainHeight(-1.82, 9.45), 9.45);
 mom.rotation.y = 0.7;
 scene.add(mom);
 

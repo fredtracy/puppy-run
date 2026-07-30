@@ -14,6 +14,16 @@ a human. Those stay in the untested list until someone actually plays them.
 
 ## Judgement calls that could have gone the other way
 
+- **The clearing is now 35 m wide** (x -19 to 16, wider still across the
+  frontage) where it was 26. That's what removing the trees crowding both long
+  walls took, but the clearing is also where lawn grass grows, so it's roughly
+  a third more grass and a slower load. Couldn't pin the number — tool round
+  trips are currently longer than the load itself.
+- **The fire pit's new position was read off a marked-up screenshot**, not
+  measured: (-0.7, 10.2), from scaling the overhead at ~21 px/m. It lands 11.7 m
+  off the back wall with 7.8 m to the tree line, which looks right, but it's an
+  estimate of where the circle was drawn.
+
 - **The back yard's props stayed put when the house moved back 6 m**, rather
   than moving with it. The fire pit is now 6.5 m off the back wall instead of
   12.5 m, and the hammock 10.5 m instead of 16.5 m, which suits a 19.5 m yard —

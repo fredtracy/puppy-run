@@ -341,8 +341,13 @@ const TREE_SPACING = 3.0;
 // where both the satellite and the photo from the driveway show open mown
 // grass running out to the road on that side. It widens over 8 m rather than
 // stepping, or the tree line ends on a dead straight edge you can see.
-const OPEN_X_MAX = 13;
-const OPEN_X_NARROW = -13;
+// Both flanks widened again after an overhead pass: at 13 either side the
+// clearing was barely 11 m wider than the house itself, so the forest crowded
+// right up against both long walls — a band of it along the west side and a
+// stray on the east. The satellite has the tree line well back from the
+// building on both sides.
+const OPEN_X_MAX = 16;
+const OPEN_X_NARROW = -19;
 const OPEN_X_WIDE = -21;
 const openXMin = (z) => {
   const t = Math.min(1, Math.max(0, (-18 - z) / 8));
@@ -413,8 +418,11 @@ const PIT_COURSE_HEIGHT = 0.115;
 // grass (createChunkGrass) can skip it without needing the actual fire pit
 // object to exist yet.
 export const FIRE_PIT = {
-  x: -1,
-  z: 5,
+  // Sits well out from the house, toward the tree line rather than tucked up
+  // against the back wall. It was 6.5 m off the wall after the house moved
+  // back; at 11.7 m it reads as a fire pit you walk out to.
+  x: -0.7,
+  z: 10.2,
   // Generous compared to the stonework, because this is also what clears grass
   // away around the pit.
   radius: 0.7,
@@ -2920,7 +2928,10 @@ export function createYard() {
   // managed from main.js based on Darla's position, not added here.
 
   const firePit = createFirePit();
-  firePit.position.set(-1, terrainHeight(-1, 5), 5);
+  // Straight off FIRE_PIT rather than repeating the coordinates — the grass
+  // exclusion, the collision and the standing surface all read from it, and a
+  // second copy here is exactly how the prop and its collision drift apart.
+  firePit.position.set(FIRE_PIT.x, terrainHeight(FIRE_PIT.x, FIRE_PIT.z), FIRE_PIT.z);
   group.add(firePit);
   group.userData.firePit = firePit;
 
