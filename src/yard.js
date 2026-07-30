@@ -336,7 +336,20 @@ const TREE_SPACING = 3.0;
 // a forest wall cutting across the extended driveway partway there. It has
 // to clear the mailbox on the far shoulder too (ROAD_Z - ROAD_HALF_WIDTH -
 // 1.2 = -43.9), or trees grow through it.
-const inOpenArea = (x, z) => x > -13 && x < 13 && z > -48 && z < 18;
+// The frontage is wider than the rest. At a flat -13 the forest wall came
+// right up beside the front pines and read as woods growing into the lawn,
+// where both the satellite and the photo from the driveway show open mown
+// grass running out to the road on that side. It widens over 8 m rather than
+// stepping, or the tree line ends on a dead straight edge you can see.
+const OPEN_X_MAX = 13;
+const OPEN_X_NARROW = -13;
+const OPEN_X_WIDE = -21;
+const openXMin = (z) => {
+  const t = Math.min(1, Math.max(0, (-18 - z) / 8));
+  return OPEN_X_NARROW + (OPEN_X_WIDE - OPEN_X_NARROW) * smootherstep(t);
+};
+
+const inOpenArea = (x, z) => x > openXMin(z) && x < OPEN_X_MAX && z > -48 && z < 18;
 
 // The straight run of driveway between where the house's own slab stops
 // (HOUSE_DRIVEWAY) and the road.
