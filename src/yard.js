@@ -2901,14 +2901,6 @@ export function createYard() {
   group.add(hammock);
   group.userData.hammock = hammock;
 
-  // A little developer joke, staked out in the open lawn away from the
-  // fire pit and hammock — facing back toward the middle of the yard so
-  // it's actually readable as you wander past.
-  const underConstructionSign = buildYardSign('Under Construction');
-  underConstructionSign.position.set(-7, terrainHeight(-7, 11), 11);
-  underConstructionSign.rotation.y = Math.PI * 0.75;
-  group.add(underConstructionSign);
-
   // The street out front, matching the owner's own reference photo (and
   // their sketch of it): the short garage driveway now curves the rest of
   // the way out to the road, two mature pines flank that curve where it
