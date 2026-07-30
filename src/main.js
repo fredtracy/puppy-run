@@ -1303,9 +1303,17 @@ function applyDayNight(day) {
   // frame before the dome draws, and what any future no-dome path falls to.
   scene.background.set(cfg.background);
   sky.apply(cfg.sky, cfg.sun.direction);
+  // Debug pushes the fog far enough away to be gone. It's an edge-of-world
+  // device for normal play, but debug exists to fly out and look at things
+  // whole, and at any useful distance the fog was washing out the very thing
+  // being inspected. Pushed rather than removed outright (scene.fog = null)
+  // so nothing downstream has to cope with it being absent — the grass shader
+  // in particular takes its fog as plain uniforms.
+  const fogNear = DEBUG_MODE ? 4000 : cfg.fogNear;
+  const fogFar = DEBUG_MODE ? 5000 : cfg.fogFar;
   scene.fog.color.set(cfg.fogColor);
-  scene.fog.near = cfg.fogNear;
-  scene.fog.far = cfg.fogFar;
+  scene.fog.near = fogNear;
+  scene.fog.far = fogFar;
   renderer.toneMappingExposure = cfg.exposure;
   scene.environmentIntensity = cfg.envIntensity;
   scene.environmentRotation.y = cfg.envRotationY;
@@ -1314,7 +1322,7 @@ function applyDayNight(day) {
   // uniforms (it can't read scene.fog directly), so those need to be kept
   // in sync by hand or distant grass would stay fogged to whichever mode
   // was active when the material was first created.
-  setGrassFog(cfg.fogColor, cfg.fogNear, cfg.fogFar);
+  setGrassFog(cfg.fogColor, fogNear, fogFar);
   // And the same for its lighting, which it also can't read from the scene.
   setGrassLight(cfg.sun.direction, cfg.grassLight, cfg.grassBackScatter);
 
