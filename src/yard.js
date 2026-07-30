@@ -388,10 +388,29 @@ const inHouse = (x, z) =>
   // lawn grows through the apron where the two disagree.
   onDriveway(x, z);
 
+// The built pit's actual dimensions, hoisted out of createFirePit so the
+// numbers the rest of the game collides and stands on come from the same place
+// as the blocks themselves, rather than being copied and left to drift.
+const PIT_RING_RADIUS = 0.55;
+const PIT_BLOCK_DEPTH = 0.13;
+const PIT_COURSES = 3;
+const PIT_COURSE_HEIGHT = 0.115;
+
 // Matches firePit's own placement in createYard() below — kept separate so
 // grass (createChunkGrass) can skip it without needing the actual fire pit
 // object to exist yet.
-export const FIRE_PIT = { x: -1, z: 5, radius: 0.7 };
+export const FIRE_PIT = {
+  x: -1,
+  z: 5,
+  // Generous compared to the stonework, because this is also what clears grass
+  // away around the pit.
+  radius: 0.7,
+  // The outer face of the ring, and how far its top course stands above the
+  // ground it's built on — between them, the surface you land on if you jump
+  // onto it. See groundHeightAt in main.js.
+  rimRadius: PIT_RING_RADIUS + PIT_BLOCK_DEPTH / 2,
+  rimHeight: PIT_COURSES * PIT_COURSE_HEIGHT,
+};
 const inFirePit = (x, z) => Math.hypot(x - FIRE_PIT.x, z - FIRE_PIT.z) < FIRE_PIT.radius;
 
 // The street out front — pushed well past the driveway's old short end
@@ -606,11 +625,11 @@ function createFirePit() {
   // a circle, laid in running bond (each course offset half a block so the
   // vertical joints don't line up, which is both how they actually go
   // together and what stops it reading as a stack of rings).
-  const ringRadius = 0.55;
+  const ringRadius = PIT_RING_RADIUS;
   const blocksPerCourse = 13;
-  const courses = 3;
-  const courseHeight = 0.115;
-  const blockDepth = 0.13;
+  const courses = PIT_COURSES;
+  const courseHeight = PIT_COURSE_HEIGHT;
+  const blockDepth = PIT_BLOCK_DEPTH;
   // Chord width measured at the *outer* face, not the centreline. A block
   // sitting tangentially spans a longer chord the further out you measure,
   // so sizing it to the centre radius leaves every joint open by about 4 cm

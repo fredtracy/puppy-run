@@ -2913,6 +2913,26 @@ function insideFirePit(x, z) {
   return Math.hypot(x - FIRE_PIT.x, z - FIRE_PIT.z) < FIRE_PIT_INSIDE;
 }
 
+// Jump onto the pit and you stand on the stonework, not down in the fire.
+//
+// The rim is the only thing in the yard that isn't terrain but can be stood
+// on, so this stays a special case rather than becoming a general height-field
+// — one prop doesn't justify one.
+//
+// Note the radius: the *stone ring's* outer face, not the wider radius the pit
+// blocks and clears grass at. Standing extends only as far as there is
+// actually something under your feet, so landing in the gap between the
+// stonework and the collision boundary leaves you on the grass beside the pit,
+// which is what it looks like.
+const FIRE_PIT_RIM_Y = terrainHeight(FIRE_PIT.x, FIRE_PIT.z) + FIRE_PIT.rimHeight;
+
+function groundHeightAt(x, z) {
+  if (Math.hypot(x - FIRE_PIT.x, z - FIRE_PIT.z) < FIRE_PIT.rimRadius) {
+    return FIRE_PIT_RIM_Y;
+  }
+  return terrainHeight(x, z);
+}
+
 function pushOutOfFirePit(x, z) {
   const dx = x - FIRE_PIT.x;
   const dz = z - FIRE_PIT.z;
@@ -3752,7 +3772,7 @@ function animate() {
           playerKind === 'darla'
             ? updateWalkCycle(localIsMoving, isJumping, isJumping && jumpHeld)
             : updateMirandaWalkCycle(localIsMoving);
-        player.position.y = baseY + jumpY + terrainHeight(player.position.x, player.position.z);
+        player.position.y = baseY + jumpY + groundHeightAt(player.position.x, player.position.z);
       }
     }
   }

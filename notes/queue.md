@@ -136,6 +136,20 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       point on the boundary is unambiguously outside. **Any two-radius test
       like this needs hysteresis** — equal radii will always chatter.
 
+- [x] **Jumping onto the pit stands you on the stonework**, not down in the
+      fire. `groundHeightAt` in `main.js` returns the rim top instead of the
+      terrain when you're over the ring. Deliberately a special case rather
+      than a general height-field — one prop doesn't justify one.
+
+      The radius it uses is the *stone ring's* outer face (0.615), not the
+      wider radius the pit blocks and clears grass at (1.0). Standing only
+      extends as far as there's something under your feet, so landing in the
+      0.385 gap between the stonework and the collision boundary puts you on
+      the grass beside the pit, which is what it looks like. The pit's real
+      dimensions are now hoisted out of `createFirePit` into `FIRE_PIT`
+      (`rimRadius`, `rimHeight`) so what you stand on and what gets built come
+      from the same numbers.
+
 - [x] **You can jump into the fire pit.** It still blocks you walking in, but
       the push-out is skipped while airborne (so a jump clears the rim instead
       of hitting an invisible wall) and while already inside (so having landed
