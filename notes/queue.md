@@ -136,6 +136,21 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       point on the boundary is unambiguously outside. **Any two-radius test
       like this needs hysteresis** — equal radii will always chatter.
 
+- [x] **The jump arc is absolute, not relative to the ground.** Jumping *over*
+      the fire pit used to throw her upward as she crossed the rim: height was
+      measured from whatever was under her at that instant, so the reference
+      moving up 0.345 moved her with it — a second little hop halfway through
+      the first. `jumpGroundY` now records the ground she left and the arc runs
+      from there, landing on whatever is beneath her when she comes down.
+      Measured: worst single-frame rise over the pit drops from 0.364 to 0.052,
+      which is just normal arc motion.
+
+      Stepping off the rim starts a fall rather than teleporting her down.
+      That's keyed off crossing the rim radius specifically, **not** off "the
+      ground got lower" — walking downhill changes the ground beneath her by
+      more per frame than any sane threshold, so a generic test would misfire
+      constantly on the hill.
+
 - [x] **Jumping onto the pit stands you on the stonework**, not down in the
       fire. `groundHeightAt` in `main.js` returns the rim top instead of the
       terrain when you're over the ring. Deliberately a special case rather

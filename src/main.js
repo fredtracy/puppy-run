@@ -3503,24 +3503,58 @@ let isJumping = false;
 let jumpVelocity = 0;
 let jumpHeight = 0;
 let jumpHeld = false;
+// The ground she left, in absolute world height. The arc is measured from
+// here rather than from whatever happens to be underneath her right now, and
+// that distinction is the whole point: jump height used to be relative to the
+// current ground, so crossing over the fire pit's rim mid-flight moved the
+// reference up 0.345 and threw her up with it — a second little hop in the
+// middle of the first.
+let jumpGroundY = 0;
+let wasOverPitRim = false;
 
 function triggerJump() {
   if (!gameStarted || isJumping || mirandaLounging) return;
   isJumping = true;
   jumpVelocity = JUMP_SPEED;
+  jumpGroundY = groundHeightAt(player.position.x, player.position.z);
   playJumpSound();
 }
 
-function updateJump(delta) {
-  if (!isJumping) return 0;
+// Walking off the rim should drop her, not teleport her down 0.345 in a single
+// frame. Reuses the jump arc with no upward velocity, so it's a fall.
+//
+// Keyed off crossing the rim specifically rather than "the ground got lower",
+// which would misfire constantly on the hill — walking downhill changes the
+// ground under her by more per frame than any sane threshold.
+function beginFallOffRim() {
+  const overRim =
+    Math.hypot(player.position.x - FIRE_PIT.x, player.position.z - FIRE_PIT.z) <
+    FIRE_PIT.rimRadius;
+  if (!isJumping && wasOverPitRim && !overRim) {
+    isJumping = true;
+    jumpVelocity = 0;
+    jumpHeight = 0;
+    jumpGroundY = FIRE_PIT_RIM_Y;
+  }
+  wasOverPitRim = overRim;
+}
+
+// Returns her absolute height this frame, or null once she's back on the
+// ground. `ground` is whatever is under her *now*, which needn't be what she
+// took off from — landing on the pit's rim catches her early and high, and
+// dropping off it lets her fall further than she rose.
+function updateJump(delta, ground) {
+  if (!isJumping) return null;
   jumpVelocity -= GRAVITY * delta;
   jumpHeight += jumpVelocity * delta;
-  if (jumpHeight <= 0) {
+  const y = jumpGroundY + jumpHeight;
+  if (jumpVelocity <= 0 && y <= ground) {
     jumpHeight = 0;
     isJumping = false;
     jumpVelocity = 0;
+    return null;
   }
-  return jumpHeight;
+  return y;
 }
 
 // --- Multiplayer sync ----------------------------------------------------
@@ -3767,12 +3801,14 @@ function animate() {
       // the usual walk-cycle/jump-height math would otherwise stomp her y
       // back toward 0 every frame.
       if (!mirandaLounging) {
-        const jumpY = updateJump(delta);
+        const ground = groundHeightAt(player.position.x, player.position.z);
+        beginFallOffRim();
+        const airY = updateJump(delta, ground);
         const baseY =
           playerKind === 'darla'
             ? updateWalkCycle(localIsMoving, isJumping, isJumping && jumpHeld)
             : updateMirandaWalkCycle(localIsMoving);
-        player.position.y = baseY + jumpY + groundHeightAt(player.position.x, player.position.z);
+        player.position.y = baseY + (airY ?? ground);
       }
     }
   }
