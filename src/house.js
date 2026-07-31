@@ -1284,6 +1284,29 @@ function frontBedInnerEdge() {
   ];
 }
 
+// Outward normal at a point on the bed's outer edge — perpendicular to the
+// local run, pointing away from the house.
+function frontBedOutward(pts, i) {
+  const a = pts[Math.max(0, i - 1)];
+  const b = pts[Math.min(pts.length - 1, i + 1)];
+  const dx = b[0] - a[0];
+  const dz = b[1] - a[1];
+  const len = Math.hypot(dx, dz) || 1;
+  return [-dz / len, dx / len];
+}
+
+// The walk's outer edge: the bed's outer edge pushed WALK_W away from the
+// house. Shared by the mesh that draws the walk and by isHousePaved, which
+// is the point — the grass mask drifting away from the geometry it is
+// supposed to mask is exactly the bug this fixes.
+function frontWalkOuterEdge() {
+  const outer = frontBedOuterEdge();
+  return outer.map(([x, z], i) => {
+    const [nx, nz] = frontBedOutward(outer, i);
+    return [x + nx * WALK_W, z + nz * WALK_W];
+  });
+}
+
 const DRIVEWAY_END_Z = GARAGE_FRONT_Z - FT * 14;
 const APRON_X1 = HALF_W + FT * 9;
 // The back walk is as wide as the parking run on the garage side, not the
@@ -1608,14 +1631,49 @@ const FLATWORK = [
 
 const inBox = (x, z, b) => x > b.xMin && x < b.xMax && z > b.zMin && z < b.zMax;
 
+// Bed and front walk together, as one polygon in world coordinates.
+//
+// Everything else paved is a box, which is why isHousePaved was only ever a
+// box test — but the bed is a wall-hugging polyline and the walk is that
+// polyline offset outward, and neither has been a rectangle since the bed was
+// rebuilt to run straight-then-curved *outside* the perimeter walk. The stale
+// assumption was written into isHousePaved's own comment ("the planter bed
+// needs no test of its own"), which was true right up until the bed moved out
+// from under the walk, and then silently wasn't.
+//
+// One polygon rather than two, because the bed's outer edge and the walk's
+// inner edge are the same line: trace the wall, jump out to the walk's far
+// edge at the east end where the arc lands on the brick, and come back.
+const FRONT_PAVED_POLY = [
+  ...frontBedInnerEdge(),
+  ...frontWalkOuterEdge().reverse(),
+].map(([x, z]) => [x, z + HOUSE_Z]);
+
+// Standard ray-crossing test. The polygon is small (~20 points) and this is
+// only reached for points that missed every box, so there's no need for the
+// bounding-box early-out the pond's equivalent has.
+function inFrontPaved(x, z) {
+  let inside = false;
+  for (let i = 0, j = FRONT_PAVED_POLY.length - 1; i < FRONT_PAVED_POLY.length; j = i++) {
+    const [xi, zi] = FRONT_PAVED_POLY[i];
+    const [xj, zj] = FRONT_PAVED_POLY[j];
+    if ((zi > z) !== (zj > z) && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
 // True where the ground is building or pavement rather than lawn. The
 // curved front walk is tested as an actual annulus sector — boxing it to
 // its bounding rectangle would strip the grass off a big square of front
 // lawn the walk never touches.
 export function isHousePaved(x, z) {
-  // The planter bed needs no test of its own: it lies entirely within the
-  // perimeter walk, which FLATWORK already covers.
-  return HOUSE_SOLIDS.some((b) => inBox(x, z, b)) || FLATWORK.some((b) => inBox(x, z, b));
+  return (
+    HOUSE_SOLIDS.some((b) => inBox(x, z, b))
+    || FLATWORK.some((b) => inBox(x, z, b))
+    || inFrontPaved(x, z)
+  );
 }
 
 
@@ -2383,22 +2441,12 @@ export function createHouse() {
   // the bed's edge the whole way round instead of being a separate shape
   // that has to be kept in step by hand.
   {
+    const walkOuter = frontWalkOuterEdge();
     const shape = new THREE.Shape();
-    const outward = (i) => {
-      // Perpendicular to the local run, pointing away from the house
-      // (toward the street, i.e. -z).
-      const a = bedOuter[Math.max(0, i - 1)];
-      const b = bedOuter[Math.min(bedOuter.length - 1, i + 1)];
-      const dx = b[0] - a[0];
-      const dz = b[1] - a[1];
-      const len = Math.hypot(dx, dz) || 1;
-      return [-dz / len, dx / len];
-    };
     shape.moveTo(bedOuter[0][0], -bedOuter[0][1]);
     for (let i = 1; i < bedOuter.length; i++) shape.lineTo(bedOuter[i][0], -bedOuter[i][1]);
-    for (let i = bedOuter.length - 1; i >= 0; i--) {
-      const [nx, nz] = outward(i);
-      shape.lineTo(bedOuter[i][0] + nx * WALK_W, -(bedOuter[i][1] + nz * WALK_W));
+    for (let i = walkOuter.length - 1; i >= 0; i--) {
+      shape.lineTo(walkOuter[i][0], -walkOuter[i][1]);
     }
     shape.closePath();
     const geo = new THREE.ShapeGeometry(shape);
