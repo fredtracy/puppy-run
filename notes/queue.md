@@ -44,13 +44,14 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       check above is arithmetic. The water *material* especially — a flat
       translucent standard material — is a placeholder that wants a real look.
 
-- [ ] **Optimize - 30fps even on low quality.** Reported 2026-07-30.
-      **Could not be reproduced 2026-07-31**, and the measurements say there is
-      currently nothing wrong. Left open only until the owner confirms against
-      their own normal-play window.
+- [ ] **Optimize - 30fps in a normal browser window, 60fps in the preview
+      pane, same machine.** Confirmed by the owner 2026-07-31 after the
+      measurements below. Parked, not abandoned.
 
-      Measured properly this time: pane visible, GPU warm, `gameDebug.benchRender`
-      driving the composer with `gl.finish()`. Budget for 60fps is 16.7 ms.
+      **The gap between those two environments is the entire lead.** The game
+      itself measures fine: worst view is 7.7 ms against a 16.7 ms budget for
+      60fps, better than 2x headroom, with the counter reading 60/59
+      everywhere in the pane.
 
       | view | ms | calls | tris |
       |---|---|---|---|
@@ -61,29 +62,39 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       | inside the woods | 3.0 | 334 | 4.0 M |
       | front, across the road | 2.7 | 309 | 1.9 M |
 
-      **Worst case is 7.7 ms against 16.7 - better than 2x headroom.** The
-      on-screen counter reads 60/59 in every view.
+      Two theories are already dead, so do not spend time on them again:
 
-      **Resolution is nearly free.** 16x the pixels (197k to 3.16M, pixelRatio
-      0.75 to 3.0) moved the frame from 3.9 to 4.5 ms. So it is *not*
-      fill-bound: not grass overdraw, not the alpha-tested foliage, not the
-      post chain. Every fill-rate theory in the original filing is dead.
+      - **Not fill-bound.** 16x the pixels (pixelRatio 0.75 to 3.0, 197k to
+        3.16M - more pixels than a 1080p window) moved the frame 3.9 to
+        4.5 ms. Grass overdraw, the alpha-tested foliage and the post chain
+        are all cleared.
+      - **Grass is a third of it, not the wall.** 100% to 0% density takes the
+        worst view 7.7 to ~5.4 ms and 10.2M triangles to 2.0M. Worth having,
+        won't double anyone's frame rate.
 
-      **Grass costs about 30%,** which corrects the earlier "grass is not the
-      bottleneck": 100% to 0% density takes the worst view from 7.7 to ~5.4 ms,
-      and 10.2M triangles to 2.0M. Real, but not what stands between anyone
-      and 60fps.
+      **Prime suspect: the two environments are not on the same GPU.** This is
+      a laptop with an RTX 2070 Max-Q *and* integrated graphics. The preview
+      pane was verified running on the NVIDIA card - `ANGLE (NVIDIA GeForce
+      RTX 2070 with Max-Q Design, Direct3D11)`. If the owner's normal browser
+      is on the Intel iGPU that is a 5-10x difference on its own and explains
+      the whole thing without any of it being the game's fault.
 
-      **Most likely explanation for the original report:** the GPU idles at
-      149 MHz against a 2100 MHz maximum and only ramps under sustained load.
-      Any reading taken while the browser pane was backgrounded, unfocused, or
-      behind a slept display was measuring a downclocked card - exactly the
-      condition that caused the rest of 2026-07-31's confusion.
+      **Check that first, it takes a minute:** in the slow window, open
+      devtools and run
 
-      **To close this:** open the game in a normal window, play for a minute,
-      read the debug counter. 60 means done. 30 means there is a real
-      difference between that window and the preview pane worth chasing -
-      start by comparing `benchRender` in both.
+          const gl = document.createElement('canvas').getContext('webgl2');
+          const d = gl.getExtension('WEBGL_debug_renderer_info');
+          gl.getParameter(d.UNMASKED_RENDERER_WEBGL);
+
+      If it says Intel, the fix is a browser/driver setting (force high
+      performance GPU), not a code change. If it says NVIDIA, then something
+      else really does differ - compare `gameDebug.benchRender(40)` in both
+      windows and the numbers will say whether it is render cost or the rest
+      of the frame loop.
+
+      Also worth ruling out: whether the slow window is running the deployed
+      GitHub Pages build rather than the dev server, and whether a second
+      copy of the game is open in another tab competing for the GPU.
 
 - [x] **Chimney and hammock both have collision.** Chimney:
       `HOUSE_CHIMNEY` + `pushOutOfChimney`, deliberately outside
