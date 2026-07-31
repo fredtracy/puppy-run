@@ -1340,6 +1340,10 @@ export const HOUSE_Z = -1.5 - HALF_D;
 export const HOUSE_DRIVEWAY = {
   x: GARAGE_CX,
   halfWidth: 2.5,
+  // Half-width of the slab in front of the garage doors. The yard-side
+  // driveway needs it so it can leave the house at the apron's own width
+  // instead of stepping straight in to its running width.
+  apronHalfWidth: (GARAGE_W + WALK_W * 2) / 2,
   endZ: HOUSE_Z + DRIVEWAY_END_Z,
   surfaceY: 0.1,
 };

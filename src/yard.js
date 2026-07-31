@@ -442,7 +442,21 @@ const driveCenterX = (t) => DRIVE_X + DRIVE_BEND * smootherstep(t);
 // is a constant-width drive with a radiused return at the pavement, not a
 // widening wedge — cubic was already too gradual and rendered as a fan
 // spanning most of the frontage, which read as a parking lot.
-const driveHalfWidth = (t) => DRIVE_HALF_W + (DRIVE_APRON_HALF - DRIVE_HALF_W) * t ** 5;
+// Width along the run. Flared at *both* ends, which is what makes the
+// concrete read as one poured surface rather than three slabs abutting.
+//
+// The road end already flared (the t^5 term) — it stays at running width
+// almost the whole way and then opens hard into the apron at the kerb,
+// which is what the satellite shows. The house end did not: the drive left
+// the garage at 5 m and met a 7.92 m apron, so there was a hard shoulder
+// on each side right at the seam. The (1-t)^4 term opens it back out to
+// the apron's own width at t=0 and closes to running width within about a
+// third of the run.
+const DRIVE_HOUSE_HALF = HOUSE_DRIVEWAY.apronHalfWidth;
+const driveHalfWidth = (t) =>
+  DRIVE_HALF_W +
+  (DRIVE_APRON_HALF - DRIVE_HALF_W) * t ** 5 +
+  (DRIVE_HOUSE_HALF - DRIVE_HALF_W) * (1 - t) ** 4;
 
 const onDriveway = (x, z) => {
   if (z > DRIVE_START_Z || z < ROAD_Z + ROAD_HALF_WIDTH) return false;
