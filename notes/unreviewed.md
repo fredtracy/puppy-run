@@ -14,6 +14,26 @@ a human. Those stay in the untested list until someone actually plays them.
 
 ## Judgement calls that could have gone the other way
 
+- **The pond exists and nobody has looked at it.** Built overnight with the
+  browser pane hidden, so every check is arithmetic — rim level, bed
+  submerged, stream monotonic downhill, nothing growing in the water. What
+  none of that covers is whether it's *pretty*, which was the whole brief.
+  The water material especially is a flat translucent standard material with
+  no movement, ripples or depth tint: a placeholder, not a look.
+- **The stream-then-pond reading won over the spring.** The instruction was to
+  use the spring idea (#2), but that idea existed only to solve water sitting
+  on high ground — and measuring the terrain showed the corner is 1.7 m
+  *below* the yard, so the premise was false. Built as water running downhill
+  into the corner, with the spring as its head. If the intent was
+  specifically "follow the stream *upstream* to the source", this still does
+  that; it just isn't fighting the hill to do it.
+- **The pond's glade removes trees within 6 m of it** and lifts `canopyShade`
+  back to daylight within 7.5 m. That's a real hole cut in the woods that
+  wasn't there before, visible from inside the tree line.
+- **All the pond numbers are eye-picked** — its position (29, 35.5), the three
+  radii, 0.85 m depth, the stream's path and 0.6 m width. Only the water
+  *level* is derived, and that from the terrain.
+
 - **`SHADOW_HALF_EXTENT` cut from 34 to 26, and nobody has looked at it.** The
   reasoning is measured (the shadow pass is 320 of 474 draw calls; each step
   down is ~25 calls) and the geometry checks out — from mid-yard a ±26 box

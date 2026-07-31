@@ -7,52 +7,42 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
 
 ## Open
 
-- [ ] **A hidden watery oasis in the far corner.** A stream that starts a
-      little way into the woods; follow it and it leads you to a beautiful
-      pond tucked in the corner. Meant to be found, not signposted.
+- [x] **The hidden watery oasis is built.** Spring, stream and pond in the
+      far corner, with nothing pointing at it.
 
-      **Where.** The owner circled it on an overhead screenshot: the corner
-      past the *far* end of the back lawn, roughly x 18-35, z 20-40 — call it
-      40 m out from the origin, which sits comfortably inside both
-      `WORLD_RADIUS` (55) and the movement clamp (50). Worth confirming with
-      `?at=26,30` and a look before building anything, since that reading came
-      off a screenshot rather than coordinates.
+      **The terrain reversed the design, and the queue note here was wrong.**
+      It claimed that corner is the high end of the lot. It isn't: the graded
+      pad is dead flat out to `TERRAIN_PAD` and the dome falls away past it,
+      so the corner sits ~1.7 m *below* the yard — 2.40 at the tree line down
+      to 0.70 in the hollow over about nineteen metres. Measuring it settled
+      an argument that two rounds of reasoning had got backwards. So the water
+      runs downhill *into* the corner (the original idea) and the spring is
+      simply where it surfaces at the top of that slope. Both halves survive.
 
-      **The thing that decides the whole design:** that corner is the *high*
-      end of the lot. `terrainHeight` tilts the ground with `UPHILL_X` /
-      `UPHILL_Z` both positive, so the ground rises toward it — which is
-      exactly where water doesn't collect. Two honest ways out:
+      **The pond needed three radii, not one.** On a slope falling 0.15 m/m,
+      any circle has a rim over a metre out of level. First attempt feathered
+      the dig by radius and left the uphill bank standing inside the water
+      disc. Second put the rim exactly at water level, which measured as the
+      pond standing 5 cm proud of its own bank. It now cuts a dish to
+      `POND_BED` (3.9) that is wider than the water at `POND_DISC` (3.4), with
+      the rim set to the lowest natural ground on that ring — the dig only
+      lowers, so the downhill side is what the water level has to respect.
+      Measured after: rim dead level at 0.25 the whole way round, water at
+      0.17, bed fully submerged, 0.77 m deep in the middle.
 
-      1. Carve a bowl into `terrainHeight`. That function is the single
-         source of ground height for the lawn mesh, every grass blade, every
-         tree and the brush, so a depression there reshapes all of them for
-         free. Cheapest route to a real pond.
-      2. Make it a *spring* — water emerging on the high ground, pooling, and
-         the stream running **downhill out of it** rather than into it. Also
-         physically right, needs no terrain surgery, and arguably prettier:
-         you'd follow the stream *up* to find the source.
+      Everything else reads off the same two shapes: grass stops at the
+      waterline (0.15 m), trees and brush keep out (1.2 m / 1.5 m), the brush
+      band opens a ~1.5 m gap where the stream crosses it, and `canopyShade`
+      lets the glade back into daylight with trees excluded from its middle so
+      the opening is real rather than a bright patch under a closed canopy.
 
-      The owner described stream-then-pond, which is (1). Worth showing them
-      (2) before committing, since it's less work and a nicer walk.
+      `terrainHeight` runs millions of times a load, so `waterCarveAt` rejects
+      on a bounding box first: 6.2 ms/200k calls away from the water against
+      76.6 inside it.
 
-      **Gotchas, all of which will otherwise be discovered the hard way:**
-
-      - The brush band is deliberately opaque (~1% see-through at dog height).
-        Something hidden behind it is hidden *permanently* unless there's a
-        gap — so the stream has to be the thread that draws you through, and
-        the band needs a deliberate break where it crosses. See `brushEdge` /
-        `woodsDepth` in yard.js.
-      - Water needs the same exclusions the fire pit and road already have:
-        no grass, no trees, no brush growing in it. There's an established
-        pattern (`inFirePit`, `inRoad`) to copy.
-      - At radius ~40 the grass has nearly faded out (`GRASS_FULL_RADIUS` 24,
-        `GRASS_FADE_RADIUS` 44) *and* `canopyShade` has the ground at 20%
-        brightness. A glade meant to be beautiful wants to be a lit clearing,
-        so it likely needs its own exemption from both — the same way the
-        mown property is already exempt from the distance fade.
-      - Nothing in the woods has collision yet, so she can currently walk
-        across wherever the pond goes. Pairs with the chimney/hammock
-        collision item below.
+      **Nobody has seen it.** The browser pane was hidden all night, so every
+      check above is arithmetic. The water *material* especially — a flat
+      translucent standard material — is a placeholder that wants a real look.
 
 - [ ] **Optimize — 30fps even on low quality.** Reported 2026-07-30, and the
       "even on low" is the whole clue: low is ~19.5% of high's blade count

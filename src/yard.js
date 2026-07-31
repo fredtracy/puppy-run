@@ -808,6 +808,16 @@ function createChunkBrush(cx, cz, rand) {
       // on into the woods both ways, and a hole it disappears into reads
       // better than pavement ending against a hedge.
       if (inRoad(x, z) || inHouse(x, z)) continue;
+      // The stream cuts a gap through the band where it crosses.
+      //
+      // This is what makes the pond findable at all. The brush is
+      // deliberately opaque — about 1% see-through at a dog's eye height —
+      // so anything behind it is hidden permanently unless something opens
+      // a way in. The gap is only about a metre and a half wide and it
+      // isn't visible from the middle of the lawn, which is the balance
+      // being struck: hidden, but there for someone poking along the far
+      // corner.
+      if (nearWater(x, z, 1.5)) continue;
 
       const shade = 1 - 0.6 * smootherstep(depth / BRUSH_DEPTH);
       addBrushClump(stemGeos, clusters, x, z, terrainHeight(x, z), shade, rand);
@@ -843,6 +853,12 @@ export function createTreeChunk(cx, cz) {
       const x = originX + lx + (rand() - 0.5) * TREE_SPACING * 0.8;
       const z = originZ + lz + (rand() - 0.5) * TREE_SPACING * 0.8;
       if (inOpenArea(x, z) || inHouse(x, z) || inRoad(x, z)) continue;
+      // Nothing grows in the water, and nothing stands in the glade — the
+      // opening over the pond has to be a real gap in the canopy, or
+      // lighting the ground there (see canopyShade) is just a bright patch
+      // under a closed roof of leaves.
+      if (nearWater(x, z, 1.2)) continue;
+      if (Math.hypot(x - POND.x, z - POND.z) < GLADE_RADIUS * 0.8) continue;
       if (rand() < 0.1) continue; // thin out a bit so it reads as a forest, not a wall
 
       const kind = rand() < 0.3 ? 'pine' : 'broadleaf';
@@ -1830,7 +1846,12 @@ const UPHILL_Z = Math.SQRT1_2;
 // ground around radius 25 while the northwest carries on to about 44.
 const TILT_BIAS = 0.35;
 
-export function terrainHeight(x, z) {
+// The ground before the water cuts into it.
+//
+// Split out from terrainHeight so the pond can work out how deep to dig
+// without asking a question that depends on its own answer — waterCarveAt
+// needs to know what the hillside would have been.
+function groundBeforeWater(x, z) {
   const dx = x - TERRAIN_CENTER_X;
   const dz = z - TERRAIN_CENTER_Z;
   const d = Math.hypot(dx, dz);
@@ -1849,6 +1870,250 @@ export function terrainHeight(x, z) {
   // set at a fixed height, so it stays a ditch running across the slope
   // near the road instead of a level trench slicing through the hill.
   return h - ditchDepthAt(x, z);
+}
+
+export function terrainHeight(x, z) {
+  return groundBeforeWater(x, z) - waterCarveAt(x, z);
+}
+
+// ── the spring, the stream and the pond ────────────────────────────────
+//
+// A hidden thing in the far corner: a spring rising just behind the tree
+// line, a stream running down the slope from it, and a pond in the hollow
+// at the bottom. Nothing points at it. You find the water and follow it.
+//
+// **The terrain decided the shape of this.** The idea was originally a
+// stream leading *down* to a pond, then — on a wrong reading of
+// terrainHeight — a spring on high ground with the stream running away
+// from it. Measuring the actual ground settled it: the corner is not the
+// high end of the lot at all. The graded pad is dead flat out to
+// TERRAIN_PAD and the dome falls away past it, so this corner sits about
+// 1.7 m *below* the yard, dropping from 2.40 at the tree line to 0.70 at
+// the hollow over roughly nineteen metres. Water runs downhill into the
+// corner, which is the original idea, and the spring is simply where it
+// surfaces at the top of that slope. Both halves survive; the hillside
+// just told us which way round they go.
+//
+// Everything here is driven off two shapes — a polyline for the stream and
+// a disc for the pond — and every other system reads them: the ground digs
+// itself a channel, the grass and trees and brush stay out of the water,
+// and the brush band opens a gap where the stream crosses it.
+
+const POND = { x: 29, z: 35.5, radius: 4.0 };
+// The water surface, and how far out the dig feathers back into the hill.
+//
+// Two radii rather than one, and that separation is the whole trick. The
+// pond sits on a slope that falls about 0.15 m per metre, so a circle of
+// any size has a rim a metre and a bit out of level — the first attempt
+// feathered the dig by radius alone and left the uphill bank standing
+// *inside* the water disc, so the surface vanished into the hillside on
+// one side and floated over open ground on the other.
+//
+// Instead the bed is cut to a shape of its own out to POND_DISC — a dish,
+// guaranteed below the water everywhere — and then between POND_DISC and
+// POND_CARVE the target rises back to meet whatever the hill was doing.
+// The dig is driven by the shape the pond needs, and the hillside only
+// decides where the dig stops.
+// Three radii, not two, and the third is what actually holds the water in.
+//
+// POND_DISC is the water surface. POND_BED is where the dish's wall comes
+// back up to its rim — deliberately *wider*, so the water's edge is a
+// comfortable 12 cm underwater rather than sitting exactly on the lip. Cut
+// the dish to end at the disc instead and the rim is at water level all
+// the way round, which measured as the pond standing 5 cm proud of its own
+// bank: water with nothing holding it.
+const POND_DISC = 3.4;
+const POND_BED = 3.9;
+const POND_CARVE = 7.0;
+// How far down the bed goes below the water at the middle of the pond.
+const POND_DEPTH = 0.85;
+// The stream's head sits just *outside* the brush band, so it isn't
+// visible from the lawn — the point is to find it, not to be shown it.
+const STREAM_PATH = [
+  [18.5, 21.5],
+  [21, 25],
+  [24, 28.5],
+  [26.5, 32],
+  // Stops at the pond's edge rather than its middle. Run to the centre and
+  // the ribbon dives the full depth of the dish and lies on the bottom,
+  // visible through the water; ending just inside the surface reads as the
+  // stream running in. The channel still connects — the pond's own dig is
+  // deeper than the stream's everywhere they overlap.
+  [27.4, 33.3],
+];
+const STREAM_HALF = 0.6;
+const STREAM_DEPTH = 0.26;
+// The opening in the canopy over the pond. Trees are kept out of the inner
+// part of it and the ground is let back into full daylight (see
+// canopyShade) — a pond under a closed canopy is a dark puddle, and the
+// whole point of this one is that it's the pretty thing at the end.
+const GLADE_RADIUS = 7.5;
+
+// Everything water-related lives inside this box. terrainHeight runs for
+// every blade of grass in the world — several million times a load — so
+// the very first thing waterCarveAt does is reject the ~99% of the map
+// that is nowhere near the pond, before any real work.
+const WATER_BOUNDS = { x0: 16, x1: 34.5, z0: 19, z1: 41 };
+
+// Distance from a point to the stream's centreline, as a polyline.
+function distanceToStream(x, z) {
+  let best = Infinity;
+  for (let i = 0; i < STREAM_PATH.length - 1; i++) {
+    const [ax, az] = STREAM_PATH[i];
+    const [bx, bz] = STREAM_PATH[i + 1];
+    const vx = bx - ax;
+    const vz = bz - az;
+    const len2 = vx * vx + vz * vz;
+    // Clamped projection onto the segment, so the ends are round rather
+    // than the line running on forever past them.
+    const t = Math.min(1, Math.max(0, ((x - ax) * vx + (z - az) * vz) / len2));
+    const dx = x - (ax + vx * t);
+    const dz = z - (az + vz * t);
+    const d = Math.hypot(dx, dz);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+// Water level, worked out from the hillside rather than typed in.
+//
+// A pond on a slope has to sit below the *lowest* point of its own rim or
+// it runs out of the downhill side. Sampling the rim and taking the
+// minimum is what guarantees that, and it keeps working if the terrain
+// ever changes shape underneath it.
+// Sampled at POND_BED, which is where the rim is, and set below it.
+//
+// The dig only ever lowers ground — it can't build a bank up. So on the
+// downhill side the rim can be no higher than the hill already is, and the
+// water has to sit under *that*, or it runs out. Taking the minimum around
+// the rim ring and dropping 8 cm is what guarantees it, and it keeps
+// holding if the hillside is ever reshaped underneath.
+const POND_RIM_DROP = 0.08;
+const POND_WATER_Y = (() => {
+  let min = Infinity;
+  for (let a = 0; a < 96; a++) {
+    const ang = (a / 96) * Math.PI * 2;
+    min = Math.min(
+      min,
+      groundBeforeWater(POND.x + Math.cos(ang) * POND_BED, POND.z + Math.sin(ang) * POND_BED)
+    );
+  }
+  return min - POND_RIM_DROP;
+})();
+
+function waterCarveAt(x, z) {
+  if (x < WATER_BOUNDS.x0 || x > WATER_BOUNDS.x1) return 0;
+  if (z < WATER_BOUNDS.z0 || z > WATER_BOUNDS.z1) return 0;
+
+  let carve = 0;
+
+  const pd = Math.hypot(x - POND.x, z - POND.z);
+  if (pd < POND_CARVE) {
+    const ground = groundBeforeWater(x, z);
+    // The rim, which stands just *above* the water — that's what contains
+    // it. Equal to the lowest natural ground on the rim ring by
+    // construction (see POND_WATER_Y), so the downhill side needs no dig
+    // and every other side is cut down to meet it.
+    const lip = POND_WATER_Y + POND_RIM_DROP;
+    let target;
+    if (pd <= POND_BED) {
+      // A dish, deepest in the middle, rising to the rim. The water's own
+      // edge sits at POND_DISC, well inside this, so it meets the bed
+      // rather than balancing on the lip.
+      const t = pd / POND_BED;
+      target = lip - POND_DEPTH * (1 - t * t);
+    } else {
+      // Outside the dish, climbing back to meet the untouched hillside.
+      const t = (pd - POND_BED) / (POND_CARVE - POND_BED);
+      target = lip + (ground - lip) * smootherstep(Math.min(1, t));
+    }
+    // Only ever digs. Where the hill is already lower than the dish wants
+    // — the downhill side — it's left alone, which is what leaves the pond
+    // sitting in the top of the hollow with the ground falling away below.
+    carve = Math.max(carve, ground - target);
+  }
+
+  const sd = distanceToStream(x, z);
+  if (sd < STREAM_HALF) {
+    const t = sd / STREAM_HALF;
+    carve = Math.max(carve, STREAM_DEPTH * (1 - t * t));
+  }
+
+  return Math.max(0, carve);
+}
+
+// How close a point is to open water, for keeping things out of it. The
+// margin lets callers ask for their own clearance — grass can grow to the
+// waterline, a tree can't stand in the channel.
+function nearWater(x, z, margin) {
+  if (x < WATER_BOUNDS.x0 - margin || x > WATER_BOUNDS.x1 + margin) return false;
+  if (z < WATER_BOUNDS.z0 - margin || z > WATER_BOUNDS.z1 + margin) return false;
+  if (Math.hypot(x - POND.x, z - POND.z) < POND_BED + margin) return true;
+  return distanceToStream(x, z) < STREAM_HALF + margin;
+}
+
+const WATER_MAT = new THREE.MeshStandardMaterial({
+  color: 0x2e5c58,
+  roughness: 0.12,
+  metalness: 0.1,
+  transparent: true,
+  opacity: 0.82,
+});
+
+function createWater() {
+  const group = new THREE.Group();
+
+  // The pond: one flat disc, because water is level. Slightly inside the
+  // carved radius so the bank rises through its edge rather than the two
+  // meeting exactly and z-fighting.
+  const disc = mesh(new THREE.CircleGeometry(POND_DISC, 48), WATER_MAT);
+  disc.rotation.x = -Math.PI / 2;
+  disc.position.set(POND.x, POND_WATER_Y, POND.z);
+  group.add(disc);
+
+  // The stream: a ribbon that follows the ground down. Unlike the pond it
+  // can't be level — it's moving, so its surface runs with the slope, and
+  // sampling terrainHeight (already carved by now) puts it in its channel.
+  const positions = [];
+  const indices = [];
+  const STEPS = 14;
+  let row = 0;
+  for (let i = 0; i < STREAM_PATH.length - 1; i++) {
+    const [ax, az] = STREAM_PATH[i];
+    const [bx, bz] = STREAM_PATH[i + 1];
+    for (let s = 0; s <= STEPS; s++) {
+      // Skip the duplicated joint between segments.
+      if (i > 0 && s === 0) continue;
+      const t = s / STEPS;
+      const cx = ax + (bx - ax) * t;
+      const cz = az + (bz - az) * t;
+      // Perpendicular to the segment, in plan.
+      const vx = bx - ax;
+      const vz = bz - az;
+      const len = Math.hypot(vx, vz) || 1;
+      const nx = -vz / len;
+      const nz = vx / len;
+      const w = STREAM_HALF * 0.85;
+      for (const side of [-1, 1]) {
+        const px = cx + nx * w * side;
+        const pz = cz + nz * w * side;
+        positions.push(px, terrainHeight(px, pz) + 0.05, pz);
+      }
+      if (row > 0) {
+        const a = (row - 1) * 2;
+        indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+      }
+      row++;
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  const stream = mesh(geo, WATER_MAT);
+  group.add(stream);
+
+  return group;
 }
 
 // Segments per world unit across the lawn. The dome's slope is gentle, so
@@ -1881,7 +2146,21 @@ const LAWN_SEGMENTS = 200;
 const CANOPY_SHADE_FLOOR = 0.2;
 function canopyShade(x, z) {
   const t = Math.min(1, Math.max(0, (woodsDepth(x, z) + 1.6) / 6));
-  return 1 - (1 - CANOPY_SHADE_FLOOR) * smootherstep(t);
+  const shade = 1 - (1 - CANOPY_SHADE_FLOOR) * smootherstep(t);
+
+  // The glade over the pond is a hole in the canopy, so the ground under
+  // it comes back to daylight. Without this the pond sits at 20% shade
+  // like the rest of the wood — a dark puddle at the end of the walk,
+  // which is the opposite of the payoff it's meant to be. Trees are kept
+  // out of the middle of the same circle (see createTreeChunk), so this
+  // is lighting an opening that actually exists rather than painting a
+  // bright patch under a closed canopy.
+  const g = Math.hypot(x - POND.x, z - POND.z);
+  if (g < GLADE_RADIUS) {
+    const open = smootherstep(Math.min(1, (GLADE_RADIUS - g) / (GLADE_RADIUS * 0.55)));
+    return shade + (1 - shade) * open;
+  }
+  return shade;
 }
 
 function createLawn() {
@@ -3341,7 +3620,11 @@ function createChunkGrass(cx, cz, rand) {
 
   const field = (f, x, z) => readChunkField(f, originX, originZ, x, z);
 
-  const exclude = (x, z) => inHouse(x, z) || inFirePit(x, z) || inRoad(x, z);
+  // Grass comes right down to the waterline — a bare margin round a pond
+  // looks like a construction site — so the clearance here is much tighter
+  // than the trees' and the brush's.
+  const exclude = (x, z) =>
+    inHouse(x, z) || inFirePit(x, z) || inRoad(x, z) || nearWater(x, z, 0.15);
   const jitter = GRASS_SPACING * 0.9;
   const entries = {
     TURF: [],
@@ -3550,6 +3833,8 @@ export function createYard() {
   const dragonflies = createDragonflies();
   group.add(dragonflies);
   group.userData.dragonflies = dragonflies;
+
+  group.add(createWater());
 
   const hammock = createHammock();
   hammock.position.set(HAMMOCK.x, terrainHeight(HAMMOCK.x, HAMMOCK.z), HAMMOCK.z);
