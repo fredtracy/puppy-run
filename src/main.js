@@ -731,6 +731,9 @@ const DAY_LIGHTING = {
   // No moon rim by day — see the note on grassMoonGlow in NIGHT_LIGHTING.
   grassMoonGlow: 0,
   grassMoonColor: 0xb9cee2,
+  // What the pond reflects by day. Cool and pale — a bright overcast
+  // sky rather than the sunrise it's actually under. See setWaterLight.
+  waterSky: 0x9ec6cf,
   // Lens glare when the camera looks toward the sun. See glarePass.
   glare: 1,
   glareColor: 0xffb066,
@@ -811,6 +814,9 @@ const NIGHT_LIGHTING = {
   // whole effect, and any more turns it into a light source of its own.
   grassMoonGlow: 0.3,
   grassMoonColor: 0xb9cee2,
+  // Dim and silver after dark, so the pond reads as water catching a
+  // moon rather than a hole in the ground.
+  waterSky: 0x44607e,
   sky: {
     // Night gets the same directional split the sunrise does. The earlier
     // note here said a moon isn't bright enough to colour a quadrant of sky
@@ -1907,20 +1913,25 @@ function applyDayNight(day) {
   // And the same for its lighting, which it also can't read from the scene.
   setGrassLight(cfg.sun.direction, cfg.grassLight, cfg.grassBackScatter);
   setGrassMoonGlow(cfg.grassMoonGlow ?? 0, cfg.grassMoonColor ?? 0xffffff);
-  // The pond reflects whatever sky it's under, and the fog colour is the
-  // best single stand-in for that.
+  // What the pond reflects — its own colour per mode, deliberately NOT
+  // derived from the sky.
   //
-  // Two wrong answers first. The horizon alone (0xff8f3a at sunrise) turned
-  // the whole pond salmon. Lerping horizon toward zenith to calm it down
-  // was worse: those two are near-complementary at sunrise — hot orange
-  // against deep blue — and interpolating between complementaries in RGB
-  // goes straight through grey, so the pond came out dusty mauve. Neither
-  // colour was wrong; the *midpoint between them* was.
+  // Three physically-motivated versions were tried and all three looked
+  // like mud: the horizon colour alone went salmon, horizon lerped toward
+  // zenith went mauve (those two are near-complementary at sunrise, and
+  // RGB interpolation between complementaries passes through grey), and
+  // the fog colour went sandy brown. None of them were *wrong* — at a
+  // grazing angle water really does mirror a sunrise, and a real pond at
+  // dawn really can look like liquid bronze. It just reads as dirt when
+  // it's sitting in a green glade in a game about a dog.
   //
-  // Fog is already the game's "colour of the air", warm haze by day and
-  // near-black blue at night, and it's a real colour rather than an average
-  // of two others.
-  setWaterLight(cfg.fogColor, cfg.sun.direction, cfg.sun.color);
+  // So this is a deliberate cheat, chosen over accuracy on the owner's
+  // call: the water stays cool and green-blue whatever the sky is doing,
+  // and only shifts between day and night. The warm sun colour still
+  // drives the specular, so sunrise puts gold glints on cool water —
+  // which keeps the time of day legible without staining the whole
+  // surface with it.
+  setWaterLight(cfg.waterSky, cfg.sun.direction, cfg.sun.color);
 
   sunMoonLight.color.set(cfg.sun.color);
   sunMoonLight.intensity = cfg.sun.intensity;
