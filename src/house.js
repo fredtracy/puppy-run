@@ -2246,11 +2246,64 @@ export function createHouse() {
     (b.xMin + b.xMax) / 2, y, (b.zMin + b.zMax) / 2
   );
 
+  // Same slab, but with its corners rounded off.
+  //
+  // There isn't a square corner anywhere on this property's concrete — it
+  // is all curves wherever the walk changes direction — and the reason the
+  // model had them everywhere is that the walk is a union of axis-aligned
+  // boxes, so every corner was 90 degrees by construction.
+  //
+  // The fix is one observation. The walk is the house footprint *dilated*
+  // by the walk's width, and the Minkowski sum of a rectangle with a disc
+  // of radius r is a rectangle with its corners rounded to radius r. Since
+  // dilation distributes over union, dilating each mass separately and
+  // unioning the results gives the same shape as dilating the union. So
+  // making every slab a rounded rectangle rounds the whole ring correctly,
+  // including corners formed where two different slabs meet — no outline
+  // tracing, no polygon boolean, no special cases per corner.
+  //
+  // The radius is capped at half the short side so a narrow slab degrades
+  // to a stadium shape rather than folding through itself.
+  const roundedSlab = (b, r, y = SLAB / 2, t = SLAB) => {
+    const w = b.xMax - b.xMin;
+    const d = b.zMax - b.zMin;
+    const rad = Math.max(0.01, Math.min(r, w / 2 - 0.001, d / 2 - 0.001));
+    const shape = new THREE.Shape();
+    const x0 = -w / 2;
+    const x1 = w / 2;
+    const y0 = -d / 2;
+    const y1 = d / 2;
+    shape.moveTo(x0 + rad, y0);
+    shape.lineTo(x1 - rad, y0);
+    shape.quadraticCurveTo(x1, y0, x1, y0 + rad);
+    shape.lineTo(x1, y1 - rad);
+    shape.quadraticCurveTo(x1, y1, x1 - rad, y1);
+    shape.lineTo(x0 + rad, y1);
+    shape.quadraticCurveTo(x0, y1, x0, y1 - rad);
+    shape.lineTo(x0, y0 + rad);
+    shape.quadraticCurveTo(x0, y0, x0 + rad, y0);
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth: t, bevelEnabled: false, curveSegments: 8,
+    });
+    // Extruded along +z then laid flat, so the slab's thickness becomes
+    // world height and the shape's y becomes world -z.
+    geo.rotateX(-Math.PI / 2);
+    const pos = geo.attributes.position;
+    const uv = geo.attributes.uv;
+    for (let i = 0; i < pos.count; i++) {
+      uv.setXY(i, pos.getX(i) / CONCRETE_TILE, pos.getZ(i) / CONCRETE_TILE);
+    }
+    return place(
+      mesh(geo, CONCRETE_MAT),
+      (b.xMin + b.xMax) / 2, y - t / 2, (b.zMin + b.zMax) / 2
+    );
+  };
+
   // The walk that rings the entire building — one slab per mass, each grown
   // by the walk's width, which unions into a continuous ring and wraps every
   // projection without anyone having to trace an offset outline.
-  PERIMETER.forEach((b) => group.add(slab(b)));
-  group.add(slab(BACK_WALK));
+  PERIMETER.forEach((b) => group.add(roundedSlab(b, WALK_W)));
+  group.add(roundedSlab(BACK_WALK, PARK_W * 0.55));
 
   const driveLen = GARAGE_FRONT_Z - DRIVEWAY_END_Z;
   group.add(place(
