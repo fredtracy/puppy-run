@@ -1427,6 +1427,11 @@ export const HOUSE_LADDER = {
 // Only the *main* roof. The garage and bay hips stand proud of it at the
 // front, so walking there would put you inside them; the back slope, which
 // is the one the ladder reaches and the whole point of going up, is clear.
+// Height of the eaves above the house's own base, so main.js's camera
+// cast knows how high the walls go without keeping its own copy of the
+// number.
+export const HOUSE_EAVE_Y = ROOF_Y;
+
 export function houseRoofHeight(worldX, worldZ) {
   const u = worldX;
   const v = worldZ - HOUSE_Z - ROOF_CZ;

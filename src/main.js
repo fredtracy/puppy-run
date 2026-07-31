@@ -38,6 +38,7 @@ import {
   HOUSE_BACK_WALK_Z,
   HOUSE_LADDER,
   HOUSE_CHIMNEY,
+  HOUSE_EAVE_Y,
   HOUSE_Z as HOUSE_ORIGIN_Z,
   houseRoofHeight,
   setHouseWindowsLit,
@@ -2594,6 +2595,121 @@ window.addEventListener('keyup', (e) => pressedKeys.delete(e.code));
 // gone by the time you reach vertical rather than popping out at the last
 // moment.
 const PLAYER_HIDE_DISTANCE = 1.4;
+
+// How far in front of a wall the camera is allowed to sit. Bigger than the
+// near plane (0.1) so the wall doesn't clip through the lens.
+const CAMERA_SKIN = 0.38;
+// Everything the camera is allowed to be pushed in front of stands between
+// the ground and the ridge, so one y span covers the lot.
+const CAMERA_BLOCK_TOP = 12;
+
+const _camDir = new THREE.Vector3();
+
+// Distance along a ray at which it first enters an axis-aligned box, or
+// null. Standard slab test, in plan only — the y extent is handled by the
+// caller, since every blocker here runs from the ground to the roof.
+function rayEntersBox(ox, oz, dx, dz, b, maxT) {
+  let tMin = 0;
+  let tMax = maxT;
+  // x slab
+  if (Math.abs(dx) < 1e-6) {
+    if (ox < b.xMin || ox > b.xMax) return null;
+  } else {
+    let t1 = (b.xMin - ox) / dx;
+    let t2 = (b.xMax - ox) / dx;
+    if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+    tMin = Math.max(tMin, t1);
+    tMax = Math.min(tMax, t2);
+  }
+  // z slab
+  if (Math.abs(dz) < 1e-6) {
+    if (oz < b.zMin || oz > b.zMax) return null;
+  } else {
+    let t1 = (b.zMin - oz) / dz;
+    let t2 = (b.zMax - oz) / dz;
+    if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+    tMin = Math.max(tMin, t1);
+    tMax = Math.min(tMax, t2);
+  }
+  if (tMax < tMin) return null;
+  return tMin;
+}
+
+// Pulls the camera in until nothing solid stands between it and what it's
+// looking at.
+//
+// This is the fix for three separate queue items that all turned out to be
+// one problem: the camera clipping through walls near the house, ending up
+// inside shrubs, and burying itself in the roof when the player walks over
+// the ridge. In each case the camera was in a legal position and something
+// had got between it and the target — which no amount of floor-clamping can
+// address, because the camera isn't below anything. It's behind something.
+//
+// Deliberately *not* a THREE.Raycaster against the scene. The house bakes
+// down to a handful of merged meshes of tens of thousands of triangles
+// each, and three tests them linearly — so the cost would land exactly when
+// the camera is near the house, which is precisely when this runs. The
+// house already publishes HOUSE_SOLIDS as boxes for collision and its roof
+// as an analytic height function, so ray-vs-box plus a short march is both
+// cheaper and more accurate than testing the real geometry.
+function pullCameraPastBlockers() {
+  const tx = controls.target.x;
+  const ty = controls.target.y;
+  const tz = controls.target.z;
+  _camDir.set(camera.position.x - tx, camera.position.y - ty, camera.position.z - tz);
+  const dist = _camDir.length();
+  if (dist < 0.05) return;
+  _camDir.divideScalar(dist);
+
+  let nearest = dist;
+
+  // Walls, piers and the chimney. Only tested over the height they
+  // actually occupy — above the ridge there is nothing to hit.
+  if (ty < CAMERA_BLOCK_TOP || camera.position.y < CAMERA_BLOCK_TOP) {
+    for (let i = 0; i < HOUSE_SOLIDS.length; i++) {
+      const t = rayEntersBox(tx, tz, _camDir.x, _camDir.z, HOUSE_SOLIDS[i], nearest);
+      if (t !== null && t > 0.01 && t < nearest) {
+        // Only counts if the ray is actually below the eaves where it
+        // crosses — otherwise the camera gets yanked in by a wall it is
+        // comfortably flying over.
+        const yAt = ty + _camDir.y * t;
+        if (yAt < HOUSE_GROUND_Y + HOUSE_EAVE_Y) nearest = t;
+      }
+    }
+    const c = HOUSE_CHIMNEY;
+    const t = rayEntersBox(tx, tz, _camDir.x, _camDir.z, {
+      xMin: c.x - c.halfX, xMax: c.x + c.halfX,
+      zMin: c.z - c.halfZ, zMax: c.z + c.halfZ,
+    }, nearest);
+    if (t !== null && t > 0.01 && t < nearest) nearest = t;
+  }
+
+  // The roof itself, which is what the ridge case needs. Marched rather
+  // than solved: the hip is four planes and two ends, and stepping along
+  // the height field handles all of them without casing them out.
+  {
+    const STEP = 0.5;
+    for (let d = STEP; d < nearest; d += STEP) {
+      const x = tx + _camDir.x * d;
+      const z = tz + _camDir.z * d;
+      const y = ty + _camDir.y * d;
+      const roof = roofSurfaceY(x, z);
+      if (roof !== null && y < roof) {
+        nearest = Math.max(0, d - STEP);
+        break;
+      }
+    }
+  }
+
+  if (nearest >= dist) return;
+  const pulled = Math.max(controls.minDistance, nearest - CAMERA_SKIN);
+  if (pulled >= dist) return;
+  camera.position.set(
+    tx + _camDir.x * pulled,
+    ty + _camDir.y * pulled,
+    tz + _camDir.z * pulled
+  );
+}
 
 function clampOrbitToGround() {
   const distance = camera.position.distanceTo(controls.target);
@@ -5404,6 +5520,8 @@ function animate() {
   if (!flightActive && !mirandaLounging && !debugFreeFly) {
     clampOrbitToGround();
     controls.update();
+    // After update(), so it acts on where the camera actually ended up.
+    pullCameraPastBlockers();
     // Tilting all the way up rolls the camera in until it's inside the
     // player (see clampOrbitToGround), at which point they're a wall of
     // fur across the lens. Drop them once the camera is that close so the

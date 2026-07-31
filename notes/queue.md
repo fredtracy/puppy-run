@@ -407,49 +407,31 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       **Measure before tuning.** Two fixes and four screenshots went into a
       hypothesis that one print statement disproved.
 
-- [ ] **Camera on the roof, second cause.** Verified in play 2026-07-31:
-      walking *over the ridge* fills the screen with shingles again. This is
-      not the earlier bug (that was click-to-move punching through the roof
-      to the lawn, fixed by `marchToRoof`); the player is on the far slope
-      and the ridge itself is between her and the camera. A floor clamp
-      cannot help — the camera is above the roof plane, just on the wrong
-      side of a hill. Wants the same cast-back-and-pull-in as the item below.
+- [x] **Camera clipping — walls, shrubs and the roof ridge, all one bug.**
+      Fixed 2026-07-31 by `pullCameraPastBlockers` in main.js.
 
-- [ ] **Camera clips inside the house and shrubs.** Standing anywhere near the
-      house puts the camera through a wall or into a bush, and you end up
-      looking at the inside of brick. Wants the usual treatment: cast from the
-      aim point back toward the desired camera position and pull in to the
-      first hit, so it slides along the wall instead of entering it. Turned up
-      constantly while spawning at `?at=` coords near the house (see
-      `SPAWN_AT` in `main.js`) — it's the main thing making close-quarters
-      inspection painful.
+      These were filed as three items and they were one. In every case the
+      camera was in a perfectly legal position and something had got
+      *between* it and what it was looking at — which is why the two earlier
+      attempts (a floor in `clampOrbitToGround`, then a direct lift) both
+      failed. Neither could help, because the camera was never below
+      anything. It was behind something.
 
-- [x] **Pine bark read as grey stone blocks / bricks.** Filed as too regular
-      and too grey; raised again 2026-07-30 once every forest pine started
-      sharing the texture rather than just the two hero trees.
+      The fix casts from the aim point toward the camera and pulls the
+      camera in to the first thing it hits.
 
-      Fixed by throwing the structure away rather than tuning it.
-      `makeBarkTextures` no longer draws plates at all — it's a Voronoi field
-      (jittered seed grid, per-pixel nearest and second-nearest), so plates are
-      irregular polygons meeting at three-way junctions and *cannot* line up
-      into courses because there are no courses.
+      **Deliberately not a THREE.Raycaster against the scene.** The house
+      bakes to a handful of merged meshes of tens of thousands of triangles,
+      and three tests them linearly — so the cost would land exactly when the
+      camera is near the house, which is precisely when this runs. The house
+      already publishes `HOUSE_SOLIDS` as boxes and its roof as an analytic
+      height function, so ray-vs-box plus a short march along the height
+      field is both cheaper and more accurate than testing real geometry.
 
-      **The instructive failure:** an intermediate version kept the rectangle
-      lattice but added wobbled polygon edges, far more size variation and
-      much warmer colour. It was still unmistakably bricks. A rectangle with
-      its corners moved is a rectangle, and a grid of them is a wall — the
-      wobble was a few pixels on plates up to 90 wide, so it was invisible.
-      Structure, not parameters.
+      Verified in play at all three: standing hard against the back wall,
+      on the roof, and across the ridge beside the chimney. Bonus — the
+      chimney collision is finally observable now that the camera works.
 
-      Two things on top of the raw Voronoi and both are load-bearing: the
-      lookup is domain-warped first (straight cell walls read as a tiled
-      floor), and the fissure width is its own noise field, so furrows pinch
-      and open along their length instead of being even mortar. Colour is warm
-      and per-plate, spanning fresh cinnamon to weathered grey-tan.
-
-      Costs ~77 ms per texture against maybe 10 ms before, and it's built
-      three times (once shared by the whole forest, once per hero pine), so
-      roughly +200 ms on load.
 - [ ] **Fog is heavy enough to wash out the frontage.** From across the road
       the house and pines go pale blue-grey and lose most of their contrast.
       Fine as an edge-of-world device, too strong at 30-40m. See
