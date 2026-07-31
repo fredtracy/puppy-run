@@ -14,6 +14,19 @@ a human. Those stay in the untested list until someone actually plays them.
 
 ## Judgement calls that could have gone the other way
 
+- **`SHADOW_HALF_EXTENT` cut from 34 to 26, and nobody has looked at it.** The
+  reasoning is measured (the shadow pass is 320 of 474 draw calls; each step
+  down is ~25 calls) and the geometry checks out — from mid-yard a ±26 box
+  spans x −26..26, z −18..34, which still holds the tree line at z=18 and
+  x=16 plus the 24 m shadows they cast at a 23° sun. But it was **verified
+  arithmetically, not visually**: the browser pane was hidden so no screenshot
+  was possible. If trees in the middle distance have lost their shadows, this
+  is the reason and 34 is the number to go back to.
+- **`gameDebug` is now exposed on `globalThis` in debug mode** — renderer,
+  scene, camera, and two benchmarking helpers. Debug-only, so it costs
+  nothing in a normal load, but it is a live handle into the running scene
+  that didn't exist before.
+
 - **Only ~55% of windows light up at night** (`LIT_WINDOW_SHARE` in house.js),
   picked off a fixed seed so the same rooms are lit every load. Every window
   lit reads as an office block, but which specific rooms are on is arbitrary —
@@ -22,6 +35,18 @@ a human. Those stay in the untested list until someone actually plays them.
   exterior lamps already carry the real night lighting and each extra point
   light is a real cost. It does mean a brightly lit window sits above a patch
   of lawn it isn't illuminating.
+- **Grass entries are now shuffled before being written to the instance
+  buffer.** Needed so lowering `InstancedMesh.count` thins evenly instead of
+  shaving a strip off one side of each chunk. Statistically the same lawn, but
+  it is a *different* lawn — every blade now gets a different lean, height and
+  shader seed than it did before, so the yard won't match older screenshots
+  blade for blade.
+- **Debug's quality buttons no longer reload; they thin live.** They can only
+  go coarser than the tier the world was built at (spacing is baked into the
+  buffers), and they fall back to a reload when asked for finer. The blade
+  *count* matches a real load at that tier, so it's honest for measuring cost
+  — but the arrangement is a random subset of a fine grid rather than a
+  coarser grid, so it isn't a fair preview of how that tier *looks*.
 - **Debug's fixed-camera mode also restores the fog**, which wasn't asked for.
   Debug pushes fog to 4000/5000 so distance can't wash out whatever's being
   inspected — but the fixed camera exists to show what the game actually looks

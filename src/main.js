@@ -15,6 +15,8 @@ import {
   createTreeChunk,
   QUALITY_TIER,
   GRASS_SPACING,
+  GRASS_SPACING_BY_TIER,
+  setGrassDensity,
   CHUNK_SIZE,
   FIRE_PIT,
   terrainHeight,
@@ -295,6 +297,108 @@ if (DEBUG_MODE) {
   camera.position.copy(DEBUG_FOCUS).add(DEBUG_EYE);
   camera.lookAt(DEBUG_FOCUS);
   buildDebugPanel();
+
+  // Handles for poking at the running scene from the console. Debug only.
+  //
+  // Worth having as a permanent fixture rather than something pasted in
+  // each time: performance work is mostly "turn one thing off and see", and
+  // without this every such test costs a source edit plus a six-second
+  // reload — which is slow enough that you stop running the cheap
+  // experiments and start guessing instead.
+  globalThis.gameDebug = {
+    renderer,
+    scene,
+    camera,
+    // Render cost, measured by driving the composer directly rather than
+    // by watching frames go by.
+    //
+    // Two reasons this is the better instrument. It doesn't need
+    // requestAnimationFrame, so it still works when the page is
+    // backgrounded and rAF is paused — which is most of the time when
+    // something else is driving the browser. And it isn't clamped by
+    // vsync: a frame that could render in 4 ms and one that takes 15 both
+    // read as 60 fps in a rAF sample, so the counter goes flat exactly
+    // where you most want resolution.
+    //
+    // The number is therefore *render time*, not frame time. Everything
+    // else in a frame — movement, AI, the walk cycles — is excluded, which
+    // is the point when the question is what the renderer is doing.
+    benchRender(n = 60) {
+      // Warm up: the first render after a state change recompiles shaders
+      // and re-uploads buffers, and that cost lands on whichever sample
+      // catches it.
+      for (let i = 0; i < 5; i++) composer.render();
+
+      // renderer.info resets itself at the start of every renderer.render(),
+      // and the composer makes several of those per frame — so reading it
+      // afterwards reports the *last* pass only, which is the fullscreen
+      // blit: one draw call and one triangle, every time, no matter what
+      // the scene contains. Turning autoReset off and resetting by hand is
+      // what makes the totals mean the whole frame.
+      renderer.info.autoReset = false;
+      // WebGL calls queue rather than execute, so timing around
+      // composer.render() alone measures how long it took to *submit* the
+      // frame, not to draw it — which is why an untimed first pass showed a
+      // 3 ms median on a scene doing ten million triangles. gl.finish()
+      // blocks until the GPU has actually finished, which is the number
+      // that matters. It is a terrible thing to do in a real frame loop and
+      // exactly the right thing in a benchmark.
+      const gl = renderer.getContext();
+      const samples = [];
+      let calls = 0;
+      let triangles = 0;
+      for (let i = 0; i < n; i++) {
+        renderer.info.reset();
+        const t = performance.now();
+        composer.render();
+        gl.finish();
+        samples.push(performance.now() - t);
+        calls = renderer.info.render.calls;
+        triangles = renderer.info.render.triangles;
+      }
+      renderer.info.autoReset = true;
+      samples.sort((a, b) => a - b);
+      return {
+        medianMs: +samples[Math.floor(n / 2)].toFixed(2),
+        p95Ms: +samples[Math.floor(n * 0.95)].toFixed(2),
+        calls,
+        triangles,
+      };
+    },
+    // Frame times over a window, as percentiles. Needs the page to be
+    // visible — rAF is paused when it isn't, and this will simply hang.
+    // benchRender above is the one to reach for otherwise.
+    async profile(seconds = 4) {
+      const samples = [];
+      let last = performance.now();
+      const until = last + seconds * 1000;
+      await new Promise((resolve) => {
+        const tick = () => {
+          const now = performance.now();
+          samples.push(now - last);
+          last = now;
+          if (now < until) requestAnimationFrame(tick);
+          else resolve();
+        };
+        requestAnimationFrame(tick);
+      });
+      // The first frame's delta includes however long the caller took to
+      // get here, so it's meaningless.
+      samples.shift();
+      samples.sort((a, b) => a - b);
+      const at = (p) => samples[Math.floor(samples.length * p)];
+      const info = renderer.info.render;
+      return {
+        frames: samples.length,
+        median: +at(0.5).toFixed(2),
+        p95: +at(0.95).toFixed(2),
+        worst: +samples[samples.length - 1].toFixed(2),
+        fps: Math.round(1000 / at(0.5)),
+        calls: info.calls,
+        triangles: info.triangles,
+      };
+    },
+  };
 }
 
 // A small panel of the switches worth flipping while looking at something,
@@ -316,7 +420,16 @@ function updateDebugFps(delta) {
   // The worst *frame* expressed as the rate it would sustain, which is the
   // number that matches what a stutter feels like.
   const low = Math.round(1 / Math.max(fpsWorstDelta, 1e-4));
-  debugFpsEl.textContent = `fps — ${avg} avg, ${low} low`;
+  // Draw calls and triangles for the frame just rendered. A frame rate on
+  // its own says something is wrong; these two say *what* — a bad call
+  // count is a batching problem, a bad triangle count is a geometry
+  // problem, and they want completely different fixes.
+  const info = renderer.info.render;
+  const tris = info.triangles >= 1e6
+    ? `${(info.triangles / 1e6).toFixed(2)}M`
+    : `${Math.round(info.triangles / 1000)}k`;
+  debugFpsEl.textContent =
+    `fps — ${avg} avg, ${low} low\n${info.calls} calls, ${tris} tris`;
   // Amber under 50, red under 30. A bare number invites squinting at it;
   // colour makes a bad frame rate obvious from across the room, which is
   // the point of putting it on screen at all.
@@ -392,18 +505,54 @@ function buildDebugPanel() {
   // Sampled over a rolling second rather than per frame, because a readout
   // that updates every frame is unreadable and its own small cost.
   debugFpsEl = document.createElement('div');
-  debugFpsEl.style.cssText = 'margin-top:4px;font-variant-numeric:tabular-nums';
+  debugFpsEl.style.cssText =
+    'margin-top:4px;font-variant-numeric:tabular-nums;white-space:pre-line';
   debugFpsEl.textContent = 'fps — measuring…';
   panel.appendChild(debugFpsEl);
 
-  const tierRow = row(`quality — detected "${QUALITY_TIER}", spacing ${GRASS_SPACING}`);
+  // Quality switches live where it can, by thinning the grass rather than
+  // rebuilding it — see setGrassDensity. Blade *spacing* is baked into the
+  // instance buffers at generation time, so this can only ever go coarser
+  // than whatever the world was built at; asking for finer needs the reload
+  // it always used to do.
+  //
+  // Worth being clear about what it therefore is and isn't: at a tier below
+  // the built one this draws the same number of blades as a real load at
+  // that tier, so it's an honest read on cost. What it can't reproduce is
+  // the *arrangement* — a random subset of a fine grid, rather than a
+  // coarser grid — so judge frame rate on it, not looks.
+  const tierRow = row(
+    `quality — detected "${QUALITY_TIER}", built at ${GRASS_SPACING}`
+  );
+  // row() appends its label and then its button holder, and hands back the
+  // holder — so the label is the sibling just before it. Grabbed because
+  // this row's caption changes as the density does.
+  const tierLabel = tierRow.previousSibling;
+  const tierButtons = {};
+  const applyTier = (tier) => {
+    const target = GRASS_SPACING_BY_TIER[tier] ?? GRASS_SPACING_BY_TIER[QUALITY_TIER];
+    // Blade count goes as the inverse square of spacing.
+    const fraction = (GRASS_SPACING / target) ** 2;
+    if (fraction > 1.001) {
+      // More blades than were ever generated. Only reachable by loading at a
+      // low tier and asking for a higher one.
+      go({ quality: tier === 'auto' ? null : tier });
+      return;
+    }
+    setGrassDensity(fraction);
+    for (const [name, b] of Object.entries(tierButtons)) style(b, name === tier);
+    tierLabel.textContent =
+      `quality — built at ${GRASS_SPACING}, drawing ${Math.round(fraction * 100)}%`;
+  };
   for (const t of ['low', 'medium', 'high']) {
-    button(tierRow, t, params.get('quality') === t, () => go({ quality: t }));
+    tierButtons[t] = button(tierRow, t, params.get('quality') === t, () => applyTier(t));
   }
   // Clearing the override is worth its own button: it's the only way to see
   // what the detection actually picks on this machine, which is the thing
   // most likely to be wrong.
-  button(tierRow, 'auto', !params.has('quality'), () => go({ quality: null }));
+  tierButtons.auto = button(tierRow, 'auto', !params.has('quality'), () =>
+    applyTier('auto')
+  );
 
   const grassRow = row(
     grassOn ? 'grass — on (slow reloads)' : 'grass — off (fast reloads)'
@@ -698,12 +847,20 @@ sunMoonLight.shadow.mapSize.set(2048, 2048);
 //     world origin rather than on the player, so the tree line's shadow
 //     could never reach the lawn.
 //
-// 34 m half-width is a 68 m box: the whole clearing plus the tree line on
+// 26 m half-width is a 52 m box: the whole clearing plus the tree line on
 // every side, so the woods throw shade onto the grass from wherever the sun
-// happens to be. That's four times the area of the old box on the same 2048
-// map, i.e. half the resolution per metre — see the texel snapping below,
-// which matters more than the raw number does.
-const SHADOW_HALF_EXTENT = 34;
+// happens to be. Bigger than the old 28 m box on the same 2048 map, i.e.
+// less resolution per metre — see the texel snapping below, which matters
+// more than the raw number does.
+//
+// Down from 34, on measurement. The shadow pass is 320 of the frame's 474
+// draw calls and re-renders the whole woods; at ±34 it was pulling in trees
+// far enough away that fog has started eating them. Each step down is worth
+// roughly 25 draw calls, and ±26 is the point where it stops without
+// leaving visibly unshadowed trees in the middle distance — the sun sits at
+// 23°, so a 10 m tree lays a 24 m shadow, and the box has to hold both the
+// tree and the shadow to show it at all.
+const SHADOW_HALF_EXTENT = 26;
 const SHADOW_LIGHT_DISTANCE = 90;
 sunMoonLight.shadow.camera.left = -SHADOW_HALF_EXTENT;
 sunMoonLight.shadow.camera.right = SHADOW_HALF_EXTENT;

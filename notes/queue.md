@@ -7,6 +7,125 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
 
 ## Open
 
+- [ ] **A hidden watery oasis in the far corner.** A stream that starts a
+      little way into the woods; follow it and it leads you to a beautiful
+      pond tucked in the corner. Meant to be found, not signposted.
+
+      **Where.** The owner circled it on an overhead screenshot: the corner
+      past the *far* end of the back lawn, roughly x 18-35, z 20-40 — call it
+      40 m out from the origin, which sits comfortably inside both
+      `WORLD_RADIUS` (55) and the movement clamp (50). Worth confirming with
+      `?at=26,30` and a look before building anything, since that reading came
+      off a screenshot rather than coordinates.
+
+      **The thing that decides the whole design:** that corner is the *high*
+      end of the lot. `terrainHeight` tilts the ground with `UPHILL_X` /
+      `UPHILL_Z` both positive, so the ground rises toward it — which is
+      exactly where water doesn't collect. Two honest ways out:
+
+      1. Carve a bowl into `terrainHeight`. That function is the single
+         source of ground height for the lawn mesh, every grass blade, every
+         tree and the brush, so a depression there reshapes all of them for
+         free. Cheapest route to a real pond.
+      2. Make it a *spring* — water emerging on the high ground, pooling, and
+         the stream running **downhill out of it** rather than into it. Also
+         physically right, needs no terrain surgery, and arguably prettier:
+         you'd follow the stream *up* to find the source.
+
+      The owner described stream-then-pond, which is (1). Worth showing them
+      (2) before committing, since it's less work and a nicer walk.
+
+      **Gotchas, all of which will otherwise be discovered the hard way:**
+
+      - The brush band is deliberately opaque (~1% see-through at dog height).
+        Something hidden behind it is hidden *permanently* unless there's a
+        gap — so the stream has to be the thread that draws you through, and
+        the band needs a deliberate break where it crosses. See `brushEdge` /
+        `woodsDepth` in yard.js.
+      - Water needs the same exclusions the fire pit and road already have:
+        no grass, no trees, no brush growing in it. There's an established
+        pattern (`inFirePit`, `inRoad`) to copy.
+      - At radius ~40 the grass has nearly faded out (`GRASS_FULL_RADIUS` 24,
+        `GRASS_FADE_RADIUS` 44) *and* `canopyShade` has the ground at 20%
+        brightness. A glade meant to be beautiful wants to be a lit clearing,
+        so it likely needs its own exemption from both — the same way the
+        mown property is already exempt from the distance fade.
+      - Nothing in the woods has collision yet, so she can currently walk
+        across wherever the pond goes. Pairs with the chimney/hammock
+        collision item below.
+
+- [ ] **Optimize — 30fps even on low quality.** Reported 2026-07-30, and the
+      "even on low" is the whole clue: low is ~19.5% of high's blade count
+      (spacing 0.068 vs 0.03, and count goes as 1/spacing²), so if that barely
+      moves the needle then **grass is not the bottleneck** and every previous
+      optimisation instinct on this project points the wrong way.
+
+      What changed the same day, in rough order of suspicion:
+
+      1. **The forest is now ~1.1M triangles of real branch geometry** where it
+         used to be ~40k of cones and spheres, and all of it casts shadows —
+         so the shadow pass draws it a second time. `castShadow` on the merged
+         per-chunk tree meshes is the single biggest lever to test first, and
+         it's one line.
+      2. **The shadow map went from a 28 m box to 68 m** on the same 2048 map,
+         so far more geometry falls inside the frustum every frame.
+      3. **108k instanced foliage clusters** with `alphaTest`, which forces
+         per-fragment discard and defeats early-Z.
+      4. The grass fragment shader went `mediump` → `highp`, and now also does
+         a 3×3 PCF shadow lookup per fragment. On the most-covered surface in
+         the scene.
+
+      Measure before tuning (see the roof-camera item below for why that
+      sentence is in here). A DevTools GPU capture would settle it faster
+      than any amount of guessing.
+
+      **First measurement, 2026-07-30, and it rules grass out.** The debug
+      quality buttons now thin the lawn live (`setGrassDensity`). Going from
+      100% to 19% of blades — the same blade count a real `low` load builds —
+      moved the frame rate **not at all**: 60 avg / 59 low before, 60 / 59
+      after, same view, same session. Whatever is costing frames, it is not
+      the number of blades.
+
+      **Second pass, 2026-07-31, with real instrumentation**
+      (`gameDebug.benchRender` — drives the composer directly and calls
+      `gl.finish()`, so it measures GPU work rather than command submission,
+      and works with the page backgrounded where rAF sampling can't).
+
+      Counts are solid — they're CPU-side and don't care about throttling:
+
+      | | draw calls | triangles |
+      |---|---|---|
+      | baseline, mid-yard | 474 | 10.45 M |
+      | grass hidden | 409 | 2.29 M |
+      | shadows off | 154 | 8.71 M |
+      | shadow box ±16 instead of ±34 | 384 | — |
+
+      Three things fall out:
+
+      1. **Grass is 78% of all triangles** (8.17 M of 10.45 M) and hiding it
+         barely moves the clock. The game is not triangle-bound. That is the
+         second independent result saying leave the grass alone.
+      2. **The shadow pass is 320 of the 474 draw calls** and re-renders the
+         woods. It is the largest single structural cost in the frame.
+         `SHADOW_HALF_EXTENT` is now 26 (was 34) on the back of this — worth
+         ~50 calls.
+      3. Post-processing is ~0.1-0.3 ms of ~2 ms. Not the problem.
+
+      **What is NOT established, and don't trust it until it is:** any of the
+      timings. The baseline read 3.8, 2.1 and 1.9 ms across three runs of the
+      same scene, and the browser pane was hidden throughout (GPU throttled,
+      drawing buffer only 1014×918). At that size the whole frame renders in
+      ~2 ms here, against the ~33 ms the owner is seeing — a 15x gap that
+      geometry at the same resolution cannot explain. So either their GPU is
+      much weaker, or the cost is resolution-dependent in a way this pane
+      never exercises.
+
+      **Next step, and it needs the pane visible:** re-run `benchRender` at
+      the owner's real window size, then bisect fill-rate suspects — grass
+      overdraw, the alpha-tested foliage, the post chain — by resolution
+      rather than by object count. Cutting `renderer.setPixelRatio` in half
+      is the fastest single test of "is this fill-bound at all".
+
 - [ ] **The chimney needs collision, and so does the hammock.** The chimney one
       is new with the roof being walkable — you can walk straight through it
       up there. It's a box, so it wants the same treatment as the house

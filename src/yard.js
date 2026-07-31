@@ -2536,6 +2536,26 @@ function createLushGrassMaterial(species, palette) {
 // materials it names actually exist.
 const grassMaterials = [];
 
+// Every grass InstancedMesh in the world, so density can be moved at
+// runtime (see setGrassDensity). Meshes are never removed — the world is
+// generated once and kept — so this doesn't need to prune.
+const grassFields = [];
+
+// Thins the lawn to a fraction of what was built, live and without
+// rebuilding anything.
+//
+// The one thing it cannot do is go *denser* than what's in the buffers.
+// Spacing is baked in at generation time, so 1 is whatever tier the world
+// was actually built at and there is nothing above it — a caller that wants
+// more blades than that has to reload. Blade count goes as the inverse
+// square of spacing, so the tiers land at roughly 1.0 / 0.51 / 0.20 of high.
+export function setGrassDensity(fraction) {
+  const f = Math.min(1, Math.max(0, fraction));
+  for (const field of grassFields) {
+    field.count = Math.round(field.userData.fullCount * f);
+  }
+}
+
 export function setGrassTime(elapsed) {
   grassMaterials.forEach((m) => {
     m.uniforms.uTime.value = elapsed;
@@ -2778,6 +2798,29 @@ function writeInstanceMatrix(arr, i, x, y, z, rx, ry, rz, s) {
 
 function buildGrassMesh(speciesKey, entries, rand) {
   const profile = SPECIES[speciesKey];
+
+  // Shuffled before anything is written into the instance buffer, and this
+  // is what makes runtime density control possible at all.
+  //
+  // Lowering InstancedMesh.count is the only way to thin a lawn without
+  // rebuilding it — the blade *spacing* is baked into these matrices and
+  // can't be changed after the fact. But count only ever drops instances
+  // off the *end* of the buffer, and the scatter loop above fills it in
+  // scan order, so truncating an unshuffled buffer doesn't thin the chunk:
+  // it shaves a solid strip off one side of it and leaves the rest at full
+  // density. Shuffled, the tail is a random subset, and dropping it thins
+  // evenly everywhere.
+  //
+  // Its own PRNG, not the chunk's `rand`: this has to not disturb the draw
+  // order in the loop below, which is load-bearing (see the note there).
+  const shuffle = mulberry32(0x5caff1e ^ entries.length);
+  for (let i = entries.length - 1; i > 0; i--) {
+    const j = Math.floor(shuffle() * (i + 1));
+    const tmp = entries[i];
+    entries[i] = entries[j];
+    entries[j] = tmp;
+  }
+
   const geometry = createBladeGeometry(profile);
   const field = new THREE.InstancedMesh(geometry, GRASS_MATERIALS[speciesKey], entries.length);
   const instanceRandom = new Float32Array(entries.length);
@@ -2836,6 +2879,10 @@ function buildGrassMesh(speciesKey, entries, rand) {
   geometry.setAttribute('instanceRandom', new THREE.InstancedBufferAttribute(instanceRandom, 1));
   geometry.setAttribute('instanceShade', new THREE.InstancedBufferAttribute(instanceShade, 1));
   field.instanceMatrix.needsUpdate = true;
+  // The full count, kept because `count` itself is what setGrassDensity
+  // moves — once it's been lowered there's nothing left to restore from.
+  field.userData.fullCount = entries.length;
+  grassFields.push(field);
   return field;
 }
 
@@ -3206,7 +3253,8 @@ export const QUALITY_TIER = detectQualityTier();
 // a fifth. Low is deliberately still dense enough to read as turf rather
 // than as bristles — a phone that can't manage it is better served by the
 // lawn looking thin than by it looking like a hairbrush.
-export const GRASS_SPACING = { high: 0.03, medium: 0.042, low: 0.068 }[QUALITY_TIER];
+export const GRASS_SPACING_BY_TIER = { high: 0.03, medium: 0.042, low: 0.068 };
+export const GRASS_SPACING = GRASS_SPACING_BY_TIER[QUALITY_TIER];
 // Full density out to FULL_RADIUS, then thinning linearly to nothing by
 // FADE_RADIUS. FULL_RADIUS is set to clear the whole yard clearing (whose
 // far corners sit at radius ~22-27, see inOpenArea) so the lawn itself is
