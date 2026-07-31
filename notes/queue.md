@@ -316,9 +316,21 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       Also fixed on the same line: the garden-side band spanned the porch
       notch, so 6.1 m of it was hanging in open air above the patio.
 
-      **Not visually confirmed** — the browser pane was hidden, so no
-      screenshot. But removing geometry that is provably inside a wall is
-      right whether or not it turns out to be the bar.
+      **Confirmed 2026-07-31, by measurement.** Raycasting 840 points across
+      the roof above the arched windows returns exactly two materials —
+      `#d4d0c6` (shingle) and `#dcd8ce` (trim). `SOLDIER_MAT` is `#c4c0ba`
+      and appears nowhere on the roof. The band is gone.
+
+      Worth recording that it was nearly reopened on the same day: a
+      screenshot appeared to show it still there, and that was shingle
+      texture variation being misread. The claim that went with it — that
+      the fix above had addressed "a different thing" — was wrong too. "I
+      looked and it seemed wrong" is not evidence, and this is the second
+      time on this one item that eyeballing has produced a confident false
+      conclusion. The magenta-tint test that originally pinned this to
+      SOLDIER_MAT was the right instinct; a raycast reporting the material
+      under a pixel is the cheap version of it and should be the first move
+      every time.
 
 - [ ] **Miranda's character-select portrait** — the cute image of her still
       shows the old model. Redraw it to match the anime/cel-shaded rebuild.
