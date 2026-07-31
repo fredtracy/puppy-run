@@ -252,7 +252,20 @@ document.body.appendChild(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 0.5, 0);
-controls.enableDamping = true;
+// Damping off, deliberately.
+//
+// It was on with three's default dampingFactor of 0.05, which eases the
+// camera toward the mouse at 5% per frame. That single setting produces both
+// halves of how wrong the camera felt: the ease-in means the view lags behind
+// the pointer when you start dragging, and the ease-out means it carries on
+// drifting for the better part of a second after you let go. Neither is
+// inertia you can aim with — it's the same lag at both ends of the gesture.
+//
+// Off gives exact 1:1 tracking: the view stops when the mouse stops. If some
+// smoothing is ever wanted back, raise dampingFactor toward 0.25 rather than
+// re-enabling it at the default, which is far too slow for a camera you aim
+// with rather than one that drifts around a product shot.
+controls.enableDamping = false;
 // Small enough that the camera can pull right in to the character's own
 // position when you tilt all the way up — see clampOrbitToGround.
 controls.minDistance = 0.12;
