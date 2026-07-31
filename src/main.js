@@ -27,6 +27,8 @@ import {
   setGrassMoonGlow,
   setGrassShadow,
   setGrassTime,
+  setWaterTime,
+  setWaterLight,
   setFirePitLit,
   updateFirePit,
   updateDragonflies,
@@ -290,6 +292,8 @@ let debugFpsEl = null;
 let fpsFrames = 0;
 let fpsElapsed = 0;
 let fpsWorstDelta = 0;
+let lastFrameCalls = 0;
+let lastFrameTriangles = 0;
 
 if (DEBUG_MODE) {
   // Only the starting shot — from here it's a free-fly (see updateDebugFly),
@@ -300,6 +304,9 @@ if (DEBUG_MODE) {
   camera.position.copy(DEBUG_FOCUS).add(DEBUG_EYE);
   camera.lookAt(DEBUG_FOCUS);
   buildDebugPanel();
+  // See updateDebugFps: with autoReset on, the panel's draw-call and
+  // triangle counts only ever describe the composer's last pass.
+  renderer.info.autoReset = false;
 
   // Handles for poking at the running scene from the console. Debug only.
   //
@@ -415,6 +422,16 @@ if (DEBUG_MODE) {
 // by hand.
 function updateDebugFps(delta) {
   if (!debugFpsEl) return;
+
+  // Snapshot and reset *every* frame, before the once-a-second early
+  // return below. Resetting down there instead let the counters run for a
+  // full second, so the panel reported sixty frames' work as one — 9,180
+  // calls and 181M triangles, which looks like a catastrophe rather than
+  // an accounting error. Second time this counter has lied to me today.
+  lastFrameCalls = renderer.info.render.calls;
+  lastFrameTriangles = renderer.info.render.triangles;
+  renderer.info.reset();
+
   fpsFrames++;
   fpsElapsed += delta;
   if (delta > fpsWorstDelta) fpsWorstDelta = delta;
@@ -427,12 +444,19 @@ function updateDebugFps(delta) {
   // its own says something is wrong; these two say *what* — a bad call
   // count is a batching problem, a bad triangle count is a geometry
   // problem, and they want completely different fixes.
-  const info = renderer.info.render;
-  const tris = info.triangles >= 1e6
-    ? `${(info.triangles / 1e6).toFixed(2)}M`
-    : `${Math.round(info.triangles / 1000)}k`;
+  //
+  // Reading these needs renderer.info.autoReset off (set in the DEBUG_MODE
+  // block), because the composer calls renderer.render several times per
+  // frame and each one resets the counters — so the reading is otherwise
+  // whatever the *last* pass did, which is the fullscreen output blit:
+  // "1 calls, 0k tris", forever, whatever is on screen. The same trap
+  // benchRender documents, and I walked into it twice.
+  //
+  const tris = lastFrameTriangles >= 1e6
+    ? `${(lastFrameTriangles / 1e6).toFixed(2)}M`
+    : `${Math.round(lastFrameTriangles / 1000)}k`;
   debugFpsEl.textContent =
-    `fps — ${avg} avg, ${low} low\n${info.calls} calls, ${tris} tris`;
+    `fps — ${avg} avg, ${low} low\n${lastFrameCalls} calls, ${tris} tris`;
   // Amber under 50, red under 30. A bare number invites squinting at it;
   // colour makes a bad frame rate obvious from across the room, which is
   // the point of putting it on screen at all.
@@ -1883,6 +1907,20 @@ function applyDayNight(day) {
   // And the same for its lighting, which it also can't read from the scene.
   setGrassLight(cfg.sun.direction, cfg.grassLight, cfg.grassBackScatter);
   setGrassMoonGlow(cfg.grassMoonGlow ?? 0, cfg.grassMoonColor ?? 0xffffff);
+  // The pond reflects whatever sky it's under, and the fog colour is the
+  // best single stand-in for that.
+  //
+  // Two wrong answers first. The horizon alone (0xff8f3a at sunrise) turned
+  // the whole pond salmon. Lerping horizon toward zenith to calm it down
+  // was worse: those two are near-complementary at sunrise — hot orange
+  // against deep blue — and interpolating between complementaries in RGB
+  // goes straight through grey, so the pond came out dusty mauve. Neither
+  // colour was wrong; the *midpoint between them* was.
+  //
+  // Fog is already the game's "colour of the air", warm haze by day and
+  // near-black blue at night, and it's a real colour rather than an average
+  // of two others.
+  setWaterLight(cfg.fogColor, cfg.sun.direction, cfg.sun.color);
 
   sunMoonLight.color.set(cfg.sun.color);
   sunMoonLight.intensity = cfg.sun.intensity;
@@ -5264,6 +5302,7 @@ function animate() {
   updateDragonflies(yard.userData.dragonflies, elapsed);
 
   setGrassTime(elapsed);
+  setWaterTime(elapsed);
   // Miranda's hair sways on the same clock — see the strand system in mom.js.
   setHairTime(elapsed);
 

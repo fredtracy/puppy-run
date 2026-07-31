@@ -1939,7 +1939,7 @@ const STREAM_PATH = [
   // visible through the water; ending just inside the surface reads as the
   // stream running in. The channel still connects — the pond's own dig is
   // deeper than the stream's everywhere they overlap.
-  [27.4, 33.3],
+  [26.8, 32.6],
 ];
 const STREAM_HALF = 0.6;
 const STREAM_DEPTH = 0.26;
@@ -2042,6 +2042,18 @@ function waterCarveAt(x, z) {
   return Math.max(0, carve);
 }
 
+// Signed distance to the waterline: negative in the water, positive on the
+// bank, null when nowhere near. Used for the reed band, which straddles the
+// edge — reeds stand in the shallows *and* just back from them, so a plain
+// "is it wet" test can't place them.
+function waterEdgeBand(x, z) {
+  if (x < WATER_BOUNDS.x0 - 2 || x > WATER_BOUNDS.x1 + 2) return null;
+  if (z < WATER_BOUNDS.z0 - 2 || z > WATER_BOUNDS.z1 + 2) return null;
+  const pond = Math.hypot(x - POND.x, z - POND.z) - POND_DISC;
+  const stream = distanceToStream(x, z) - STREAM_HALF;
+  return Math.min(pond, stream);
+}
+
 // How close a point is to open water, for keeping things out of it. The
 // margin lets callers ask for their own clearance — grass can grow to the
 // waterline, a tree can't stand in the channel.
@@ -2052,12 +2064,162 @@ function nearWater(x, z, margin) {
   return distanceToStream(x, z) < STREAM_HALF + margin;
 }
 
-const WATER_MAT = new THREE.MeshStandardMaterial({
-  color: 0x2e5c58,
-  roughness: 0.12,
-  metalness: 0.1,
+// Water, as a shader rather than a tinted surface.
+//
+// The first version was a MeshStandardMaterial — one flat colour, 82%
+// opaque — and it read as painted lino. A still surface with no variation
+// across it isn't water however well the colour is chosen, because
+// everything the eye uses to identify water is *movement* and *change
+// across the surface*: ripples catching the light at different angles, the
+// far edge going reflective while the near edge stays clear, the middle
+// reading deeper than the margin.
+//
+// So: two crossing ripple trains perturbing the normal, a Fresnel term
+// governing both reflectivity and transparency, depth tinting from a
+// distance field the geometry passes in, and a flow direction so the
+// stream moves along its own length while the pond just breathes.
+const WATER_UNIFORMS = {
+  uTime: { value: 0 },
+  // Shallow water at the margin, deep water in the middle.
+  // Both darkened after a look. Water is almost always darker than the
+  // ground around it — it absorbs rather than scattering back — and the
+  // first pair were light enough that the pond read as a bright patch in
+  // the grass instead of a hole full of water.
+  uShallow: { value: new THREE.Color(0x3c6656) },
+  uDeep: { value: new THREE.Color(0x0b2028) },
+  // What the surface reflects at a grazing angle. Driven from the sky's own
+  // horizon colour by applyDayNight, so the pond changes with the time of
+  // day instead of staying a fixed blue while the sky goes gold.
+  uSkyTint: { value: new THREE.Color(0x9fc4e8) },
+  uLightDir: { value: new THREE.Vector3(0, 1, 0) },
+  uSunColor: { value: new THREE.Color(0xffffff) },
+};
+
+const WATER_MAT = new THREE.ShaderMaterial({
+  uniforms: WATER_UNIFORMS,
   transparent: true,
-  opacity: 0.82,
+  depthWrite: false,
+  vertexShader: /* glsl */ `
+    // x is flow along the surface, y is depth: 0 at the shore, 1 in the
+    // middle. Both are baked per-vertex when the geometry is built, since
+    // the shader can't work out where the bank is on its own.
+    attribute vec2 waterInfo;
+    varying vec2 vInfo;
+    varying vec3 vWorld;
+    varying vec3 vViewDir;
+    void main() {
+      vInfo = waterInfo;
+      vec4 world = modelMatrix * vec4(position, 1.0);
+      vWorld = world.xyz;
+      vViewDir = normalize(cameraPosition - world.xyz);
+      gl_Position = projectionMatrix * viewMatrix * world;
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    precision highp float;
+    uniform float uTime;
+    uniform vec3 uShallow;
+    uniform vec3 uDeep;
+    uniform vec3 uSkyTint;
+    uniform vec3 uLightDir;
+    uniform vec3 uSunColor;
+    varying vec2 vInfo;
+    varying vec3 vWorld;
+    varying vec3 vViewDir;
+
+    void main() {
+      float depth = vInfo.y;
+      float flow = vInfo.x;
+
+      // Two ripple trains at different scales and angles, plus a slow
+      // drift along the flow direction. Crossing them is what stops the
+      // pattern reading as corrugation — a single train is a washboard.
+      vec2 p = vWorld.xz;
+      float drift = flow * 0.9 - uTime * 0.35;
+      float r1 = sin(p.x * 3.1 + p.y * 1.7 + uTime * 1.15 + drift * 3.0);
+      float r2 = sin(p.x * -1.9 + p.y * 4.3 + uTime * 0.87 - drift * 2.0);
+      float r3 = sin((p.x + p.y) * 8.5 - uTime * 2.4 + drift * 6.0);
+
+      // Perturb the surface normal. Bigger than it first was — at 0.09 the
+      // ripples were invisible from more than a few metres away, which left
+      // the pond a flat wash of whatever the sky colour happened to be.
+      // They have to survive being seen from across the glade.
+      vec3 n = normalize(vec3(
+        (r1 * 0.32 + r3 * 0.10) * 0.16,
+        1.0,
+        (r2 * 0.32 + r3 * 0.10) * 0.16
+      ));
+
+      // Fresnel. Looking straight down you see into the water; looking
+      // across it you see the sky. This one term does most of the work of
+      // making it read as a surface with a medium under it.
+      float fres = pow(1.0 - max(dot(n, vViewDir), 0.0), 3.0);
+      fres = clamp(fres, 0.0, 1.0);
+
+      // Reaches full depth by 45% of the way in, not 75%. A pond is deep
+      // over most of its area and only shallow at the very margin; ramping
+      // slowly left three quarters of the surface reading as shallows.
+      vec3 body = mix(uShallow, uDeep, smoothstep(0.0, 0.45, depth));
+      // Held to 0.5, down from 0.82.
+      //
+      // A pond seen from standing height is nearly all grazing angle, so at
+      // 0.82 the sky reflection swamped everything — under the sunrise the
+      // whole surface went salmon and read as orange juice. Water does
+      // reflect hard at that angle, but it never loses its own colour
+      // entirely, and the body colour is what says "there is a depth of
+      // something here" rather than "this is a mirror lying on the grass".
+      vec3 col = mix(body, uSkyTint, fres * 0.32);
+
+      // Specular glint off the ripples — the sparkle, and the single most
+      // water-like thing in here.
+      //
+      // Both ends of this were wrong before. At exponent 220 the highlight
+      // was so tight it fell between pixels and never showed; at 60 with a
+      // 0.9 gain it did the opposite and washed the entire pond khaki —
+      // because with a low sun and a downward view the half-vector sits
+      // near vertical, so every ripple lands inside the lobe at once and
+      // the "sparkle" becomes a flat sheen over the whole surface.
+      //
+      // 140 and a quarter of the gain: narrow enough that only ripples at
+      // the right angle catch it, bright enough to see when they do.
+      vec3 h = normalize(normalize(uLightDir) + vViewDir);
+      float spec = pow(max(dot(n, h), 0.0), 140.0);
+      col += uSunColor * spec * 0.22;
+
+      // The ripples also just *shade* the surface, independently of any
+      // reflection maths.
+      //
+      // Perturbing the normal alone turned out not to be enough: the normal
+      // only reaches the image through the Fresnel and specular terms, and
+      // at a near-horizontal view — which is how you actually see a pond,
+      // standing beside it — Fresnel is close to saturated and stops
+      // responding. The result was a surface that was mathematically
+      // rippling and visually a smooth gradient.
+      //
+      // Modulating brightness directly is not physical, but it is what
+      // makes the movement legible from every angle rather than only from
+      // directly overhead.
+      float ripple = r1 * 0.5 + r2 * 0.34 + r3 * 0.16;
+      col *= 0.86 + 0.26 * ripple;
+
+      // Shallow water is more transparent, and the very edge fades out
+      // entirely so the waterline is a soft wet margin rather than a cut
+      // line across the grass.
+      //
+      // The floor here is 0.72, well up from 0.35. At 0.35 the margin was
+      // transparent enough to show the pond bed straight through — and the
+      // bed is the painted lawn texture, lit by the glade's canopy
+      // exemption, so the pond looked like a pale green puddle sitting on
+      // bright grass. A real pond this deep is murky; you do not see the
+      // bottom of it. Being *more* opaque is what makes it read as having
+      // a body of water in it at all.
+      float alpha = mix(0.93, 1.0, smoothstep(0.0, 0.45, depth));
+      alpha = mix(alpha, 1.0, fres * 0.5);
+      alpha *= smoothstep(0.0, 0.1, depth);
+
+      gl_FragColor = vec4(col, alpha);
+    }
+  `,
 });
 
 function createWater() {
@@ -2066,7 +2228,22 @@ function createWater() {
   // The pond: one flat disc, because water is level. Slightly inside the
   // carved radius so the bank rises through its edge rather than the two
   // meeting exactly and z-fighting.
-  const disc = mesh(new THREE.CircleGeometry(POND_DISC, 48), WATER_MAT);
+  const discGeo = new THREE.CircleGeometry(POND_DISC, 48);
+  // Depth per vertex, from the disc's own geometry: 1 at the centre falling
+  // to 0 at the rim. The shader can't derive this — it has no idea where
+  // the bank is — so it's baked in here where the shape is known. Flow is
+  // zero: a pond doesn't go anywhere, it just breathes.
+  {
+    const pos = discGeo.attributes.position;
+    const info = new Float32Array(pos.count * 2);
+    for (let i = 0; i < pos.count; i++) {
+      const d = Math.hypot(pos.getX(i), pos.getY(i)) / POND_DISC;
+      info[i * 2] = 0;
+      info[i * 2 + 1] = 1 - d;
+    }
+    discGeo.setAttribute('waterInfo', new THREE.BufferAttribute(info, 2));
+  }
+  const disc = mesh(discGeo, WATER_MAT);
   disc.rotation.x = -Math.PI / 2;
   disc.position.set(POND.x, POND_WATER_Y, POND.z);
   group.add(disc);
@@ -2076,8 +2253,13 @@ function createWater() {
   // sampling terrainHeight (already carved by now) puts it in its channel.
   const positions = [];
   const indices = [];
+  const info = [];
   const STEPS = 14;
   let row = 0;
+  // Distance travelled along the stream, so the ripples drift downhill
+  // rather than sitting still. Accumulated in metres and fed to the shader
+  // as the flow coordinate.
+  let run = 0;
   for (let i = 0; i < STREAM_PATH.length - 1; i++) {
     const [ax, az] = STREAM_PATH[i];
     const [bx, bz] = STREAM_PATH[i + 1];
@@ -2094,10 +2276,15 @@ function createWater() {
       const nx = -vz / len;
       const nz = vx / len;
       const w = STREAM_HALF * 0.85;
+      if (row > 0) run += Math.hypot(vx, vz) / STEPS;
       for (const side of [-1, 1]) {
         const px = cx + nx * w * side;
         const pz = cz + nz * w * side;
         positions.push(px, terrainHeight(px, pz) + 0.05, pz);
+        // Flow along the run; depth peaks in the middle of the channel and
+        // goes to zero at both banks, which is what feathers the stream's
+        // edges into the wet ground rather than ending on a hard line.
+        info.push(run, 0.55);
       }
       if (row > 0) {
         const a = (row - 1) * 2;
@@ -2108,12 +2295,28 @@ function createWater() {
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('waterInfo', new THREE.Float32BufferAttribute(info, 2));
   geo.setIndex(indices);
   geo.computeVertexNormals();
   const stream = mesh(geo, WATER_MAT);
   group.add(stream);
 
   return group;
+}
+
+// Water is animated, so it needs the clock. Called from the frame loop
+// alongside the grass's own wind time.
+export function setWaterTime(t) {
+  WATER_UNIFORMS.uTime.value = t;
+}
+
+// Keeps the pond reflecting the sky it's actually under — driven from
+// applyDayNight, so it goes gold at sunrise and silver under the moon
+// instead of staying a fixed blue all day.
+export function setWaterLight(skyTint, lightDir, sunColor) {
+  WATER_UNIFORMS.uSkyTint.value.set(skyTint);
+  WATER_UNIFORMS.uLightDir.value.copy(lightDir).normalize();
+  WATER_UNIFORMS.uSunColor.value.set(sunColor);
 }
 
 // Segments per world unit across the lawn. The dome's slope is gentle, so
@@ -2282,6 +2485,33 @@ const SPECIES = {
     scaleRange: 0.85,
     // Sparser stand, so less tangle and more upright separation.
     lean: 0.5,
+  },
+  // Reeds round the pond margin. Four times the height of coarse grass and
+  // near enough parallel-sided — a reed is a stem, not a blade, so it holds
+  // its width almost to the tip instead of tapering away like turf.
+  //
+  // A species rather than its own system, and that's the whole reason it's
+  // cheap: it inherits the grass shader untouched, which means it gets the
+  // wind — the gust envelope rolling across the field, the lean, the
+  // flutter — already tuned and already in phase with every other plant in
+  // the yard. Reeds swaying to their own private rhythm beside grass
+  // swaying to another would read as two separate weather systems.
+  //
+  // `lean` is low because they stand up: tall stems carry their own weight,
+  // and the sway multiplies against height anyway, so a reed still moves
+  // much further at the tip than turf does.
+  REED: {
+    height: 0.92,
+    // Enough to bend along its length rather than pivoting stiffly at the
+    // base, which at this height is very visible.
+    segments: 5,
+    width: 0.026,
+    taperPow: 3.2,
+    taperAmt: 0.45,
+    curve: 0.3,
+    scaleMin: 0.6,
+    scaleRange: 0.75,
+    lean: 0.35,
   },
   // Fallen pine needles, lying on the ground rather than growing out of it.
   // Long, straight, near-parallel-sided and blunt — a southern pine needle
@@ -2937,6 +3167,20 @@ const GRASS_MATERIALS = {
     tipCool: '0.22, 0.58, 0.24',
     tipRamp: 'pow(vHeightT, 1.3)',
     // The lawn's own colouring — this is the term that was tuned against it.
+    shadeResponse: 1.0,
+  }),
+  // Dry straw-green, and much less separated root-to-tip than a blade of
+  // grass: a reed is the same colour most of the way up and only browns off
+  // at the very top. Warmer than everything else in the yard on purpose —
+  // it's what picks the pond margin out from the woods behind it.
+  REED: createLushGrassMaterial(SPECIES.REED, {
+    base: '0.15, 0.26, 0.12',
+    tipWarm: '0.62, 0.63, 0.30',
+    tipCool: '0.38, 0.45, 0.22',
+    // Held back to the last fifth, so the stem stays green and only the
+    // head goes strawy. The usual 1.3 ramps from the base and makes the
+    // whole reed look dead.
+    tipRamp: 'pow(vHeightT, 3.4)',
     shadeResponse: 1.0,
   }),
   COARSE: createLushGrassMaterial(SPECIES.COARSE, {
@@ -3635,6 +3879,7 @@ function createChunkGrass(cx, cz, rand) {
     DANDELION: [],
     DANDELION_CLOCK: [],
     NEEDLE: [],
+    REED: [],
   };
 
   for (let lx = 0; lx < CHUNK_SIZE; lx += GRASS_SPACING) {
@@ -3678,17 +3923,58 @@ function createChunkGrass(cx, cz, rand) {
         // yard. That meant the front lawn was being thinned to 60% purely
         // for being far from that point. The mown property is exempt; only
         // the woods and across the street fade.
-        const dist = Math.hypot(x, z);
-        if (dist > GRASS_FADE_RADIUS) continue;
-        if (dist > GRASS_FULL_RADIUS) {
-          const keep =
-            1 - (dist - GRASS_FULL_RADIUS) / (GRASS_FADE_RADIUS - GRASS_FULL_RADIUS);
-          if (rand() > keep) continue;
+        // The glade is exempt, the same way the mown property is.
+        //
+        // The pond sits about 45.8 out, and the fade is finished by 44 — so
+        // the clearing built to be the prettiest thing in the game came out
+        // as bare painted mesh with a disc of water on it. The fade exists
+        // to feather grass into the trees, not to strip a place the player
+        // is meant to arrive at.
+        const gladeDist = Math.hypot(x - POND.x, z - POND.z);
+        if (gladeDist > GLADE_RADIUS) {
+          const dist = Math.hypot(x, z);
+          if (dist > GRASS_FADE_RADIUS) continue;
+          if (dist > GRASS_FULL_RADIUS) {
+            const keep =
+              1 - (dist - GRASS_FULL_RADIUS) / (GRASS_FADE_RADIUS - GRASS_FULL_RADIUS);
+            if (rand() > keep) continue;
+          }
         }
       }
 
       const duff = field(fDuff, x, z);
       const vigour = field(fVigour, x, z);
+
+      // Reeds, in a band round the waterline.
+      //
+      // Densest right at the edge and thinning both ways — they grow with
+      // their feet wet, so there are none out in the open water and few up
+      // the dry bank. `waterEdgeBand` is signed distance from the shore, so
+      // one expression covers standing in the shallows and standing just
+      // back from them.
+      const shore = waterEdgeBand(x, z);
+      if (shore !== null) {
+        // 1 at the waterline, falling away over 1.4 m in each direction.
+        const band = Math.max(0, 1 - Math.abs(shore) / 1.4);
+        // Squared so the band has a defined edge rather than petering out
+        // across the whole glade.
+        //
+        // The 0.022 looks absurdly small and isn't: this loop steps at
+        // GRASS_SPACING, which is 3 cm, so it visits about 1,100 candidate
+        // positions per square metre. At the 0.55 this started at that was
+        // six hundred reeds per square metre — a solid wall you couldn't
+        // see the pond through, and the reason the first attempt filled the
+        // entire screen with straw. 0.022 gives roughly 25/m², which is a
+        // reed bed.
+        if (rand() < band * band * 0.022) {
+          entries.REED.push([x, z, vigour]);
+          // Reeds grow in clumps, not as evenly spaced individuals — a
+          // second at the same spot is what turns a scattering into a
+          // stand, and the per-blade jitter keeps them from overlapping
+          // exactly.
+          if (rand() < 0.3) entries.REED.push([x, z, vigour]);
+        }
+      }
 
       if (duff > 0.04 && rand() < duff) {
         entries.NEEDLE.push([x, z, vigour]);
