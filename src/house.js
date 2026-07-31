@@ -1609,28 +1609,15 @@ const BACK_WALK = {
   zMax: BACK_WALK_Z1,
 };
 
-// The walk ring, whose slabs have rounded corners — so the mask has to
-// round its corners too, with the same radius and the same clamp.
-//
-// This is why the grass went missing at the outside corners of the walk.
-// Rounding the concrete (roundedSlab) left the mask as plain rectangles, so
-// at every corner a chunk of about (1 - pi/4) * r^2 — over a square metre at
-// this radius — was being reported as paved with no concrete actually on it.
-// Grass dutifully stayed off it, and the result was bare ground.
-const ROUNDED_FLATWORK = [...PERIMETER, BACK_WALK].map(toWorld);
-
+// What's left as boxes: the two pieces that aren't part of the walk surface.
+// The ring itself, and the driveway that runs off it, are handled by
+// WALK_OUTLINE below — they're one continuous polygon now, not a list.
 const FLATWORK = [
   // the covered patio's own slab, inside the building outline
   toWorld({ xMin: PORCH.xMin, xMax: PORCH.xMax, zMin: PORCH_BACK_Z, zMax: HALF_D }),
-  // driveway out to where yard.js picks it up
-  toWorld({
-    xMin: GARAGE.xMin - WALK_W,
-    xMax: GARAGE.xMax + WALK_W,
-    zMin: DRIVEWAY_END_Z,
-    zMax: GARAGE_FRONT_Z,
-  }),
   // the entry alcove's stoop, running the length of the slot beside the
-  // garage out to the driveway
+  // garage out to the driveway. Deliberately proud of the walk, so it is
+  // kept out of the union rather than fighting it.
   toWorld({
     xMin: ALCOVE.xMin, xMax: ALCOVE.xMax, zMin: GARAGE_FRONT_Z, zMax: -HALF_D,
   }),
@@ -1638,26 +1625,141 @@ const FLATWORK = [
 
 const inBox = (x, z, b) => x > b.xMin && x < b.xMax && z > b.zMin && z < b.zMax;
 
-// Point-in-rounded-rectangle, matching roundedSlab's geometry exactly —
-// including its radius clamp, so narrow slabs degrade to stadium ends here
-// the same way they do in the mesh. A rounded rect is the union of two
-// crosswise rectangles and four corner discs, which is cheaper and more
-// obvious than an inset-and-distance formulation.
-const inRoundedBox = (x, z, b) => {
-  const w = b.xMax - b.xMin;
-  const d = b.zMax - b.zMin;
-  const r = Math.max(0.01, Math.min(WALK_CORNER_R, w / 2 - 0.001, d / 2 - 0.001));
-  if (x <= b.xMin || x >= b.xMax || z <= b.zMin || z >= b.zMax) return false;
-  // The cross: everything except the four corner squares. Both bounds, not
-  // either — a point only escapes the corner squares by being inside the
-  // full span of one axis.
-  if (x >= b.xMin + r && x <= b.xMax - r) return true;
-  if (z >= b.zMin + r && z <= b.zMax - r) return true;
-  // In a corner square, so it only counts inside the fillet.
-  const cx = x < b.xMin + r ? b.xMin + r : b.xMax - r;
-  const cz = z < b.zMin + r ? b.zMin + r : b.zMax - r;
-  return Math.hypot(x - cx, z - cz) < r;
-};
+// ── the walk, as one continuous surface ─────────────────────────────────
+//
+// This replaces "one rounded slab per mass, all laid on top of each other",
+// which was wrong in three separate ways at once and could not be tuned out
+// of any of them:
+//
+//   * overlapping slabs at one height are coplanar, so they z-fought and
+//     flickered. Stacking them a millimetre apart stopped the fighting and
+//     replaced it with visible seams, because the walk was still a pile of
+//     separate pieces rather than a surface.
+//   * rounding each slab independently only rounds the union's corners when
+//     the radius equals the dilation width. At 2.4 m against slabs 2-3 m
+//     across, the radius clamp turned whole slabs into stadiums and discs --
+//     the circles scalloping the outside of the walk.
+//   * the grass mask had to be kept in step with all of it by hand, which is
+//     what put lawn on the concrete and bare ground on the corners.
+//
+// So the union is computed properly instead. Every piece of flatwork is an
+// axis-aligned box, and the union of axis-aligned boxes is exact on the grid
+// formed by all their edges: no sampling, no tolerance. Mark the cells that
+// are inside any box, walk the boundary between inside and outside, and that
+// traced loop is the walk's true outline. Fillet its corners and it is one
+// closed polygon -- which is then used for *both* the mesh and the mask, so
+// the two cannot drift apart again.
+function unionOutline(boxes) {
+  const xs = [...new Set(boxes.flatMap((b) => [b.xMin, b.xMax]))].sort((a, b) => a - b);
+  const zs = [...new Set(boxes.flatMap((b) => [b.zMin, b.zMax]))].sort((a, b) => a - b);
+  const inside = (i, j) => {
+    if (i < 0 || j < 0 || i >= xs.length - 1 || j >= zs.length - 1) return false;
+    const cx = (xs[i] + xs[i + 1]) / 2;
+    const cz = (zs[j] + zs[j + 1]) / 2;
+    return boxes.some((b) => cx > b.xMin && cx < b.xMax && cz > b.zMin && cz < b.zMax);
+  };
+
+  // Boundary edges, wound so the paved side is always on the left. Chaining
+  // them then gives one consistently-oriented loop.
+  const key = (p) => p[0].toFixed(4) + ',' + p[1].toFixed(4);
+  const from = new Map();
+  const add = (a, b) => from.set(key(a), [a, b]);
+  for (let i = 0; i < xs.length - 1; i++) {
+    for (let j = 0; j < zs.length - 1; j++) {
+      if (!inside(i, j)) continue;
+      const [x0, x1, z0, z1] = [xs[i], xs[i + 1], zs[j], zs[j + 1]];
+      if (!inside(i, j - 1)) add([x0, z0], [x1, z0]);
+      if (!inside(i + 1, j)) add([x1, z0], [x1, z1]);
+      if (!inside(i, j + 1)) add([x1, z1], [x0, z1]);
+      if (!inside(i - 1, j)) add([x0, z1], [x0, z0]);
+    }
+  }
+
+  const start = from.values().next().value;
+  const loop = [start[0]];
+  let cur = start;
+  for (let guard = 0; guard < from.size + 2; guard++) {
+    const next = from.get(key(cur[1]));
+    if (!next || key(next[0]) === key(start[0])) break;
+    loop.push(next[0]);
+    cur = next;
+  }
+
+  // Drop the points that only exist because a box edge landed mid-run —
+  // three collinear points would otherwise each get filleted into nothing.
+  return loop.filter((p, i) => {
+    const a = loop[(i - 1 + loop.length) % loop.length];
+    const b = loop[(i + 1) % loop.length];
+    return Math.abs((p[0] - a[0]) * (b[1] - a[1]) - (p[1] - a[1]) * (b[0] - a[0])) > 1e-6;
+  });
+}
+
+// Rounds every corner of a closed polygon, sampling the arcs into points so
+// the result is still just a polygon — which is what lets one array serve as
+// both the outline to extrude and the polygon to test against.
+//
+// The cut-back is clamped to half of each adjacent run, so a corner can eat
+// its own edge but never its neighbour's. That clamp is the difference
+// between this and the per-slab version: here it only ever softens a corner,
+// where before it could consume the entire shape.
+function filletPolygon(pts, r, steps = 5) {
+  const out = [];
+  const n = pts.length;
+  for (let i = 0; i < n; i++) {
+    const p = pts[i];
+    const a = pts[(i - 1 + n) % n];
+    const b = pts[(i + 1) % n];
+    const la = Math.hypot(p[0] - a[0], p[1] - a[1]);
+    const lb = Math.hypot(b[0] - p[0], b[1] - p[1]);
+    const t = Math.min(r, la / 2, lb / 2);
+    if (t < 1e-4) { out.push(p); continue; }
+    const p0 = [p[0] + ((a[0] - p[0]) / la) * t, p[1] + ((a[1] - p[1]) / la) * t];
+    const p1 = [p[0] + ((b[0] - p[0]) / lb) * t, p[1] + ((b[1] - p[1]) / lb) * t];
+    // Quadratic through the original corner: cheap, and at these radii
+    // indistinguishable from a true arc.
+    for (let s = 0; s <= steps; s++) {
+      const u = s / steps;
+      const w = (1 - u) * (1 - u);
+      const wc = 2 * (1 - u) * u;
+      const we = u * u;
+      out.push([
+        w * p0[0] + wc * p[0] + we * p1[0],
+        w * p0[1] + wc * p[1] + we * p1[1],
+      ]);
+    }
+  }
+  return out;
+}
+
+// Every piece of flatwork that lies at the walk's height. The raised entry
+// stoop and the porch slab are deliberately not here — they are meant to sit
+// proud of it, so they can't z-fight with it.
+const WALK_BOXES = [
+  ...PERIMETER,
+  BACK_WALK,
+  {
+    xMin: GARAGE.xMin - WALK_W,
+    xMax: GARAGE.xMax + WALK_W,
+    zMin: DRIVEWAY_END_Z,
+    zMax: GARAGE_FRONT_Z,
+  },
+];
+
+// Local coordinates, for the mesh; and the same loop shifted into world
+// coordinates, for the mask.
+const WALK_OUTLINE = filletPolygon(unionOutline(WALK_BOXES), WALK_CORNER_R);
+const WALK_OUTLINE_WORLD = WALK_OUTLINE.map(([x, z]) => [x, z + HOUSE_Z]);
+
+function inPolygon(x, z, poly) {
+  let hit = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, zi] = poly[i];
+    const [xj, zj] = poly[j];
+    if ((zi > z) !== (zj > z) && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) hit = !hit;
+  }
+  return hit;
+}
+
 
 // Bed and front walk together, as one polygon in world coordinates.
 //
@@ -1700,7 +1802,7 @@ export function isHousePaved(x, z) {
   return (
     HOUSE_SOLIDS.some((b) => inBox(x, z, b))
     || FLATWORK.some((b) => inBox(x, z, b))
-    || ROUNDED_FLATWORK.some((b) => inRoundedBox(x, z, b))
+    || inPolygon(x, z, WALK_OUTLINE_WORLD)
     || inFrontPaved(x, z)
   );
 }
@@ -2340,98 +2442,36 @@ export function createHouse() {
   // read as a raised concrete curb, which no part of this property has.
   const SLAB = 0.05;
 
-  // Every piece of flatwork tops out at exactly SLAB, and the pieces overlap
-  // each other by design — the ring is built as one dilated slab per mass
-  // precisely so that neighbours run into one another instead of leaving
-  // notches. Overlapping surfaces at an identical height are coplanar, and
-  // coplanar faces z-fight: the depth test has no basis to choose between
-  // them, so which one wins is decided per pixel and flips as the camera
-  // moves. That's the flicker, and it's why it reads as one layer of
-  // sidewalk with another just under it — because that is literally what it
-  // is.
-  //
-  // So each piece is laid a hair higher than the last. A millimetre is far
-  // more than the depth buffer needs to separate them at any distance the
-  // walk is actually looked at, and far less than a pixel covers, so the
-  // steps can't be seen. The running total stays under the entry stoop's
-  // 2 cm, which has to remain the highest thing here.
-  const SLAB_LIFT = 0.001;
-  let slabsPlaced = 0;
-  const nextLift = () => slabsPlaced++ * SLAB_LIFT;
+  // Only the front walk needs lifting off the ring now. Everything else at
+  // this height was merged into one polygon, so there is nothing left for it
+  // to be coplanar with. The front walk follows the planting bed's curve and
+  // isn't rectilinear, so it can't join that union and instead sits a
+  // millimetre proud where the two meet.
+  const FRONT_WALK_LIFT = 0.001;
 
-  // Same slab, but with its corners rounded off.
-  //
-  // There isn't a square corner anywhere on this property's concrete — it
-  // is all curves wherever the walk changes direction — and the reason the
-  // model had them everywhere is that the walk is a union of axis-aligned
-  // boxes, so every corner was 90 degrees by construction.
-  //
-  // The fix is one observation. The walk is the house footprint *dilated*
-  // by the walk's width, and the Minkowski sum of a rectangle with a disc
-  // of radius r is a rectangle with its corners rounded to radius r. Since
-  // dilation distributes over union, dilating each mass separately and
-  // unioning the results gives the same shape as dilating the union. So
-  // making every slab a rounded rectangle rounds the whole ring correctly,
-  // including corners formed where two different slabs meet — no outline
-  // tracing, no polygon boolean, no special cases per corner.
-  //
-  // The radius is capped at half the short side so a narrow slab degrades
-  // to a stadium shape rather than folding through itself.
-  const roundedSlab = (b, r, y = SLAB / 2, t = SLAB) => {
-    const w = b.xMax - b.xMin;
-    const d = b.zMax - b.zMin;
-    const rad = Math.max(0.01, Math.min(r, w / 2 - 0.001, d / 2 - 0.001));
+  // The walk, the back parking run and the driveway are one surface, built
+  // from the traced union outline up top rather than from a stack of slabs.
+  // One polygon means no overlaps, so nothing is coplanar with anything and
+  // there is nothing left to z-fight or to seam.
+  {
     const shape = new THREE.Shape();
-    const x0 = -w / 2;
-    const x1 = w / 2;
-    const y0 = -d / 2;
-    const y1 = d / 2;
-    shape.moveTo(x0 + rad, y0);
-    shape.lineTo(x1 - rad, y0);
-    shape.quadraticCurveTo(x1, y0, x1, y0 + rad);
-    shape.lineTo(x1, y1 - rad);
-    shape.quadraticCurveTo(x1, y1, x1 - rad, y1);
-    shape.lineTo(x0 + rad, y1);
-    shape.quadraticCurveTo(x0, y1, x0, y1 - rad);
-    shape.lineTo(x0, y0 + rad);
-    shape.quadraticCurveTo(x0, y0, x0 + rad, y0);
+    shape.moveTo(WALK_OUTLINE[0][0], -WALK_OUTLINE[0][1]);
+    for (let i = 1; i < WALK_OUTLINE.length; i++) {
+      shape.lineTo(WALK_OUTLINE[i][0], -WALK_OUTLINE[i][1]);
+    }
+    shape.closePath();
     const geo = new THREE.ExtrudeGeometry(shape, {
-      depth: t, bevelEnabled: false, curveSegments: 8,
+      depth: SLAB, bevelEnabled: false,
     });
-    // Extruded along +z then laid flat, so the slab's thickness becomes
-    // world height and the shape's y becomes world -z.
     geo.rotateX(-Math.PI / 2);
     const pos = geo.attributes.position;
     const uv = geo.attributes.uv;
     for (let i = 0; i < pos.count; i++) {
       uv.setXY(i, pos.getX(i) / CONCRETE_TILE, pos.getZ(i) / CONCRETE_TILE);
     }
-    return place(
-      mesh(geo, CONCRETE_MAT),
-      (b.xMin + b.xMax) / 2, y - t / 2 + nextLift(), (b.zMin + b.zMax) / 2
-    );
-  };
+    group.add(place(mesh(geo, CONCRETE_MAT), 0, 0, 0));
+  }
 
-  // The walk that rings the entire building — one slab per mass, each grown
-  // by the walk's width, which unions into a continuous ring and wraps every
-  // projection without anyone having to trace an offset outline.
-  // Radius measured off the satellite view rather than assumed. The house
-  // is ~15 m across and spans ~300 px there, so the sweeping corners on the
-  // real concrete are 2.5-3 m — not the 0.91 m walk width I first used,
-  // which produced something that still read as a square corner with a
-  // bevel knocked off it. At this radius the ring genuinely flows.
-  //
-  // roundedSlab caps the radius at half the short side, so the narrow slabs
-  // degrade to stadium ends instead of folding through themselves — which
-  // is what lets one number be handed to every slab regardless of size.
-  PERIMETER.forEach((b) => group.add(roundedSlab(b, WALK_CORNER_R)));
-  group.add(roundedSlab(BACK_WALK, WALK_CORNER_R));
-
-  const driveLen = GARAGE_FRONT_Z - DRIVEWAY_END_Z;
-  group.add(place(
-    concreteBox(GARAGE_W + WALK_W * 2, SLAB, driveLen),
-    GARAGE_CX, SLAB / 2 + nextLift(), GARAGE_FRONT_Z - driveLen / 2
-  ));
   // The planting bed, and the walk that runs *outside* it.
   //
   // Order from the brick outward is wall, bed, walk, lawn — which is what
@@ -2504,7 +2544,7 @@ export function createHouse() {
     // Laid last, so it sits on top of the perimeter walk it runs into rather
     // than fighting it — this is the piece in front of the door, which is
     // where the flicker was most visible.
-    group.add(place(m, 0, SLAB + nextLift(), 0));
+    group.add(place(m, 0, SLAB + FRONT_WALK_LIFT, 0));
   }
   // Entry stoop, joining the walk to the recessed front door, and running
   // the whole depth of the alcove as the real one does.
