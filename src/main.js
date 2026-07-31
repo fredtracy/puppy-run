@@ -37,6 +37,7 @@ import {
   HOUSE_Z as HOUSE_ORIGIN_Z,
   houseRoofHeight,
   setHouseWindowsLit,
+  setHouseLampsLit,
 } from './house.js';
 import { createSky } from './sky.js';
 import {
@@ -1892,6 +1893,9 @@ function applyDayNight(day) {
   // the exterior lamps below already carry the real lighting and a lit
   // window's job here is to be seen, not to illuminate the lawn.
   setHouseWindowsLit(!day);
+  // The fixtures themselves. Their point lights already went dark by day;
+  // the glass and bulbs didn't, so the house read as lit at noon.
+  setHouseLampsLit(!day);
   // No lens flare off a moon. The effect is sized for a sun a hundred
   // thousand times brighter than the scene, and at night it just fogs the
   // screen whenever you happen to face the right way.

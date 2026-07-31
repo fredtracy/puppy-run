@@ -582,12 +582,30 @@ export function setHouseWindowsLit(lit) {
 // the elevations in a fixed sequence.
 const windowLitRand = seeded(0x9d0715);
 const LIT_WINDOW_SHARE = 0.55;
+// The lamp glass and the string-light bulbs. Emissive at night, plain at
+// noon — see setHouseLampsLit.
+//
+// They used to be emissive around the clock, so every fixture on the house
+// read as switched on in full sun. The point lights beside them (see
+// lampSpots / nightLights) were already going to zero intensity by day; it
+// was only the glass that never noticed.
+const LAMP_GLASS_LIT = 0xffbe66;
+const BULB_LIT = 0xffe6a8;
 const LAMP_GLASS_MAT = new THREE.MeshStandardMaterial({
-  color: 0xfff0d0, emissive: 0xffbe66, emissiveIntensity: 1.5, roughness: 0.35,
+  color: 0xfff0d0, emissive: LAMP_GLASS_LIT, emissiveIntensity: 1.5, roughness: 0.35,
 });
 const BULB_MAT = new THREE.MeshStandardMaterial({
-  color: 0xfff2cf, emissive: 0xffe6a8, emissiveIntensity: 1.6, roughness: 0.4,
+  color: 0xfff2cf, emissive: BULB_LIT, emissiveIntensity: 1.6, roughness: 0.4,
 });
+
+// Emissive intensity rather than the colour, because these have a bloom
+// pass downstream keyed off brightness — dropping the intensity takes them
+// out of it cleanly, where darkening the colour would leave them hovering
+// around the threshold and flickering into bloom as the exposure moves.
+export function setHouseLampsLit(lit) {
+  LAMP_GLASS_MAT.emissiveIntensity = lit ? 1.5 : 0;
+  BULB_MAT.emissiveIntensity = lit ? 1.6 : 0;
+}
 const CORD_MAT = new THREE.MeshStandardMaterial({ color: 0x2a2622, roughness: 0.9 });
 // Porch screen and kennel mesh are flat translucent panels rather than an
 // alpha-cut wire texture: real mesh is sub-pixel at any distance you
@@ -607,9 +625,6 @@ const BIN_MAT = new THREE.MeshStandardMaterial({
 });
 const FURNITURE_MAT = new THREE.MeshStandardMaterial({
   color: 0x4a443d, roughness: 0.98, envMapIntensity: MATTE_ENV,
-});
-const ROOF_VENT_MAT = new THREE.MeshStandardMaterial({
-  color: 0x33312e, roughness: 0.9, envMapIntensity: MATTE_ENV,
 });
 
 // ── geometry helpers ───────────────────────────────────────────────────
@@ -1741,19 +1756,11 @@ export function createHouse() {
   ));
   group.add(place(chimney, -3.4, 0, -2.3));
 
-  // Roof furniture: two low box vents and a plumbing stack on the back
-  // slope, where they sit in the photos.
-  const slopeAngle = Math.atan(PITCH);
-  const roofYAt = (z) => ROOF_Y + PITCH * (ROOF_HALF_D - Math.abs(z - ROOF_CZ));
-  [[-1.6, 2.2], [1.9, 2.7]].forEach(([vx, vz]) => {
-    const rv = mesh(new THREE.BoxGeometry(0.42, 0.1, 0.42), ROOF_VENT_MAT);
-    rv.rotation.x = slopeAngle;
-    group.add(place(rv, vx, roofYAt(vz) + 0.05, vz));
-  });
-  group.add(place(
-    mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.5, 8), ROOF_VENT_MAT),
-    0.6, roofYAt(3.4) + 0.2, 3.4
-  ));
+  // The two low box vents and the plumbing stack that used to sit on the
+  // back slope are gone, on the owner's call — they're in the photos but
+  // they read as three dark specks and earn nothing. Recoverable from
+  // history if the roof ever looks too clean. Their material and the
+  // roof-height helper went with them.
 
   // ── street elevation ─────────────────────────────────────────────────
   // Where each exterior lamp ends up, collected as they're placed so real

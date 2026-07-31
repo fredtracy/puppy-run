@@ -211,11 +211,15 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       actually parallelise (they mostly touch different files, but several
       share `yard.js`), and whether the visual-iteration loop survives being
       handed off, since most of these need screenshot-and-judge cycles.
-- [ ] **Remove the roof vents and plumbing stack** — the two box vents and the
-      stack on the back slope in `house.js` don't add much.
-- [ ] **Lamp glass should stop glowing by day.** The point lights already go to
-      zero intensity, but `LAMP_GLASS_MAT` / `BULB_MAT` in `house.js` are
-      emissive around the clock, so the fixtures still look lit at noon.
+- [x] **Roof vents and plumbing stack removed.** Three dark specks that
+      earned nothing. `ROOF_VENT_MAT` and the `roofYAt`/`slopeAngle` helpers
+      went with them. In history if the roof ever looks too clean.
+- [x] **Lamp glass stops glowing by day.** `setHouseLampsLit` in house.js,
+      driven from applyDayNight beside the windows. Drops `emissiveIntensity`
+      rather than darkening the colour — there's a bloom pass keyed off
+      brightness downstream, and a dimmed-but-coloured emissive would hover
+      around its threshold and flicker into bloom as exposure moves.
+      Verified: zero emissive meshes in the scene by day.
 - [ ] **Back patio lights** should glow at night like the front ones now do
       (see `lampSpots` in `house.js` — the patio fixtures aren't in that list).
 - [ ] **Roof bar** — dark bar on the roof above the arched windows. Confirmed to
