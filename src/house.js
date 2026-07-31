@@ -1183,37 +1183,51 @@ const EAST_BED_Z = EAST_FRONT_Z - FRONT_BED_W;
 //     straight now runs the full length of them and only turns past the
 //     last one.
 const BED_FROM_X = BAY.xMax;
-const BED_TO_X = EAST_END.xMin;
-const BED_CURVE_FROM_X = BAY.xMin + 0.1;
-const BED_CURVE_TO_X = BAY.xMin - 1.6;
+// Where the straight run ends and the arc begins — past the last window.
+const BED_CURVE_FROM_X = BAY.xMin + 0.3;
+
+// The arc is a *constant* radius, and it is not chosen — it is forced.
+//
+// The curve has to leave the straight tangentially (or there's a visible
+// kink where they meet) and arrive at the east end's front wall running
+// straight into it. A circular arc that does both is a quarter circle, and
+// a quarter circle that climbs from the bay's bed line to the east end's
+// wall can only have one radius: the distance between them. So the radius
+// falls out of the two walls' offset rather than being a number anyone
+// picks, and it re-derives itself if the bay's projection ever changes.
+//
+// This replaces a quadratic Bézier, which was the wrong tool. A Bézier
+// meets both tangents happily but its curvature varies along its length —
+// it is flattest at the ends and tightest in the middle — and the owner's
+// description was "a constant curve".
+const BED_ARC_R = EAST_FRONT_Z - BAY_BED_Z;
+// Where the arc lands on the east end's wall, and therefore where the bed
+// stops. Comes out just short of the house's east corner, which is where
+// the curb ends in the photo.
+const BED_TO_X = BED_CURVE_FROM_X - BED_ARC_R;
 
 function frontBedOuterEdge() {
   const pts = [];
-  // Straight along the bay, from the alcove end westward.
+  // Straight along the bay, from the front-door end.
   pts.push([BED_FROM_X, BAY_BED_Z]);
   pts.push([BED_CURVE_FROM_X, BAY_BED_Z]);
-  // Round the corner. Control point is the corner itself, so the curve
-  // leaves the first straight along it and arrives on the second along it.
-  const cx = BAY.xMin;
-  const cz = BAY_BED_Z;
-  const STEPS = 14;
+  // Quarter circle, centred inland of where the straight ends. Sweeping
+  // from due -z round to due -x takes the edge from running along the bay
+  // to running straight into the east end's wall.
+  const cx = BED_CURVE_FROM_X;
+  const cz = BAY_BED_Z + BED_ARC_R;
+  const STEPS = 16;
   for (let i = 1; i <= STEPS; i++) {
-    const t = i / STEPS;
-    const mt = 1 - t;
-    pts.push([
-      mt * mt * BED_CURVE_FROM_X + 2 * mt * t * cx + t * t * BED_CURVE_TO_X,
-      mt * mt * BAY_BED_Z + 2 * mt * t * cz + t * t * EAST_BED_Z,
-    ]);
+    const a = (-90 - 90 * (i / STEPS)) * (Math.PI / 180);
+    pts.push([cx + Math.cos(a) * BED_ARC_R, cz + Math.sin(a) * BED_ARC_R]);
   }
-  // Straight along the east end, out to its far corner.
-  pts.push([BED_TO_X, EAST_BED_Z]);
   return pts;
 }
 
 // The wall line the bed backs onto: bay front, the bay's east return, then
-// the east end's front. This is the bed's inner edge, and tracing it
-// properly is what lets the bed actually meet the brick instead of being
-// pushed inside it and hoping the overlap is hidden.
+// as far along the east end's front as the arc reaches. This is the bed's
+// inner edge, and tracing it properly is what lets the bed meet the brick
+// instead of being pushed inside it and hoping the overlap is hidden.
 function frontBedInnerEdge() {
   return [
     [BED_FROM_X, BAY_FRONT_Z],
@@ -1611,12 +1625,10 @@ export function createHouse() {
     GARAGE_CX, WALL_H / 2, -HALF_D - GARAGE.proj / 2
   ));
 
-  // The fireplace's brick base, standing proud of the bay's side wall at
-  // ground level — it's in three of the walk-around shots, and it's what
-  // explains the chimney above.
-  group.add(place(
-    brickBox(0.36, 0.95, 0.72), BAY.xMin - 0.18, 0.475, BAY_FRONT_Z + 0.6
-  ));
+  // No brick fireplace base against the bay's side wall. There was one,
+  // justified as "in three of the walk-around shots" and as what explains
+  // the chimney above — but the owner looked at it in place and it isn't
+  // there. Removed on their call.
 
   // The alcove's back wall — the one the front door is set into — is sided,
   // not brick. Both returns flanking it stay brick, which is the way round
@@ -2201,9 +2213,17 @@ export function createHouse() {
   // as points rather than as an arc: a curve described by a centre and a
   // radius can only be walked with trigonometry, where a polyline can be
   // walked by anything that needs to follow it, curb included.
-  for (let i = 0; i < bedOuter.length - 1; i++) {
-    const [x0, z0] = bedOuter[i];
-    const [x1, z1] = bedOuter[i + 1];
+  // The curb runs the outer edge, and then closes across the end nearest
+  // the front door — the bed is walled in on that side rather than just
+  // stopping, which is what "encapsulate" means and what the photo shows.
+  // Without it the mulch simply spills out at the open end.
+  const curbRun = [
+    [BED_FROM_X, BAY_FRONT_Z],
+    ...bedOuter,
+  ];
+  for (let i = 0; i < curbRun.length - 1; i++) {
+    const [x0, z0] = curbRun[i];
+    const [x1, z1] = curbRun[i + 1];
     const dx = x1 - x0;
     const dz = z1 - z0;
     const len = Math.hypot(dx, dz);
