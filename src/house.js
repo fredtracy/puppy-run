@@ -1167,15 +1167,30 @@ const FRONT_BED_W = 1.3;
 
 const BAY_BED_Z = BAY_FRONT_Z - FRONT_BED_W;
 const EAST_BED_Z = EAST_FRONT_Z - FRONT_BED_W;
-// Where the straight run stops and the corner begins. Past the windows, as
-// the reference shows — the bay's east jamb is at BAY.xMin.
-const BED_CURVE_FROM_X = BAY.xMin + 0.55;
-const BED_CURVE_TO_X = BAY.xMin - 1.15;
+// Where the bed starts and stops, and where the corner turn happens.
+//
+// All three were overshooting and all three put mulch on concrete:
+//
+//   * the west end ran WALK_W past the bay and straight across the path to
+//     the front door. It stops at the bay's own jamb now — in the photos
+//     the entry walk is clear concrete the whole way.
+//   * the east end ran WALK_W past the house corner and out into the side
+//     walk. Photo 3 settles that one: the east elevation has no bed at all,
+//     just lawn to a narrow strip of concrete, so the bed has to finish at
+//     the front corner and not turn it.
+//   * the curve started 0.55 short of the bay's east jamb, so the bed was
+//     already bending while it was still in front of the windows. The
+//     straight now runs the full length of them and only turns past the
+//     last one.
+const BED_FROM_X = BAY.xMax;
+const BED_TO_X = EAST_END.xMin;
+const BED_CURVE_FROM_X = BAY.xMin + 0.1;
+const BED_CURVE_TO_X = BAY.xMin - 1.6;
 
 function frontBedOuterEdge() {
   const pts = [];
   // Straight along the bay, from the alcove end westward.
-  pts.push([BAY.xMax + WALK_W, BAY_BED_Z]);
+  pts.push([BED_FROM_X, BAY_BED_Z]);
   pts.push([BED_CURVE_FROM_X, BAY_BED_Z]);
   // Round the corner. Control point is the corner itself, so the curve
   // leaves the first straight along it and arrives on the second along it.
@@ -1191,7 +1206,7 @@ function frontBedOuterEdge() {
     ]);
   }
   // Straight along the east end, out to its far corner.
-  pts.push([EAST_END.xMin - WALK_W, EAST_BED_Z]);
+  pts.push([BED_TO_X, EAST_BED_Z]);
   return pts;
 }
 
@@ -1201,10 +1216,10 @@ function frontBedOuterEdge() {
 // pushed inside it and hoping the overlap is hidden.
 function frontBedInnerEdge() {
   return [
-    [BAY.xMax + WALK_W, BAY_FRONT_Z],
+    [BED_FROM_X, BAY_FRONT_Z],
     [BAY.xMin, BAY_FRONT_Z],
     [BAY.xMin, EAST_FRONT_Z],
-    [EAST_END.xMin - WALK_W, EAST_FRONT_Z],
+    [BED_TO_X, EAST_FRONT_Z],
   ];
 }
 
