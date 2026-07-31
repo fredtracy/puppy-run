@@ -7,6 +7,72 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
 
 ## Open
 
+- [ ] **The chimney needs collision, and so does the hammock.** The chimney one
+      is new with the roof being walkable — you can walk straight through it
+      up there. It's a box, so it wants the same treatment as the house
+      masses, except `HOUSE_SOLIDS` is checked only at ground level and is
+      skipped entirely while `onRoof` (see `clampToWalkable`), so this needs
+      its own roof-level test rather than being added to that list.
+
+- [ ] **Replace the hammock's two trees with a hammock stand.** They were
+      ordinary yard trees the hammock happened to be slung between; a proper
+      curved stand is what the yard actually wants, and it also sidesteps the
+      trees-swallowing-the-camera problem that forced the opening camera to
+      move (see `createHammockTree` in `yard.js`, and the note about
+      `HAMMOCK_FORK_AT` — don't lower it, it makes things worse). Pairs
+      naturally with the hammock collision item above.
+
+- [ ] **Make the mouse cursor a cute paw print.** CSS `cursor` on the canvas
+      with a data-URI image (the game already generates canvas textures and
+      the favicon this way, so drawing one more is cheap). Note there's
+      existing cursor handling to work with, not around: hovering an
+      interactive target swaps to `pointer` (`setMomHover`, `setDarlaHover`,
+      `setHammockHover` in `main.js`), so the paw wants a second state — a
+      plain paw and a "clickable" paw — rather than one cursor that fights
+      those.
+
+- [ ] **Climbing the ladder should be an actual animation.** Right now
+      `updateClimb` in `main.js` is a positional tween — she slides up the
+      rungs with her idle pose on, which reads as levitating. Wants the limbs
+      driven: hands and feet reaching rung to rung, body swaying slightly with
+      each pull. Same rigs as the sit item below (`group.userData` arm/leg
+      pivots), and the two are worth doing together since both are "pose her
+      by hand rather than run the walk cycle".
+
+- [ ] **Sit, for both Miranda and Darla.** Asked for 2026-07-30 and not
+      started. Wants a pose plus a way to trigger it — the other actions are
+      on-screen buttons (`.action-button`, see the UI conventions note in
+      CLAUDE.md about centring icons) with keyboard equivalents. Two separate
+      poses: Darla is a dog sit (front legs straight, hindquarters folded,
+      body tilted back), Miranda is a person sitting on the ground. The rigs
+      to drive are `updateWalkCycle` / `updateMirandaWalkCycle` and the leg
+      and arm pivots in `group.userData` on each character.
+
+- [x] **The moon got the same treatment as the sunrise.** Almost all of it
+      came free: `sky.js` already keys its directional horizon, cloud rim
+      lighting and three-lobe glow off `uSunDir`, which at night *is* the moon
+      — the night palette was just collapsing every one of those back to a
+      single value. Filling in `horizonAway` and `cloudHot` turned the whole
+      machine on.
+
+      Disc rebuilt like the sun's: small bright core inside a wide additive
+      aureole, plus maria laid out roughly like the real near side and a
+      limb-darkening pass, both clipped to the disc so the silhouette stays a
+      clean circle. The cartoon face is gone.
+
+      The grass rim (`uMoonGlow` in the blade shader, `setGrassMoonGlow`) is
+      the "ethereal" part — a cool catchlight on blade *tips*, on blades
+      edge-on to the moon, multiplied by the shadow mask so grass under a tree
+      stays dark. First pass at 0.5 and a saturated cyan read as radioactive:
+      the giveaway was the lawn being the most colourful thing in a night
+      scene. Moonlight is desaturated nearly to grey. 0.3 and a silver-blue.
+
+      Also: night `grassShadow` 0.28 → 0.4 (moonlight does cast real shadows
+      and the tree line throws good ones), and a moon glare at 0.34 in a cool
+      tint — genuinely a different weight rather than the sun's turned down,
+      since the sun's veil term alone undoes the darkness at any real
+      strength.
+
 - [ ] **Lawn** — real variety from the grass photos: different species/stalk
       shapes, plants, bare patches, colour variation. Right now it's one grass
       stalk everywhere.
@@ -75,6 +141,37 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       model — the point is to hoist it into one shared source everything
       reads from.
 
+- [x] **"The camera is unusable on the roof" — it was never the camera.**
+      Filed while the roof ladder was being built, then fixed the same day,
+      and it is worth keeping for the method rather than the code.
+
+      Symptom: climb up, click to walk, and the screen fills with shingles.
+      Obvious reading is that the camera has buried itself in the roof. Two
+      rounds of fixing went into that reading — a floor in
+      `clampOrbitToGround`, then a direct lift of `camera.position.y` after
+      `controls.update()`, tried at 0.9 m and 2.2 m of clearance. Neither
+      changed a single pixel.
+
+      One `globalThis` probe inside the lift settled it in a minute: the
+      block *was* running, and the camera was sitting five metres **above**
+      the roof the whole time. Nothing was ever buried.
+
+      The actual cause was `getGroundPoint`, which raycasts only
+      `yard.userData.lawn`. Standing on the roof and clicking on it sent the
+      ray straight through the shingles to the grass below, handing back a
+      point inside the building's footprint — and `clampTargetPoint` then
+      helpfully pushed that point out to the nearest lawn. So every click
+      walked her off the roof, and what filled the screen was the roof going
+      past as she left it.
+
+      Fixed by marching the ray against the roof height field while `onRoof`
+      (`marchToRoof`), exempting `clampTargetPoint` the same way
+      `clampToWalkable` already was, and putting the click marker on the
+      shingles. The camera needed no changes at all and the lift was deleted.
+
+      **Measure before tuning.** Two fixes and four screenshots went into a
+      hypothesis that one print statement disproved.
+
 - [ ] **Camera clips inside the house and shrubs.** Standing anywhere near the
       house puts the camera through a wall or into a bush, and you end up
       looking at the inside of brick. Wants the usual treatment: cast from the
@@ -84,12 +181,32 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       `SPAWN_AT` in `main.js`) — it's the main thing making close-quarters
       inspection painful.
 
-- [ ] **Pine bark reads as grey stone blocks up close.** The plate lattice in
-      `makeBarkTextures` (pine.js) is right in structure but too regular and
-      too grey — the plates are near-uniform rectangles with even mortar-like
-      fissures, so it looks like a stone column rather than wood. Wants more
-      size variation between plates, warmer tone, and fissures that vary in
-      width along their length.
+- [x] **Pine bark read as grey stone blocks / bricks.** Filed as too regular
+      and too grey; raised again 2026-07-30 once every forest pine started
+      sharing the texture rather than just the two hero trees.
+
+      Fixed by throwing the structure away rather than tuning it.
+      `makeBarkTextures` no longer draws plates at all — it's a Voronoi field
+      (jittered seed grid, per-pixel nearest and second-nearest), so plates are
+      irregular polygons meeting at three-way junctions and *cannot* line up
+      into courses because there are no courses.
+
+      **The instructive failure:** an intermediate version kept the rectangle
+      lattice but added wobbled polygon edges, far more size variation and
+      much warmer colour. It was still unmistakably bricks. A rectangle with
+      its corners moved is a rectangle, and a grid of them is a wall — the
+      wobble was a few pixels on plates up to 90 wide, so it was invisible.
+      Structure, not parameters.
+
+      Two things on top of the raw Voronoi and both are load-bearing: the
+      lookup is domain-warped first (straight cell walls read as a tiled
+      floor), and the fissure width is its own noise field, so furrows pinch
+      and open along their length instead of being even mortar. Colour is warm
+      and per-plate, spanning fresh cinnamon to weathered grey-tan.
+
+      Costs ~77 ms per texture against maybe 10 ms before, and it's built
+      three times (once shared by the whole forest, once per hero pine), so
+      roughly +200 ms on load.
 - [ ] **Fog is heavy enough to wash out the frontage.** From across the road
       the house and pines go pale blue-grey and lose most of their contrast.
       Fine as an edge-of-world device, too strong at 30-40m. See

@@ -28,9 +28,11 @@ const fragmentShader = /* glsl */ `
   varying vec3 vDir;
 
   uniform vec3 uHorizon;
+  uniform vec3 uHorizonAway;
   uniform vec3 uZenith;
   uniform vec3 uCloudLit;
   uniform vec3 uCloudShade;
+  uniform vec3 uCloudHot;
   uniform vec3 uGlow;
   uniform vec3 uSunDir;
   uniform float uCoverage;
@@ -78,13 +80,46 @@ const fragmentShader = /* glsl */ `
     float ay = abs(dir.y);
     float h = clamp(ay, 0.0, 1.0);
 
+    vec3 sunDir = normalize(uSunDir);
+    float sd = max(dot(dir, sunDir), 0.0);
+
+    // How far round the compass this ray is from the sun, ignoring
+    // elevation. This is the term that makes a sunrise a sunrise: the sky
+    // is molten in one direction and still cold blue behind you, and using
+    // the full 3D dot product instead would tie the warmth to *elevation*
+    // too, painting the horizon evenly all the way round and washing the
+    // colour up over the zenith.
+    vec2 sunAz = normalize(sunDir.xz);
+    vec2 rayAz = dir.xz;
+    float azLen = length(rayAz);
+    // Straight up has no compass bearing at all; fall back to "away", since
+    // the zenith is the one place that should never be sunrise-coloured.
+    float toward = azLen < 1e-4 ? 0.0 : max(dot(rayAz / azLen, sunAz), 0.0);
+    // Squared, so the warm quadrant is genuinely a quadrant rather than
+    // half the sky faintly tinted.
+    toward *= toward;
+
     // Gradient. The low exponent keeps a wide band of pale colour sitting on
     // the horizon instead of the zenith blue crushing straight down to it.
-    vec3 sky = mix(uHorizon, uZenith, pow(h, 0.5));
+    vec3 horizon = mix(uHorizonAway, uHorizon, toward);
+    vec3 sky = mix(horizon, uZenith, pow(h, 0.5));
 
-    // Broad, soft glow around the sun/moon — no disc.
-    float sd = max(dot(dir, normalize(uSunDir)), 0.0);
-    sky += uGlow * (pow(sd, 6.0) * 0.16 + pow(sd, 40.0) * 0.35);
+    // Glow around the sun, in three falloffs rather than the two this had.
+    // The broadest is new and is doing the atmospheric work — a low sun
+    // lights a big soft dome of sky around itself, and without that term
+    // the transition from the warm horizon band to the blue above it is a
+    // visible edge instead of a haze.
+    // Kept tighter than it wants to be. The broad term reads as atmosphere
+    // when it's subtle and as a milky wash the moment it isn't — at 2.2/0.20
+    // it covered most of the sunward sky and flattened the gradient and the
+    // clouds together, which is the opposite of the job. The drama should
+    // come from the horizon colours and the cloud rim lighting; this is only
+    // the haze that stops those meeting at a hard edge.
+    sky += uGlow * (
+      pow(sd, 3.5) * 0.09 +
+      pow(sd, 11.0) * 0.22 +
+      pow(sd, 60.0) * 0.55
+    );
 
     if (ay > 0.008) {
       // Project the view ray onto a flat cloud deck overhead. This is what
@@ -151,8 +186,27 @@ const fragmentShader = /* glsl */ `
       // Denser interior reads as shadowed base, thin edges as lit top.
       float lit = smoothstep(0.0, 0.42, n - uCoverage);
       vec3 cloud = mix(uCloudShade, uCloudLit, lit);
-      // A little warmth where the cloud faces the sun.
-      cloud += uGlow * pow(sd, 4.0) * 0.1 * lit;
+
+      // Rim light. This is the effect worth having and it is the *inverse*
+      // of the term above: it's the thin edge of a cloud, not its lit face,
+      // that catches a low sun, because there's little enough water there
+      // for the light to come through rather than bounce off. So it keys
+      // off (1 - lit) — the wispy margin where density has only just
+      // cleared the coverage threshold — and it's what draws the bright
+      // outline around every cloud near the horizon at dawn.
+      float rim = (1.0 - lit) * pow(sd, 3.0);
+      cloud += uGlow * rim * 1.35;
+
+      // And close to the sun, thin cloud stops being lit and starts being
+      // translucent — it blows out past white toward the hot colour rather
+      // than merely brightening.
+      cloud = mix(cloud, uCloudHot, pow(sd, 14.0) * (1.0 - lit * 0.55) * 0.9);
+
+      // Underlighting. The sun is below most of the deck at this elevation,
+      // so cloud *bases* toward the sun pick up a warm bounce that cloud
+      // bases away from it don't. Without this the deck is lit as if from
+      // above and reads as midday cloud that someone tinted orange.
+      cloud += uGlow * toward * (1.0 - lit) * 0.22 * smoothstep(0.5, 0.0, ay);
 
       sky = mix(sky, cloud, cover * uOpacity);
     }
@@ -164,9 +218,11 @@ const fragmentShader = /* glsl */ `
 export function createSky() {
   const uniforms = {
     uHorizon: { value: new THREE.Color(0xbfe4f2) },
+    uHorizonAway: { value: new THREE.Color(0xbfe4f2) },
     uZenith: { value: new THREE.Color(0x4c9fd6) },
     uCloudLit: { value: new THREE.Color(0xffffff) },
     uCloudShade: { value: new THREE.Color(0xc0cddb) },
+    uCloudHot: { value: new THREE.Color(0xffe6c0) },
     uGlow: { value: new THREE.Color(0xffd9a0) },
     uSunDir: { value: new THREE.Vector3(0, 1, 0) },
     uCoverage: { value: 0.52 },
@@ -200,9 +256,14 @@ export function createSky() {
     // Called by applyDayNight with the sky block from the lighting config.
     apply(cfg, sunDirection) {
       uniforms.uHorizon.value.set(cfg.horizon);
+      // Falls back to the sunward colour, which collapses the blend to the
+      // single uniform band this used to have — so a config that predates
+      // the split still renders the way it did.
+      uniforms.uHorizonAway.value.set(cfg.horizonAway ?? cfg.horizon);
       uniforms.uZenith.value.set(cfg.zenith);
       uniforms.uCloudLit.value.set(cfg.cloudLit);
       uniforms.uCloudShade.value.set(cfg.cloudShade);
+      uniforms.uCloudHot.value.set(cfg.cloudHot ?? cfg.cloudLit);
       uniforms.uGlow.value.set(cfg.glow);
       uniforms.uCoverage.value = cfg.coverage;
       uniforms.uOpacity.value = cfg.opacity;

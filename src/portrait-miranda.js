@@ -22,7 +22,12 @@ const SKIN_SHADE = '#f6d0bd';
 const HAIR = '#6e3a2c';
 const HAIR_DARK = '#47231b';
 const HAIR_LIGHT = '#a85c46';
-const LIPS = '#5e1c34';
+// Her lipstick goes black after dark. RGB triples rather than hex strings
+// because these get interpolated — `night` is continuous, so the colour
+// travels through the transition with everything else instead of snapping
+// at the end of it. Day matches COLORS.lips on the model (mom.js).
+const LIPS_DAY = [94, 28, 52];
+const LIPS_NIGHT = [17, 10, 19];
 const EYE = '#5ea3d8';
 const EYE_DEEP = '#2f6aa6';
 const LINER = '#1a1016';
@@ -285,8 +290,9 @@ export function drawMirandaFace(ctx, size, options = {}) {
   drawEye(ctx, c, -1, wing, night, small);
   drawEye(ctx, c, 1, wing, night, small);
 
-  // A strong dark lip does a lot of the "composed" read.
-  ctx.fillStyle = LIPS;
+  // A strong dark lip does a lot of the "composed" read, and after dark it
+  // goes all the way to black.
+  ctx.fillStyle = mixHex(LIPS_DAY, LIPS_NIGHT, night);
   ctx.beginPath();
   ctx.ellipse(0, 0.5 * c, 0.125 * c, 0.055 * c, 0, 0, Math.PI * 2);
   ctx.fill();

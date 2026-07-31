@@ -554,6 +554,34 @@ const GLASS_MAT = new THREE.MeshPhysicalMaterial({
 const BLINDS_MAT = new THREE.MeshStandardMaterial({
   map: makeBlindsTexture(), color: 0xb9b9b9, roughness: 0.95, envMapIntensity: 0.2,
 });
+
+// The blinds of a room that has its light on. Identical by day — see
+// setHouseWindowsLit, which is what actually turns it warm and emissive
+// after dark — so this costs one extra draw call and nothing else.
+//
+// A separate material rather than one shared one, because a house with
+// *every* window lit reads as an office block. Rooms are empty, people go
+// to bed. Which windows get it is decided in buildWindowUnit.
+const BLINDS_LIT_MAT = new THREE.MeshStandardMaterial({
+  map: makeBlindsTexture(), color: 0xb9b9b9, roughness: 0.95, envMapIntensity: 0.2,
+});
+
+// Warm tungsten, and brighter than it looks like it needs to be: the glass
+// pane in front of these is dark (0x243640) and 62% opaque, so most of what
+// this emits is absorbed before it reaches the eye. Tuned through the
+// glass, not against it.
+export function setHouseWindowsLit(lit) {
+  BLINDS_LIT_MAT.color.set(lit ? 0xffcf96 : 0xb9b9b9);
+  BLINDS_LIT_MAT.emissive.set(lit ? 0xffa63c : 0x000000);
+  BLINDS_LIT_MAT.emissiveIntensity = lit ? 1.7 : 0;
+}
+
+// Which windows are lit. A fixed seed, so the same rooms are on every load
+// rather than the house reshuffling itself each time you start the game —
+// and consumed in build order, which is stable because createHouse builds
+// the elevations in a fixed sequence.
+const windowLitRand = seeded(0x9d0715);
+const LIT_WINDOW_SHARE = 0.55;
 const LAMP_GLASS_MAT = new THREE.MeshStandardMaterial({
   color: 0xfff0d0, emissive: 0xffbe66, emissiveIntensity: 1.5, roughness: 0.35,
 });
@@ -800,7 +828,14 @@ function buildWindowUnit(w, h, cols = 2, rows = 3, withSill = true) {
   g.add(place(trimBox(fw, h, WIN_DEPTH), -w / 2 - fw / 2, 0, -WIN_DEPTH / 2));
   g.add(place(trimBox(fw, h, WIN_DEPTH), w / 2 + fw / 2, 0, -WIN_DEPTH / 2));
 
-  g.add(place(trinket(new THREE.PlaneGeometry(w, h), BLINDS_MAT), 0, 0, -0.05));
+  // Rolled once per unit and stashed on the group, so an arched window's
+  // extra pane above (buildArchedWindowUnit) matches the rest of its own
+  // window instead of being lit independently — half a window lit is the
+  // one arrangement that looks like a bug rather than a house.
+  const blindsMat = windowLitRand() < LIT_WINDOW_SHARE ? BLINDS_LIT_MAT : BLINDS_MAT;
+  g.userData.blindsMat = blindsMat;
+
+  g.add(place(trinket(new THREE.PlaneGeometry(w, h), blindsMat), 0, 0, -0.05));
   g.add(place(trinket(new THREE.PlaneGeometry(w, h), GLASS_MAT), 0, 0, -0.035));
 
   for (let i = 1; i < cols; i++) {
@@ -844,7 +879,7 @@ function buildArchedWindowUnit(w, h, rise, cols = 2, rows = 3) {
   const fw = 0.07;
 
   const glassGeo = new THREE.ShapeGeometry(archShape(halfW, rise, -0.02), 18);
-  g.add(place(trinket(glassGeo, BLINDS_MAT), 0, h / 2, -0.05));
+  g.add(place(trinket(glassGeo, g.userData.blindsMat), 0, h / 2, -0.05));
   g.add(place(trinket(glassGeo.clone(), GLASS_MAT), 0, h / 2, -0.035));
 
   // The white arch frame: the band between two arches, extruded to the same
@@ -1146,6 +1181,126 @@ export const HOUSE_DRIVEWAY = {
 // The concrete walk along the back of the house — a safe place to put
 // anything that needs to be outside the building but next to it.
 export const HOUSE_BACK_WALK_Z = HOUSE_Z + HALF_D + 0.7;
+
+// ── the roof ladder ────────────────────────────────────────────────────
+//
+// A fixed roof ladder bolted to the back wall, east of the covered patio.
+// It's on the east side because the back wall only exists either side of
+// the patio notch (see MASSES) and the west half is the garage end, where
+// the bins and the condenser already stand.
+//
+// Everything about where it is lives here rather than in main.js, because
+// main.js needs three different things from it — where to raycast for a
+// click, where to stand to start climbing, and what height to arrive at —
+// and all three have to agree with the rungs that actually got built.
+const LADDER_X = -5.6;
+const LADDER_HALF_W = 0.21;
+// It leans rather than being bolted flat to the brick, and that isn't
+// styling — the eave overhangs the wall by EAVE (0.44 m), so a ladder
+// standing against the wall runs straight into the underside of the soffit
+// and can never reach the roof at all. Leaning puts its top *outside* the
+// overhang, at the edge of the shingles, which is also where a real one
+// goes.
+const LADDER_LEAN = 0.16;
+const LADDER_LENGTH = 3.35;
+// Local z of the foot. The top then lands at foot - sin(lean) * length,
+// which needs to clear HALF_D + EAVE — that's the constraint this number
+// exists to satisfy.
+const LADDER_FOOT_Z = HALF_D + 1.02;
+const LADDER_TOP_Z = LADDER_FOOT_Z - Math.sin(LADDER_LEAN) * LADDER_LENGTH;
+const LADDER_TOP_Y = Math.cos(LADDER_LEAN) * LADDER_LENGTH;
+
+export const HOUSE_LADDER = {
+  x: LADDER_X,
+  halfWidth: LADDER_HALF_W,
+  footZ: HOUSE_Z + LADDER_FOOT_Z,
+  topZ: HOUSE_Z + LADDER_TOP_Z,
+  topY: LADDER_TOP_Y,
+  // Where she stands to start the climb — just behind the foot, facing the
+  // house.
+  standZ: HOUSE_Z + LADDER_FOOT_Z + 0.5,
+  // Where she ends up on the roof: back from the eave rather than balanced
+  // on its very edge, which both looks precarious and puts her half a step
+  // from falling off the moment she moves.
+  arriveZ: HOUSE_Z + ROOF_Z1 - 0.9,
+};
+
+// Height of the main hip roof's surface at a world point, in the house's
+// own local y (so callers add the house's ground height to it). Returns
+// null anywhere off the main roof.
+//
+// This is the same equal-pitch hip that buildHipRoofSurface draws, solved
+// rather than sampled: every plane of it descends from the ridge at the
+// same rate, so the height only depends on whichever of the two distances
+// — sideways from the ridge line, or inward from the hip end — is greater.
+//
+// Only the *main* roof. The garage and bay hips stand proud of it at the
+// front, so walking there would put you inside them; the back slope, which
+// is the one the ladder reaches and the whole point of going up, is clear.
+export function houseRoofHeight(worldX, worldZ) {
+  const u = worldX;
+  const v = worldZ - HOUSE_Z - ROOF_CZ;
+  if (Math.abs(u) > ROOF_HALF_W || Math.abs(v) > ROOF_HALF_D) return null;
+  const rw = ROOF_HALF_W - ROOF_HALF_D;
+  const inward = Math.max(Math.abs(v), Math.abs(u) - rw);
+  const t = Math.min(1, Math.max(0, inward / ROOF_HALF_D));
+  return ROOF_Y + ROOF_RISE * (1 - t);
+}
+
+// Built lying along its own +y and then tipped back by LADDER_LEAN, so the
+// rails and rungs stay square to each other and only the group rotates.
+function buildRoofLadder() {
+  const group = new THREE.Group();
+
+  const railGeo = new THREE.BoxGeometry(0.052, LADDER_LENGTH, 0.07);
+  [-1, 1].forEach((side) => {
+    const rail = mesh(railGeo.clone(), DARK_METAL_MAT);
+    rail.position.set(side * LADDER_HALF_W, LADDER_LENGTH / 2, 0);
+    group.add(rail);
+  });
+
+  const rungGeo = new THREE.CylinderGeometry(0.019, 0.019, LADDER_HALF_W * 2, 8);
+  rungGeo.rotateZ(Math.PI / 2);
+  // Starts a rung's height off the ground and stops short of the very top,
+  // the way a ladder's rails always run past its last rung.
+  for (let y = 0.26; y < LADDER_LENGTH - 0.22; y += 0.28) {
+    const rung = mesh(rungGeo.clone(), DARK_METAL_MAT);
+    rung.position.set(0, y, 0);
+    group.add(rung);
+  }
+
+  // Rubber feet, so it isn't a pair of rails ending in mid-air on the
+  // concrete.
+  [-1, 1].forEach((side) => {
+    const foot = mesh(new THREE.BoxGeometry(0.075, 0.05, 0.13), DARK_METAL_MAT);
+    foot.position.set(side * LADDER_HALF_W, 0.025, 0.02);
+    group.add(foot);
+  });
+
+  // An invisible slab filling the ladder's outline, purely to be clicked.
+  //
+  // A ladder is mostly holes — two 5 cm rails and a rung every 28 cm — so
+  // raycasting the real geometry means most of a click aimed squarely at it
+  // sails between the rungs and hits the brick behind, and you get a
+  // walk-to-the-wall instead of a climb. Which is exactly what it did.
+  //
+  // Zero opacity rather than `visible = false`: three raycasts invisible
+  // objects inconsistently across versions, and depending on that is a
+  // silent breakage waiting for an upgrade.
+  const target = new THREE.Mesh(
+    new THREE.BoxGeometry(LADDER_HALF_W * 2 + 0.16, LADDER_LENGTH, 0.16),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false })
+  );
+  target.position.set(0, LADDER_LENGTH / 2, 0);
+  group.add(target);
+
+  // Negative: rotating +x tips the top toward +z, which is away from the
+  // house. LADDER_TOP_Z above subtracts the lean for the same reason, and
+  // the two have to agree or the click target and the geometry part company.
+  group.rotation.x = -LADDER_LEAN;
+  group.position.set(LADDER_X, 0, LADDER_FOOT_Z);
+  return group;
+}
 
 // Three piers, two bays — a wide one holding the back door and the French
 // doors, a narrow one holding a window, as in the reference shot.
@@ -1923,6 +2078,14 @@ export function createHouse() {
     baked.add(light);
     return light;
   });
+
+  // Added after the bake, and handed up on its own, because main.js has to
+  // be able to raycast *the ladder* for a click and hang a glow on it.
+  // Merged into the rest of the house by material it would be part of one
+  // enormous mesh with no way to pick it out.
+  const ladder = buildRoofLadder();
+  baked.add(ladder);
+  baked.userData.ladder = ladder;
 
   return baked;
 }

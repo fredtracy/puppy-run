@@ -427,6 +427,29 @@ let musicMode = 'day'; // 'day' | 'night'
 // whatever's currently playing.
 function scheduleLoop() {
   if (!musicPlaying) return;
+
+  // Exactly one loop chain, always.
+  //
+  // scheduleDayLoop/scheduleNightLoop both end by setting musicTimer to a
+  // setTimeout back to here, so the music is a self-rescheduling chain. If
+  // scheduleLoop is ever entered while a timer from a previous call is
+  // still pending, that pending timer is *orphaned* — nothing holds its
+  // handle any more, but it still fires, and from then on there are two
+  // chains scheduling notes over each other. Every subsequent stray entry
+  // adds another layer, and nothing short of a page reload takes them off
+  // again.
+  //
+  // It's reachable: the visibilitychange handler resumes and calls
+  // scheduleLoop from a promise callback, so two show/hide flips in quick
+  // succession can land two resumes before either has been superseded.
+  // Alt-tabbing fast enough will do it; so will anything that reloads the
+  // page in a background tab. Clearing here rather than at each call site
+  // makes it true by construction instead of by everyone remembering.
+  if (musicTimer) {
+    clearTimeout(musicTimer);
+    musicTimer = null;
+  }
+
   if (musicMode === 'night') {
     scheduleNightLoop();
   } else {

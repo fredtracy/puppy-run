@@ -65,107 +65,202 @@ function makeNeedleTexture(rand) {
 // Mature southern yellow pine bark: big flat irregular plates, like crazy
 // paving, separated by a connected network of deep dark fissures.
 //
-// The previous version drew soft ellipses and then laid a few wandering
-// vertical lines over them, which came out as smeared rust rather than bark.
-// Two things were wrong with that and both matter:
+// Three versions got this wrong before it worked, and the third is the
+// instructive one:
 //
-//   1. Plates need *hard edges*. The fissure is a gap between two flat
-//      faces, not a dark line painted on a continuous surface. Soft-edged
-//      blobs can never read as plates however they're tinted.
-//   2. The fissure network runs both ways. Vertical-only furrows give
-//      stripes; the real thing breaks horizontally too, which is what turns
-//      stripes into plates.
+//   1. Soft ellipses with wandering dark lines over them. Read as smeared
+//      rust. Plates need *hard edges* — a fissure is the gap between two
+//      flat faces, not a dark line painted on a continuous surface.
+//   2. Jittered rectangles on a row lattice. Fixed the edges and produced
+//      what the owner called "made out of bricks", which was exactly right.
+//   3. The same rectangles with far more jitter, more colour variation and
+//      wobbled polygon edges instead of straight ones. **Still bricks.**
 //
-// It was also far too red. The photos are grey-brown in the face with only a
-// warm cast, and the strong colour was coming from the material's `color`
-// multiplying an already-red map — the texture carries its own colour now
-// and the material tint is neutral.
+// Three is the lesson: a rectangle with its corners moved is a rectangle,
+// and a grid of them is a wall no matter how much noise is thrown at it.
+// The wobble was a few pixels on plates up to ninety wide, so it was
+// invisible, and the rows still lined up because they were still rows. The
+// structure was the problem and only the structure.
 //
-// Returns a bump map alongside, built from the same lattice: the fissures
-// are what should catch a shadow, and flat-shaded bark stays looking painted
-// no matter how good the colour is.
+// So this doesn't draw plates at all. It's a Voronoi field: seeds scattered
+// on a jittered grid, and every pixel asks which seed is nearest (that's
+// its plate, and its colour) and how much nearer that one is than the
+// second nearest (that's how far it is from a fissure). Cells come out as
+// irregular convex polygons meeting at three-way junctions — which is what
+// crazy paving actually is, and it cannot line up into courses because
+// there are no courses.
+//
+// Two things on top of the raw Voronoi, both load-bearing:
+//
+//   * the lookup position is domain-warped by low-frequency noise first,
+//     which bends the cell walls. Without it the polygons are dead straight
+//     and the whole thing reads as a tiled floor rather than as bark.
+//   * the fissure width is itself a noise field rather than a constant, so
+//     a furrow pinches and opens along its length instead of being a ruled
+//     line of even mortar. This is the specific thing the queue item asked
+//     for and the rectangle version never had.
+//
+// Colour is warm and varies per plate. Real southern pine plates run from
+// fresh cinnamon to weathered grey-tan, often side by side, and that spread
+// does more for "wood" than the average tone does. (An earlier note here
+// said the photos were grey-brown and the redness was a bug — true of a
+// version whose material tint multiplied an already-red map. The material
+// is neutral now, so the texture carries the warmth itself.)
+//
+// Returns a bump map built from the same field: the fissures are what
+// should catch a shadow, and flat-shaded bark stays looking painted no
+// matter how good the colour is.
 function makeBarkTextures(rand) {
   const W = 256;
   const H = 512;
   const col = canvas2d(W, H);
   const bmp = canvas2d(W, H);
 
-  // Fissure colour underneath — plates are then laid on top, and whatever
-  // shows between them is the furrow.
-  col.ctx.fillStyle = '#2a1f18';
-  col.ctx.fillRect(0, 0, W, H);
-  bmp.ctx.fillStyle = '#000000';
-  bmp.ctx.fillRect(0, 0, W, H);
+  // Seeds on a jittered grid rather than fully random. Poisson-ish spacing
+  // is what keeps plates roughly the same size as each other; uniformly
+  // random seeds clump, and clumped seeds give slivers next to slabs.
+  // Cell counts set the plate size, and they are the number to touch if the
+  // bark reads at the wrong scale. On a 0.33 m hero trunk the texture wraps
+  // ~2.8 times (see uScale in taperedTube), so 10 cells across works out at
+  // roughly 7 cm per plate — the middle of the 5-15 cm real southern pine
+  // plates run to. At 7 across they came out nearer 17 cm, which read as
+  // slabs rather than bark.
+  const GX = 10;
+  const GY = 16;
+  const CW = W / GX;
+  const CH = H / GY;
+  const N = GX * GY;
+  const seedX = new Float32Array(N);
+  const seedY = new Float32Array(N);
+  const faceR = new Float32Array(N);
+  const faceG = new Float32Array(N);
+  const faceB = new Float32Array(N);
+  const faceLift = new Float32Array(N);
 
-  // One plate, drawn as a jittered quad. Repeated at ±W so plates crossing
-  // the seam wrap cleanly and the trunk has no visible join.
-  const plate = (x, y, w, h) => {
-    const jx = () => (rand() - 0.5) * w * 0.22;
-    const jy = () => (rand() - 0.5) * h * 0.22;
-    const pts = [
-      [x + jx(), y + jy()],
-      [x + w + jx(), y + jy()],
-      [x + w + jx(), y + h + jy()],
-      [x + jx(), y + h + jy()],
-    ];
-    // Grey-brown face, warm but not red, with a fair spread plate to plate.
-    const base = 104 + rand() * 46;
-    const warm = 1 + rand() * 0.16;
-    const face = `rgb(${Math.round(base * warm)},${Math.round(base * 0.86)},${Math.round(base * 0.72)})`;
-    // Plates stand proud; the brightest are the most weathered.
-    const lift = 150 + rand() * 80;
-
-    for (const dx of [-W, 0, W]) {
-      for (const [ctx2, fill] of [
-        [col.ctx, face],
-        [bmp.ctx, `rgb(${lift},${lift},${lift})`],
-      ]) {
-        ctx2.beginPath();
-        ctx2.moveTo(pts[0][0] + dx, pts[0][1]);
-        for (let i = 1; i < pts.length; i++) ctx2.lineTo(pts[i][0] + dx, pts[i][1]);
-        ctx2.closePath();
-        ctx2.fillStyle = fill;
-        ctx2.fill();
-      }
-
-      // Thin flakes across the plate face. Southern pine plates are layered
-      // like puff pastry and shed in sheets, and without this the faces read
-      // as flat painted panels.
-      col.ctx.save();
-      col.ctx.beginPath();
-      col.ctx.moveTo(pts[0][0] + dx, pts[0][1]);
-      for (let i = 1; i < pts.length; i++) col.ctx.lineTo(pts[i][0] + dx, pts[i][1]);
-      col.ctx.closePath();
-      col.ctx.clip();
-      const flakes = 2 + Math.floor(rand() * 4);
-      for (let f = 0; f < flakes; f++) {
-        const fy = y + rand() * h;
-        col.ctx.strokeStyle = `rgba(${rand() < 0.5 ? '58,42,32' : '190,170,146'},${0.12 + rand() * 0.2})`;
-        col.ctx.lineWidth = 1 + rand() * 1.6;
-        col.ctx.beginPath();
-        col.ctx.moveTo(x + dx - 2, fy);
-        col.ctx.lineTo(x + dx + w + 2, fy + (rand() - 0.5) * 5);
-        col.ctx.stroke();
-      }
-      col.ctx.restore();
+  for (let gy = 0; gy < GY; gy++) {
+    for (let gx = 0; gx < GX; gx++) {
+      const i = gy * GX + gx;
+      seedX[i] = (gx + 0.14 + rand() * 0.72) * CW;
+      seedY[i] = (gy + 0.14 + rand() * 0.72) * CH;
+      // 0 is a fresh plate, 1 a weathered one. Neighbours weather at
+      // different rates and having both in shot is most of what stops a
+      // trunk reading as one flat painted tone.
+      const weather = rand();
+      const level = 88 + rand() * 72;
+      faceR[i] = level * (1.18 - weather * 0.2);
+      faceG[i] = level * (0.7 + weather * 0.14);
+      faceB[i] = level * (0.4 + weather * 0.26);
+      // The most weathered plates stand highest, being oldest and thickest.
+      faceLift[i] = 150 + weather * 88;
     }
+  }
+
+  const hash2 = (ix, iy) => {
+    let h = Math.imul(ix, 374761393) + Math.imul(iy, 668265263);
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
+  };
+  const noise = (x, y) => {
+    const ix = Math.floor(x);
+    const iy = Math.floor(y);
+    const fx = x - ix;
+    const fy = y - iy;
+    const ux = fx * fx * (3 - 2 * fx);
+    const uy = fy * fy * (3 - 2 * fy);
+    const a = hash2(ix, iy);
+    const b = hash2(ix + 1, iy);
+    const c = hash2(ix, iy + 1);
+    const d = hash2(ix + 1, iy + 1);
+    return a * (1 - ux) * (1 - uy) + b * ux * (1 - uy) + c * (1 - ux) * uy + d * ux * uy;
+  };
+  const smoothstep = (e0, e1, x) => {
+    const t = Math.min(1, Math.max(0, (x - e0) / Math.max(1e-5, e1 - e0)));
+    return t * t * (3 - 2 * t);
   };
 
-  // Jittered rows of plates. Row heights and plate widths both vary, and
-  // each row starts at its own offset, so the lattice never lines up into
-  // visible columns.
-  let y = -40;
-  while (y < H + 40) {
-    const rowH = 34 + rand() * 46;
-    let x = -40 + rand() * 40;
-    while (x < W + 40) {
-      const pw = 26 + rand() * 42;
-      plate(x, y, pw, rowH);
-      // The gap left here is the fissure — width is the furrow depth.
-      x += pw + 3 + rand() * 5;
+  const colData = col.ctx.createImageData(W, H);
+  const bmpData = bmp.ctx.createImageData(W, H);
+  const cd = colData.data;
+  const bd = bmpData.data;
+
+  // Distances are squashed vertically, so plates come out a little taller
+  // than wide — which is how they sit on a trunk.
+  const ANISO = 0.78;
+  // Furrow colour. Nearly black and warm rather than neutral: the bottom of
+  // a real furrow is in shadow, but it is still wood.
+  const FURROW_R = 28;
+  const FURROW_G = 19;
+  const FURROW_B = 16;
+
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      // Domain warp. Amplitude is a good fraction of a cell — small values
+      // do nothing visible, which was lesson three. Scaled off the cell size
+      // rather than fixed, so changing GX/GY above doesn't either scramble
+      // the cells into slivers or stop bending them at all.
+      const wx = x + (noise(x * 0.034, y * 0.034) - 0.5) * CW * 0.75;
+      const wy = y + (noise(x * 0.034 + 41.3, y * 0.034 - 17.7) - 0.5) * CH * 0.75;
+
+      let d1 = 1e9;
+      let d2 = 1e9;
+      let best = 0;
+      const cgx = Math.floor(wx / CW);
+      const cgy = Math.floor(wy / CH);
+      for (let oy = -1; oy <= 1; oy++) {
+        for (let ox = -1; ox <= 1; ox++) {
+          const gx = (((cgx + ox) % GX) + GX) % GX;
+          const gy = (((cgy + oy) % GY) + GY) % GY;
+          const i = gy * GX + gx;
+          // Wrapped deltas, so the texture tiles seamlessly both around the
+          // trunk and along it — a seam on a trunk is very visible.
+          let dx = seedX[i] - wx;
+          dx -= W * Math.round(dx / W);
+          let dy = seedY[i] - wy;
+          dy -= H * Math.round(dy / H);
+          dy /= ANISO;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d < d1) {
+            d2 = d1;
+            d1 = d;
+            best = i;
+          } else if (d < d2) {
+            d2 = d;
+          }
+        }
+      }
+
+      // How far this pixel is from the wall between its plate and the next.
+      const edge = d2 - d1;
+      // ...and how wide the furrow is *here*. A noise field, not a
+      // constant, which is what makes a fissure pinch and open along its
+      // run rather than reading as mortar.
+      const furrow = (0.07 + noise(x * 0.028 + 7.1, y * 0.028 + 3.3) * 0.19) * CW;
+      const onPlate = smoothstep(furrow * 0.4, furrow, edge);
+
+      // Thin flakes across the face. Southern pine plates are layered like
+      // puff pastry and shed in sheets; the high y frequency is what makes
+      // those layers run horizontally, around the trunk.
+      const flake = 0.86 + noise(x * 0.055 + 19.4, y * 0.62 - 5.2) * 0.3;
+      // Plates dome slightly rather than being flat-topped mesas — the
+      // light has to break over them gradually or the bump reads as tiling.
+      const dome = 0.5 + 0.5 * smoothstep(furrow, furrow * 4.5, edge);
+
+      const p = (y * W + x) * 4;
+      cd[p] = FURROW_R + (faceR[best] * flake - FURROW_R) * onPlate;
+      cd[p + 1] = FURROW_G + (faceG[best] * flake - FURROW_G) * onPlate;
+      cd[p + 2] = FURROW_B + (faceB[best] * flake - FURROW_B) * onPlate;
+      cd[p + 3] = 255;
+
+      const h = faceLift[best] * onPlate * dome;
+      bd[p] = h;
+      bd[p + 1] = h;
+      bd[p + 2] = h;
+      bd[p + 3] = 255;
     }
-    y += rowH + 3 + rand() * 5;
   }
+
+  col.ctx.putImageData(colData, 0, 0);
+  bmp.ctx.putImageData(bmpData, 0, 0);
 
   const make = (canvas, srgb) => {
     const t = new THREE.CanvasTexture(canvas);
@@ -196,7 +291,7 @@ function makeBarkTextures(rand) {
 // one high enough to give a flare tapers the whole trunk to a spike. The
 // trunk was doing the latter and came out as a witch's hat. Two terms, one
 // for the overall taper and one for the flare, and both can be right.
-function taperedTube(curve, rStart, rEnd, along, radial, power = 1, flare = 0) {
+export function taperedTube(curve, rStart, rEnd, along, radial, power = 1, flare = 0) {
   const frames = curve.computeFrenetFrames(along, false);
   const positions = [];
   const normals = [];
@@ -282,7 +377,15 @@ function tuftGeometry(size) {
 const NEEDLE_MIN = 0.3;
 const NEEDLE_VAR = 0.32;
 
-export function createSouthernPine(rand, options = {}) {
+// Just the geometry and the tuft placements, no meshes and no materials.
+//
+// Split out from createSouthernPine so the forest can build a handful of
+// these once and then stamp them into a merged per-chunk mesh (see
+// createTreeChunk in yard.js). A pine that owns its own Mesh, its own
+// procedurally generated bark and its own needle InstancedMesh is right for
+// the two hero trees at the road and ruinous for two hundred of them — it's
+// two draw calls and two megabytes of canvas texture apiece.
+export function buildSouthernPineParts(rand, options = {}) {
   const height = options.height ?? 20;
   // Where the lowest limb attaches, as a fraction of height. The photos of
   // the real pair have this a shade under halfway — the first branches come
@@ -290,21 +393,18 @@ export function createSouthernPine(rand, options = {}) {
   // there. It was 0.56, which read as a bare pole with a cap on top.
   const crownBase = options.crownBase ?? 0.44;
   const trunkR = options.trunkRadius ?? 0.34;
-
-  const group = new THREE.Group();
-  const bark = makeBarkTextures(rand);
-  const barkMat = new THREE.MeshStandardMaterial({
-    map: bark.map,
-    // The fissure network is what gives bark its relief, and a flat-shaded
-    // trunk reads as painted however good the colour is.
-    bumpMap: bark.bump,
-    bumpScale: 0.03,
-    // Neutral. The old 0xa89078 multiplied an already-red map and was half
-    // the reason the trunk came out looking like rust — the texture carries
-    // its own colour now.
-    color: 0xffffff,
-    roughness: 0.95,
-  });
+  // Scales the twig and needle-cluster counts only, not the limbs — the
+  // silhouette is the limbs, so a forest pine at 0.5 still has the right
+  // shape, just a thinner crown. The two hero trees stay at 1.
+  const density = options.density ?? 1;
+  // Scales how finely each limb is tubed — rings around it and steps along
+  // it. Separate from `density` because they trade against completely
+  // different things: density is what the crown looks like, detail is pure
+  // triangle count for the same silhouette. The hero pines are looked at
+  // from six feet away and stay at 1; a tree in the middle distance is
+  // three pixels of trunk and does not need twelve-sided tubes.
+  const detail = options.detail ?? 1;
+  const seg = (n, floor) => Math.max(floor, Math.round(n * detail));
 
   // ── trunk ────────────────────────────────────────────────────────────
   // A gentle lean with a slight recovery near the top, rather than a
@@ -332,7 +432,15 @@ export function createSouthernPine(rand, options = {}) {
   // two thirds of its butt diameter, and only spreads out in the last foot
   // above the ground.
   const woodGeos = [
-    taperedTube(trunkCurve, trunkR * 1.05, trunkR * 0.42, trunkSegs * 3, 12, 1.5, 0.5),
+    taperedTube(
+      trunkCurve,
+      trunkR * 1.05,
+      trunkR * 0.42,
+      seg(trunkSegs * 3, 8),
+      seg(12, 6),
+      1.5,
+      0.5
+    ),
   ];
 
   // ── limbs ────────────────────────────────────────────────────────────
@@ -409,7 +517,7 @@ export function createSouthernPine(rand, options = {}) {
       }
       const curve = new THREE.CatmullRomCurve3(pts);
       const rBase = Math.min(trunkRAt * 0.62, 0.045 + len * 0.022);
-      woodGeos.push(taperedTube(curve, rBase, rBase * 0.22, segs, 6));
+      woodGeos.push(taperedTube(curve, rBase, rBase * 0.22, seg(segs, 3), seg(6, 4)));
 
       // Secondary twigs off the outer half of the limb. Hanging the
       // needles straight on the main branch gives a row of fronds down a
@@ -424,7 +532,7 @@ export function createSouthernPine(rand, options = {}) {
       // These land around 1,000. A first cut at ~500 was genuinely open but
       // went too far the other way and read as skeletal from the road: the
       // crown wants to be see-through, not sparse.
-      const twigs = 3 + Math.floor(rand() * 3);
+      const twigs = Math.max(1, Math.round((3 + Math.floor(rand() * 3)) * density));
       for (let k = 0; k < twigs; k++) {
         const t0 = 0.52 + rand() * 0.4;
         const base = curve.getPointAt(t0);
@@ -449,9 +557,9 @@ export function createSouthernPine(rand, options = {}) {
         }
         const twigCurve = new THREE.CatmullRomCurve3(twigPts);
         const twigR = Math.max(0.012, rBase * 0.34);
-        woodGeos.push(taperedTube(twigCurve, twigR, twigR * 0.4, 3, 5));
+        woodGeos.push(taperedTube(twigCurve, twigR, twigR * 0.4, seg(3, 2), seg(5, 4)));
 
-        const perTwig = 3 + Math.floor(rand() * 3);
+        const perTwig = Math.max(1, Math.round((3 + Math.floor(rand() * 3)) * density));
         for (let n = 0; n < perTwig; n++) {
           const tt = Math.min(1, 0.35 + (n / perTwig) * 0.7 + rand() * 0.1);
           tufts.push({
@@ -492,53 +600,95 @@ export function createSouthernPine(rand, options = {}) {
     });
   }
 
-  const wood = new THREE.Mesh(mergeGeometries(woodGeos), barkMat);
+  return { wood: mergeGeometries(woodGeos), tufts, height };
+}
+
+// The bark material, and the needle geometry/material/depth-material set.
+// Both are per-call rather than module constants so the two hero pines can
+// still each have their own procedurally generated bark and needles, while
+// the forest builds one of each and shares it across every tree in it.
+export function createPineBarkMaterial(rand) {
+  const bark = makeBarkTextures(rand);
+  return new THREE.MeshStandardMaterial({
+    map: bark.map,
+    // The fissure network is what gives bark its relief, and a flat-shaded
+    // trunk reads as painted however good the colour is.
+    bumpMap: bark.bump,
+    bumpScale: 0.03,
+    // Neutral. The old 0xa89078 multiplied an already-red map and was half
+    // the reason the trunk came out looking like rust — the texture carries
+    // its own colour now.
+    color: 0xffffff,
+    roughness: 0.95,
+  });
+}
+
+export function createNeedleAssets(rand) {
+  const map = makeNeedleTexture(rand);
+  return {
+    geometry: tuftGeometry(1),
+    material: new THREE.MeshStandardMaterial({
+      map,
+      color: 0x7e9b63,
+      roughness: 0.88,
+      // alphaTest rather than transparent: a few hundred overlapping alpha
+      // quads have no correct draw order, and sorting artefacts on a tree
+      // this size are far more obvious than the hard needle edges are.
+      alphaTest: 0.42,
+      side: THREE.DoubleSide,
+    }),
+    // Without this the shadow pass ignores alphaTest and every tuft throws
+    // the shadow of a solid three-plane box, which turns the crown's dappled
+    // shade into a stack of dark slabs.
+    depthMaterial: new THREE.MeshDepthMaterial({
+      depthPacking: THREE.RGBADepthPacking,
+      map,
+      alphaTest: 0.42,
+    }),
+  };
+}
+
+// Writes one tuft's placement into `target`. Shared with the broadleaf,
+// which hangs its leaf clusters exactly the same way, and used both for a
+// standalone tree and for tufts being stamped into a chunk-wide instanced
+// mesh — hence taking a matrix out rather than an InstancedMesh index.
+const _up = new THREE.Vector3(0, 1, 0);
+const _q = new THREE.Quaternion();
+const _roll = new THREE.Quaternion();
+const _scale = new THREE.Vector3();
+export function composeTuftMatrix(target, tuft) {
+  // Point the tuft's local +y (the direction the needles fan) along the
+  // branch, then spin it about that axis so neighbouring tufts on the same
+  // limb don't present identical silhouettes.
+  _q.setFromUnitVectors(_up, tuft.dir);
+  _roll.setFromAxisAngle(tuft.dir, tuft.roll);
+  _q.premultiply(_roll);
+  _scale.setScalar(tuft.size);
+  return target.compose(tuft.pos, _q, _scale);
+}
+
+export function createSouthernPine(rand, options = {}) {
+  const group = new THREE.Group();
+  const parts = buildSouthernPineParts(rand, options);
+
+  const wood = new THREE.Mesh(parts.wood, createPineBarkMaterial(rand));
   wood.castShadow = true;
   wood.receiveShadow = true;
   group.add(wood);
 
-  // ── needles ──────────────────────────────────────────────────────────
-  const needleTex = makeNeedleTexture(rand);
-  const needleMat = new THREE.MeshStandardMaterial({
-    map: needleTex,
-    color: 0x7e9b63,
-    roughness: 0.88,
-    // alphaTest rather than transparent: a few hundred overlapping alpha
-    // quads have no correct draw order, and sorting artefacts on a tree
-    // this size are far more obvious than the hard needle edges are.
-    alphaTest: 0.42,
-    side: THREE.DoubleSide,
-  });
-
-  const instances = new THREE.InstancedMesh(tuftGeometry(1), needleMat, tufts.length);
+  const needles = createNeedleAssets(rand);
+  const instances = new THREE.InstancedMesh(
+    needles.geometry,
+    needles.material,
+    parts.tufts.length
+  );
   const m = new THREE.Matrix4();
-  const q = new THREE.Quaternion();
-  const scale = new THREE.Vector3();
-  const up = new THREE.Vector3(0, 1, 0);
-  const roll = new THREE.Quaternion();
-  tufts.forEach((tuft, i) => {
-    // Point the tuft's local +y (the direction the needles fan) along the
-    // branch, then spin it about that axis so neighbouring tufts on the
-    // same limb don't present identical silhouettes.
-    q.setFromUnitVectors(up, tuft.dir);
-    roll.setFromAxisAngle(tuft.dir, tuft.roll);
-    q.premultiply(roll);
-    scale.setScalar(tuft.size);
-    m.compose(tuft.pos, q, scale);
-    instances.setMatrixAt(i, m);
-  });
+  parts.tufts.forEach((tuft, i) => instances.setMatrixAt(i, composeTuftMatrix(m, tuft)));
   instances.instanceMatrix.needsUpdate = true;
   instances.castShadow = true;
-  // Without this the shadow pass ignores alphaTest and every tuft throws
-  // the shadow of a solid three-plane box, which turns the crown's dappled
-  // shade into a stack of dark slabs.
-  instances.customDepthMaterial = new THREE.MeshDepthMaterial({
-    depthPacking: THREE.RGBADepthPacking,
-    map: needleTex,
-    alphaTest: 0.42,
-  });
+  instances.customDepthMaterial = needles.depthMaterial;
   group.add(instances);
 
-  group.userData.trunkHeight = height;
+  group.userData.trunkHeight = parts.height;
   return group;
 }

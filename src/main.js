@@ -21,12 +21,21 @@ import {
   updateGrassAngularSize,
   setGrassFog,
   setGrassLight,
+  setGrassMoonGlow,
+  setGrassShadow,
   setGrassTime,
   setFirePitLit,
   updateFirePit,
   updateDragonflies,
 } from './yard.js';
-import { HOUSE_SOLIDS, HOUSE_BACK_WALK_Z } from './house.js';
+import {
+  HOUSE_SOLIDS,
+  HOUSE_BACK_WALK_Z,
+  HOUSE_LADDER,
+  HOUSE_Z as HOUSE_ORIGIN_Z,
+  houseRoofHeight,
+  setHouseWindowsLit,
+} from './house.js';
 import { createSky } from './sky.js';
 import {
   initAudio,
@@ -89,6 +98,21 @@ await nextFrame();
 // GRASS_ENABLED, which checks the same query param) purely for faster
 // reloads while iterating — normal loads still get grass as usual.
 const DEBUG_MODE = new URLSearchParams(window.location.search).has('debug');
+
+// Which camera debug is using. Free-fly is the default, because that's what
+// ?debug has always meant and every `?eye=&look=` URL ever copied out of it
+// assumes so.
+//
+// Fixed puts the ordinary third-person camera back while keeping the panel,
+// which is what you want when the thing being judged is how the game
+// actually plays or reads — the FPS counter especially, since a free camera
+// parked in the woods is measuring a view nobody ever has.
+//
+// `?fly=0` starts in fixed; the panel toggles it live (setDebugCamera).
+// It's live rather than a reload because rebuilding the world to change
+// camera would cost several seconds and lose wherever you'd flown to.
+let debugFreeFly =
+  DEBUG_MODE && new URLSearchParams(window.location.search).get('fly') !== '0';
 
 // `?at=x,z` — start the game already standing at a world position, instead
 // of at the fire pit. Optionally `&as=miranda` to pick the character, which
@@ -187,7 +211,26 @@ const camera = new THREE.PerspectiveCamera(
   0.1,
   1000
 );
-camera.position.set(7, 4.5, 11);
+// Both the character-select backdrop and, since nothing moves it unless
+// ?cam= was given, where the camera is standing the moment the game starts.
+//
+// Moved off (7, 4.5, 11), which sat about two metres from the hammock tree
+// at (6, ., 9). That was fine while the hammock trees were a cylinder
+// wearing four spheres and only 2.5 m tall — the camera cleared them. They
+// are real trees now, 4.4 m with a 4.6 m crown, and the opening shot of the
+// game was the inside of one, looking at bark.
+// Kept beside Darla looking at the house, exactly as it was, but moved to
+// the west side of her instead of the east. The east is where the hammock
+// trees stand, at (6, ., 9), and the old (7, 4.5, 11) put the camera about
+// two metres from one. That was fine while they were a cylinder wearing
+// four spheres; they're real trees now, and the opening shot of the game
+// was the inside of one.
+//
+// Backing straight off her doesn't work either — she spawns at z = 10.95
+// and the brush band's inner edge wanders to within about 5 m of that, so
+// anything further along +z ends up inside a thicket. West is the open
+// side.
+camera.position.set(-4, 4.6, 6);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -227,6 +270,22 @@ controls.mouseButtons = {
   RIGHT: THREE.MOUSE.ROTATE,
 };
 
+// The FPS readout's element and its rolling sample, filled in by
+// buildDebugPanel and updated from the frame loop. Null when debug is off,
+// which is what updateDebugFps checks rather than DEBUG_MODE — one less
+// thing to keep in sync if the panel ever appears somewhere else.
+//
+// Declared *above* the DEBUG_MODE block below, not next to the function
+// that fills it in. `buildDebugPanel` is a hoisted function declaration and
+// gets called from there; these are `let` and are not hoisted, so keeping
+// them beside it puts them in the temporal dead zone at the moment the
+// panel is built — a ReferenceError that kills the module mid-load and
+// shows up only as a loading screen that never finishes.
+let debugFpsEl = null;
+let fpsFrames = 0;
+let fpsElapsed = 0;
+let fpsWorstDelta = 0;
+
 if (DEBUG_MODE) {
   // Only the starting shot — from here it's a free-fly (see updateDebugFly),
   // so there's no orbit radius to cap and nothing stopping the camera going
@@ -247,6 +306,26 @@ if (DEBUG_MODE) {
 // buffers at startup. The reload preserves at/cam/as so you keep the shot
 // you were looking at, which is the whole reason this beats editing the URL
 // by hand.
+function updateDebugFps(delta) {
+  if (!debugFpsEl) return;
+  fpsFrames++;
+  fpsElapsed += delta;
+  if (delta > fpsWorstDelta) fpsWorstDelta = delta;
+  if (fpsElapsed < 1) return;
+  const avg = Math.round(fpsFrames / fpsElapsed);
+  // The worst *frame* expressed as the rate it would sustain, which is the
+  // number that matches what a stutter feels like.
+  const low = Math.round(1 / Math.max(fpsWorstDelta, 1e-4));
+  debugFpsEl.textContent = `fps — ${avg} avg, ${low} low`;
+  // Amber under 50, red under 30. A bare number invites squinting at it;
+  // colour makes a bad frame rate obvious from across the room, which is
+  // the point of putting it on screen at all.
+  debugFpsEl.style.color = avg < 30 ? '#ff7a7a' : avg < 50 ? '#ffc46b' : '#9fe08f';
+  fpsFrames = 0;
+  fpsElapsed = 0;
+  fpsWorstDelta = 0;
+}
+
 function buildDebugPanel() {
   const params = new URLSearchParams(window.location.search);
   const go = (changes) => {
@@ -275,17 +354,25 @@ function buildDebugPanel() {
     return holder;
   };
 
-  const button = (holder, label, active, onClick) => {
-    const b = document.createElement('button');
-    b.textContent = label;
+  const style = (b, active) => {
     b.style.cssText =
       'font:inherit;padding:3px 7px;border-radius:5px;cursor:pointer;border:1px solid ' +
       (active ? '#7ec96f' : 'rgba(255,255,255,0.18)') +
       ';background:' +
       (active ? 'rgba(126,201,111,0.22)' : 'rgba(255,255,255,0.06)') +
       ';color:inherit';
+  };
+
+  // Returns the element, because the camera row below toggles live and has
+  // to restyle its own buttons — every other row reloads the page, so their
+  // active state is decided once at build time and never changes.
+  const button = (holder, label, active, onClick) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    style(b, active);
     b.addEventListener('click', onClick);
     holder.appendChild(b);
+    return b;
   };
 
   const grassOn = params.has('grass');
@@ -294,6 +381,20 @@ function buildDebugPanel() {
   head.style.cssText = 'font-weight:700;letter-spacing:0.06em;opacity:0.9';
   head.textContent = 'DEBUG';
   panel.appendChild(head);
+
+  // Frame rate, plus the worst frame in the last second.
+  //
+  // The average alone is close to useless for the thing this is actually
+  // for — a lawn that mostly runs at 60 and drops to 20 whenever a chunk of
+  // woods comes into frame averages out to something that looks fine. The
+  // spike is the complaint; the mean is what hides it.
+  //
+  // Sampled over a rolling second rather than per frame, because a readout
+  // that updates every frame is unreadable and its own small cost.
+  debugFpsEl = document.createElement('div');
+  debugFpsEl.style.cssText = 'margin-top:4px;font-variant-numeric:tabular-nums';
+  debugFpsEl.textContent = 'fps — measuring…';
+  panel.appendChild(debugFpsEl);
 
   const tierRow = row(`quality — detected "${QUALITY_TIER}", spacing ${GRASS_SPACING}`);
   for (const t of ['low', 'medium', 'high']) {
@@ -309,6 +410,19 @@ function buildDebugPanel() {
   );
   button(grassRow, 'off', !grassOn, () => go({ grass: null }));
   button(grassRow, 'on', grassOn, () => go({ grass: '' }));
+
+  // The one row that acts immediately instead of reloading — rebuilding the
+  // world to change camera would cost seconds and lose wherever you'd flown.
+  const camRow = row('camera');
+  let freeBtn;
+  let fixedBtn;
+  const setCam = (free) => {
+    setDebugCamera(free);
+    style(freeBtn, debugFreeFly);
+    style(fixedBtn, !debugFreeFly);
+  };
+  freeBtn = button(camRow, 'free-fly', debugFreeFly, () => setCam(true));
+  fixedBtn = button(camRow, 'fixed', !debugFreeFly, () => setCam(false));
 
   const whoRow = row('play as');
   button(whoRow, 'miranda', SPAWN_AS !== 'darla', () => go({ as: 'miranda' }));
@@ -347,7 +461,25 @@ const MOON_DIRECTION = new THREE.Vector3(-65, 40, 100).normalize();
 // Lower y here means a lower elevation in the sky (closer to the old,
 // pre-fix look) — x/z stay the same so the azimuth (and the environment
 // rotation computed from it below) doesn't shift.
-const SUN_DIRECTION = new THREE.Vector3(3, 1.5, 2).normalize();
+// Daytime is a sunrise now, so this is a low sun in the northeast rather
+// than the high west-northwest one it was.
+//
+// Compass, from terrainHeight's note in yard.js: +x is west and +z is
+// north, so east is -x. A northeasterly sunrise is a summer one at this
+// latitude, and it's where the owner pointed on a screenshot.
+//
+// Elevation is about 23 degrees. It was 12, which was a prettier light but
+// put the disc down among the trunks — from anywhere in the yard the tree
+// line subtends 11 to 29 degrees, so the sun spent most of the morning
+// behind it. This clears the shorter two thirds of the tree line while
+// staying low enough to keep the long shade and the warm colour.
+//
+// The constraint runs the other way, and only downward: shadow length goes
+// as cot(elevation), so at 23 degrees a 10 m tree lays a 24 m shadow, well
+// inside the 68 m shadow box (see SHADOW_HALF_EXTENT). It was 47 m at 12
+// degrees and would be 71 m at 8 — past the box, with the far end of every
+// shadow clipped off square. Raising is free; lowering is not.
+const SUN_DIRECTION = new THREE.Vector3(-0.45, 0.47, 1.0).normalize();
 // How far out in the sky the sun/moon sprites sit — reused for both so
 // they read as the same "distant object in the sky", just in different
 // directions. Matches the moon sprite's original fixed position.
@@ -368,40 +500,97 @@ const ENV_ROTATION_Y = sunAzimuth - HDRI_SUN_AZIMUTH;
 // Day and night are just two sets of values for the same handful of
 // lights/fog/exposure/sprite knobs — see applyDayNight below, which
 // re-tunes them in place rather than destroying/recreating anything.
+// Daytime is early morning: the sun is barely up, everything it touches is
+// gold, and everything it doesn't is lit by a big cold sky instead. That
+// split — warm key, cool fill — is most of what makes a sunrise read as one
+// rather than as a scene with an orange filter over it, and it's why the
+// fill light below got *stronger* as well as bluer.
 const DAY_LIGHTING = {
-  background: 0x87ceeb,
-  fogColor: 0x87ceeb,
-  fogNear: 18,
-  fogFar: 55,
-  exposure: 1.15,
-  envIntensity: 1,
+  background: 0xf0c49c,
+  // Haze, not distance. A low sun shines through a lot more atmosphere than
+  // a high one, so morning air glows instead of just fading things out —
+  // hence a warm fog colour rather than the sky's own blue, and a nearer
+  // start than the old 18.
+  fogColor: 0xe7bb95,
+  // Well back from the 15/58 this started at. Warm haze is the right idea
+  // and at that distance it was eating the subject: the tree line sits
+  // 20-25 m from anywhere in the yard, so it was already half-dissolved
+  // into a pale band, and the woods went from the best thing in the frame
+  // to a white smear. Distant softening should start past the tree line,
+  // not on it. (There's a standing queue item about fog washing out the
+  // frontage — this is the same complaint, and these numbers help it.)
+  fogNear: 30,
+  fogFar: 92,
+  exposure: 1.05,
+  // The HDRI is a bright midday sky. At full strength its cool white
+  // ambient sits on top of everything and argues with the warm key — the
+  // yard came out looking like noon with an orange light pointed at it.
+  envIntensity: 0.5,
   envRotationY: ENV_ROTATION_Y,
-  sun: { color: 0xfff2e0, intensity: 2.2, direction: SUN_DIRECTION },
-  fill: { color: 0xcfe8ff, intensity: 0.4 },
+  sun: { color: 0xffb673, intensity: 2.6, direction: SUN_DIRECTION },
+  // The cold half of the pair. Strong, because at sunrise the whole sky is
+  // the fill light and shadows go blue rather than black.
+  fill: { color: 0x93b9ec, intensity: 0.62 },
   // Ground colour is the light bouncing up off the lawn onto everything's
   // undersides. It was 0x6b8e4e — near the lawn's own green, and saturated
   // enough that on pale skin it landed squarely on olive: Miranda's underjaw
   // and collarbone came out looking bruised. Bounce light is always far less
   // saturated than the surface it bounced off, so this is both the fix and
   // the more correct value.
-  hemi: { sky: 0x87ceeb, ground: 0x84876c, intensity: 0.6 },
+  hemi: { sky: 0x9dc0e8, ground: 0x9a8464, intensity: 0.55 },
   // The grass shader is hand-written and reads none of the lights above, so
-  // it takes its own copy. Full daylight, full through-the-blade scatter.
-  grassLight: 0xffffff,
-  grassBackScatter: 1,
+  // it takes its own copy.
+  grassLight: 0xffd9b0,
+  // Over 1, and this is the single most sunrise-specific number in here.
+  // Back-scatter is light coming *through* a blade rather than off it, and
+  // it only happens when the sun is low enough to be behind the grass
+  // instead of above it — which at 12 degrees it now always is. It's what
+  // makes a lawn glow at dawn instead of just being lit.
+  grassBackScatter: 1.45,
+  // Cast shade on the grass. Deep, because a sunlit lawn next to real tree
+  // shade is most of what makes a yard look like it's outdoors — and deeper
+  // still at sunrise, where the shadows are enormous and are half the
+  // composition.
+  grassShadow: 0.6,
+  // No moon rim by day — see the note on grassMoonGlow in NIGHT_LIGHTING.
+  grassMoonGlow: 0,
+  grassMoonColor: 0xb9cee2,
+  // Lens glare when the camera looks toward the sun. See glarePass.
+  glare: 1,
+  glareColor: 0xffb066,
   sky: {
-    // Deep, saturated blue overhead washing out to a pale band at the
-    // skyline. The first pass was far too milky — it read as haze rather
-    // than sky, and the clouds had nothing to sit against.
-    horizon: 0x7cbde9,
-    zenith: 0x1150b0,
-    cloudLit: 0xfffdf8,
-    cloudShade: 0xb9c9dc,
-    glow: 0xffe0ac,
-    // Higher coverage threshold = less cloud. 0.52 gives scattered fair-
-    // weather cumulus with plenty of open blue between them.
-    coverage: 0.52,
-    opacity: 0.95,
+    // A sunrise sky is two skies. Near the sun it's molten; a quarter turn
+    // away it's still the cold blue of before dawn, and overhead it's
+    // deeper than either. `horizonSun` and `horizonAway` are those first
+    // two, blended by how close a view ray is to the sun's compass bearing
+    // (see sky.js) — a single horizon colour, which is what this had, can
+    // only ever give a uniform band and reads as an orange filter.
+    // Saturated well past what looks right as a swatch. Everything
+    // downstream desaturates it: ACES tone mapping compresses the top end
+    // toward white, bloom spreads the bright parts into the dark ones, and
+    // the painterly grade adds its own warm lift. A horizon picked to look
+    // correct in isolation arrives on screen as pale pink.
+    horizon: 0xff8f3a,
+    horizonAway: 0x4d6fae,
+    zenith: 0x123c86,
+    // Cloud tops catch the sun; everything else is in the earth's shadow
+    // still. The gap between these two is what gives a dawn sky its drama.
+    cloudLit: 0xffc38a,
+    // Properly dark, and violet rather than grey. This is the earth's own
+    // shadow on the underside of a cloud before the sun has cleared the
+    // horizon, and it's the value everything bright is measured against —
+    // a light shade colour costs more drama than a dim lit one does.
+    cloudShade: 0x3f3f66,
+    // Near the sun, thin cloud stops being lit and starts being
+    // transparent — it goes hotter than white and blows out. This is that
+    // colour, and it only applies within a few degrees of the sun.
+    cloudHot: 0xffd08a,
+    glow: 0xffb265,
+    // Lower threshold = more cloud. Dropped from 0.52: a dawn sky with
+    // scattered fair-weather cumulus wastes the light, and the interesting
+    // thing about the reference shots is how much sky is cloud.
+    coverage: 0.43,
+    opacity: 0.97,
   },
 };
 const NIGHT_LIGHTING = {
@@ -418,23 +607,70 @@ const NIGHT_LIGHTING = {
   // Dim and cool. This is the fix for the lawn glowing at night: the shader
   // bakes daylight into every one of its colour terms, so without a tint to
   // multiply through it the grass simply stayed at noon while everything
-  // else went dark. Back-scatter drops close to nothing too — light coming
-  // *through* a blade is a sun effect, and at full strength under a moon it
-  // lit the turf from the inside.
-  grassLight: 0x36486e,
-  grassBackScatter: 0.08,
+  // else went dark.
+  grassLight: 0x3d5178,
+  // Back-scatter stays near nothing. Light coming *through* a blade is a sun
+  // effect and at any real strength it lit the turf from the inside — the
+  // moon's version of that is the rim term below, which is a different
+  // thing and behaves itself.
+  grassBackScatter: 0.1,
+  // Raised from 0.28. Moonlight does cast real shadows and the tree line
+  // throws good ones; at 0.28 they were barely present. Still well under
+  // the day's 0.6, because past about 0.45 they stop reading as shade and
+  // start reading as holes cut in the lawn.
+  grassShadow: 0.4,
+  // The ethereal bit: a cool rim on the blade tips, strongest where a blade
+  // is edge-on to the moon. Nights in this game are the goth half of the
+  // art direction and the lawn was simply going dark and staying there —
+  // this is what makes it read as *moonlit* rather than as unlit.
+  //
+  // Zero by day, and not because it wouldn't show. It's the same silver
+  // catchlight either way, but at noon it competes with real sunlight and
+  // just looks like a shader artefact; it only reads as magic when it's
+  // the brightest thing on the blade.
+  // Both of these went down after a look. At 0.5 and a saturated cyan the
+  // lawn read as radioactive rather than moonlit — the give-away being that
+  // it was the most colourful thing in a night scene. Moonlight is
+  // desaturated almost to grey; the tiny amount of blue left in it is the
+  // whole effect, and any more turns it into a light source of its own.
+  grassMoonGlow: 0.3,
+  grassMoonColor: 0xb9cee2,
   sky: {
-    horizon: 0x14203c,
-    zenith: 0x05080f,
+    // Night gets the same directional split the sunrise does. The earlier
+    // note here said a moon isn't bright enough to colour a quadrant of sky
+    // and set both horizons the same — which is true of the *ground* and
+    // wrong about the sky. A moon absolutely lights the air around itself:
+    // that's what a moon-dog is. It's just silver instead of gold, and the
+    // effect lives or dies on being subtle.
+    // Pulled down from a first pass that came out reading as dusk rather
+    // than night — the moonward side was bright enough to be blue hour, and
+    // the night here is meant to be the goth half of the art direction.
+    // The *split* is what does the work, not the overall level.
+    horizon: 0x2a4268,
+    horizonAway: 0x0c1428,
+    zenith: 0x04070e,
     // Moonlit cloud, not white — and dim enough that the starfield behind
     // still carries the night sky rather than being washed out by it.
-    cloudLit: 0x38456b,
-    cloudShade: 0x151d33,
-    glow: 0x9fb4e8,
+    cloudLit: 0x4a5a88,
+    // Properly dark, so the lit tops and rims have something to be lit
+    // *against*. Cloud that's uniformly dim reads as fog.
+    cloudShade: 0x0d1324,
+    // Where thin cloud passing in front of the moon goes translucent. Much
+    // closer to white than cloudLit, because that's genuinely what happens
+    // — it's the one place at night anything gets bright.
+    cloudHot: 0xa8bce4,
+    glow: 0x7a9ace,
     // Thinner cover at night, so there's more open sky for the stars.
     coverage: 0.6,
     opacity: 0.8,
   },
+  // A moon flare, at a third of the sun's weight and cool rather than warm.
+  // Deliberately not "the same effect turned down": at full strength the
+  // veil alone lifts the whole frame and undoes the darkness the rest of
+  // this block is for. What survives at 0.34 is the halo and a hint of
+  // streak, which is about what a real moon does to a lens.
+  glare: 0.34,
+  glareColor: 0x9fbdf2,
 };
 
 // One directional light doubles as both sun and moon — only its color,
@@ -444,14 +680,117 @@ const NIGHT_LIGHTING = {
 const sunMoonLight = new THREE.DirectionalLight();
 sunMoonLight.castShadow = true;
 sunMoonLight.shadow.mapSize.set(2048, 2048);
-sunMoonLight.shadow.camera.left = -14;
-sunMoonLight.shadow.camera.right = 14;
-sunMoonLight.shadow.camera.top = 14;
-sunMoonLight.shadow.camera.bottom = -14;
+
+// How much ground the shadow map covers, as a half-width in metres, and how
+// far back the light sits from the middle of it.
+//
+// Both of these were much smaller (a 28 m box, light 6 units out) and both
+// were wrong in ways that only showed up once the woods had real trees in
+// them:
+//
+//   * The light sitting 6 units from its target put the shadow camera's
+//     near plane *inside the scene*. Anything more than about 4 m tall
+//     directly beneath it was in front of the near plane and simply stopped
+//     casting — which is every tree in the new forest. Pulling the light
+//     well back and pushing `far` out costs nothing (an orthographic
+//     frustum has no perspective to lose) and fixes it outright.
+//   * A 28 m box is barely wider than the yard, and it was centred on the
+//     world origin rather than on the player, so the tree line's shadow
+//     could never reach the lawn.
+//
+// 34 m half-width is a 68 m box: the whole clearing plus the tree line on
+// every side, so the woods throw shade onto the grass from wherever the sun
+// happens to be. That's four times the area of the old box on the same 2048
+// map, i.e. half the resolution per metre — see the texel snapping below,
+// which matters more than the raw number does.
+const SHADOW_HALF_EXTENT = 34;
+const SHADOW_LIGHT_DISTANCE = 90;
+sunMoonLight.shadow.camera.left = -SHADOW_HALF_EXTENT;
+sunMoonLight.shadow.camera.right = SHADOW_HALF_EXTENT;
+sunMoonLight.shadow.camera.top = SHADOW_HALF_EXTENT;
+sunMoonLight.shadow.camera.bottom = -SHADOW_HALF_EXTENT;
 sunMoonLight.shadow.camera.near = 1;
-sunMoonLight.shadow.camera.far = 30;
-sunMoonLight.shadow.bias = -0.0015;
+sunMoonLight.shadow.camera.far = SHADOW_LIGHT_DISTANCE * 2;
+// Normal bias does the work that a flat depth bias can't: it offsets along
+// the surface normal, so a steeply lit slope stops shadow-acneing without
+// needing a constant bias big enough to detach every shadow from its
+// caster. Branch geometry is the worst case for this — thin tubes at every
+// angle at once — and it's why the flat bias could come *down* from 0.0015.
+sunMoonLight.shadow.bias = -0.0004;
+sunMoonLight.shadow.normalBias = 0.035;
 scene.add(sunMoonLight);
+scene.add(sunMoonLight.target);
+
+// Keeps the shadow box centred on whoever's being played, so shade exists
+// wherever she is rather than only near the origin.
+//
+// The snapping is not optional. A shadow map that slides continuously with
+// the player makes every shadow edge crawl and shimmer as she walks, because
+// each frame lands the same edge on a different part of the texel grid.
+// Quantising the box's centre to whole texels means the map moves in exact
+// texel steps and the shadows sit still.
+const SHADOW_TEXEL = (SHADOW_HALF_EXTENT * 2) / 2048;
+const _shadowCenter = new THREE.Vector3();
+const _shadowDir = new THREE.Vector3();
+const _shadowRight = new THREE.Vector3();
+const _shadowUp = new THREE.Vector3();
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+// applyDayNight runs once before `player` is assigned, so it needs
+// something to centre on that isn't her.
+const ORIGIN = new THREE.Vector3();
+function updateShadowCamera(target) {
+  _shadowDir.copy(sunMoonLight.userData.direction ?? SUN_DIRECTION).normalize();
+  // The shadow map's own axes, which are the ones the quantising has to
+  // happen in. Snapping the centre to whole metres of *world* x and z looks
+  // like it should work and doesn't: the map is laid out along the light's
+  // right and up, so a step that's a whole texel in world space lands
+  // part-way across a texel in the map, and the edges crawl exactly as if
+  // nothing had been snapped at all.
+  _shadowRight.crossVectors(WORLD_UP, _shadowDir).normalize();
+  _shadowUp.crossVectors(_shadowDir, _shadowRight).normalize();
+
+  _shadowCenter.set(target.x, 0, target.z);
+  // Decompose onto that basis, round the two lateral components to whole
+  // texels, and rebuild. The along-light component is carried through
+  // untouched — it doesn't move anything across the map.
+  const snap = (v) => Math.round(v / SHADOW_TEXEL) * SHADOW_TEXEL;
+  const alongRight = snap(_shadowCenter.dot(_shadowRight));
+  const alongUp = snap(_shadowCenter.dot(_shadowUp));
+  const alongDir = _shadowCenter.dot(_shadowDir);
+  _shadowCenter
+    .copy(_shadowRight)
+    .multiplyScalar(alongRight)
+    .addScaledVector(_shadowUp, alongUp)
+    .addScaledVector(_shadowDir, alongDir);
+
+  sunMoonLight.target.position.copy(_shadowCenter);
+  sunMoonLight.target.updateMatrixWorld();
+  sunMoonLight.position
+    .copy(_shadowDir)
+    .multiplyScalar(SHADOW_LIGHT_DISTANCE)
+    .add(_shadowCenter);
+  sunMoonLight.updateMatrixWorld();
+  // Derive the shadow matrix now rather than letting the renderer do it
+  // during its shadow pass. The grass samples that matrix by hand (it's a
+  // raw ShaderMaterial — see setGrassShadow), and taking whatever the
+  // renderer left behind last frame would hand it a matrix one frame stale:
+  // every shadow would lag the light by a frame and swim as the box moves.
+  sunMoonLight.shadow.updateMatrices(sunMoonLight);
+  setGrassShadow(
+    sunMoonLight.shadow.map ? sunMoonLight.shadow.map.texture : null,
+    sunMoonLight.shadow.matrix,
+    shadowStrength
+  );
+}
+
+// How dark cast shade goes on the grass, per mode. Hard tree shadows carry
+// the sunlit yard; under a moon the same weight reads as holes in the lawn.
+let shadowStrength = 0.55;
+
+// Set by applyDayNight, consumed by updateSunGlare — see the note there for
+// why these can't be written into the pass directly.
+let glareStrength = 0;
+let glareColor = null;
 
 const fillLight = new THREE.DirectionalLight();
 fillLight.position.set(-4, 2, -3);
@@ -555,6 +894,34 @@ function createHoverGlow(width, height, yOffset) {
   sprite.position.y = yOffset;
   sprite.visible = false;
   return sprite;
+}
+
+// Some things are only obviously interactive once you've already tried
+// clicking them. The hammock and the roof ladder both look like scenery, so
+// they get the same glow the hover targets use, except permanently on and
+// breathing gently — a static one stops registering as a signal after about
+// a minute and just becomes part of the object.
+//
+// They're driven together in the frame loop rather than each animating
+// itself, so the pulse stays in phase across the yard instead of two
+// objects throbbing against each other.
+const idleGlows = [];
+function addIdleGlow(target, width, height, yOffset) {
+  const glow = createHoverGlow(width, height, yOffset);
+  glow.visible = true;
+  target.add(glow);
+  idleGlows.push(glow);
+  return glow;
+}
+function updateIdleGlows(elapsed) {
+  const pulse = 0.52 + 0.28 * Math.sin(elapsed * 1.7);
+  for (const glow of idleGlows) {
+    // The glow's whole job is "you can interact with this". Once you're
+    // already in the hammock it has nothing left to say, and it sits right
+    // in front of a first-person camera pointed at the sky.
+    glow.visible = !(glow.userData.hideWhenLounging && mirandaLounging);
+    glow.material.opacity = glow.userData.hovered ? 1 : pulse;
+  }
 }
 
 const momGlow = createHoverGlow(1.1, 1.9, 0.75);
@@ -712,7 +1079,7 @@ globalThis.camView = () => {
   // describe it — the orbit target is parked a fixed few metres ahead of the
   // lens and ?cam= would always come back as that same short radius. Its own
   // position and heading are the only thing that round-trips.
-  if (DEBUG_MODE) {
+  if (debugFreeFly) {
     const url =
       `${base}?debug${at.replace('?', '&')}${as}` +
       `&eye=${n(camera.position.x)},${n(camera.position.y)},${n(camera.position.z)}` +
@@ -1043,66 +1410,99 @@ function makeMoonTexture() {
   canvas.height = size;
   const ctx = canvas.getContext('2d');
   const c = size / 2;
-
   ctx.translate(c, c);
 
-  const haloR = size * 0.49;
-  const halo = ctx.createRadialGradient(0, 0, haloR * 0.55, 0, 0, haloR);
-  halo.addColorStop(0, 'rgba(214, 226, 255, 0.55)');
-  halo.addColorStop(1, 'rgba(214, 226, 255, 0)');
+  // The aureole, same construction as the sun's and for the same reason: a
+  // moon is a small hard disc, and everything that makes it *feel* like a
+  // moon is the halo of scattered light around it. Stops close together
+  // near the middle and far apart toward the edge, because the falloff is
+  // roughly inverse-square and a linear ramp reads as a flat grey plate.
+  //
+  // Cool, and only slightly so — moonlight is sunlight, and painting it
+  // properly blue is the mistake that makes a night scene look like a
+  // daylight one with a filter on. The blue belongs in what it *lights*
+  // (see NIGHT_LIGHTING), not in the source.
+  const haloR = size * 0.5;
+  const halo = ctx.createRadialGradient(0, 0, 0, 0, 0, haloR);
+  halo.addColorStop(0.0, 'rgba(226, 236, 255, 0.85)');
+  halo.addColorStop(0.08, 'rgba(198, 216, 255, 0.5)');
+  halo.addColorStop(0.18, 'rgba(168, 194, 246, 0.26)');
+  halo.addColorStop(0.36, 'rgba(132, 162, 224, 0.11)');
+  halo.addColorStop(0.62, 'rgba(104, 132, 196, 0.04)');
+  halo.addColorStop(1.0, 'rgba(90, 116, 178, 0)');
   ctx.fillStyle = halo;
   ctx.beginPath();
   ctx.arc(0, 0, haloR, 0, Math.PI * 2);
   ctx.fill();
 
-  const faceR = size * 0.32;
-  const faceGradient = ctx.createRadialGradient(
+  // The disc. Bigger relative to its halo than the sun's is — the moon
+  // genuinely is a face you can read features on, and hiding that behind a
+  // blaze would waste the one celestial object you can actually look at.
+  const faceR = size * 0.13;
+  const face = ctx.createRadialGradient(
+    -faceR * 0.25,
     -faceR * 0.3,
-    -faceR * 0.3,
-    faceR * 0.1,
+    faceR * 0.15,
     0,
     0,
     faceR
   );
-  faceGradient.addColorStop(0, '#f5f8ff');
-  faceGradient.addColorStop(1, '#c7d3ee');
-  ctx.fillStyle = faceGradient;
+  face.addColorStop(0.0, '#ffffff');
+  face.addColorStop(0.62, '#f2f5ff');
+  face.addColorStop(1.0, '#d5dcf2');
+  ctx.fillStyle = face;
   ctx.beginPath();
   ctx.arc(0, 0, faceR, 0, Math.PI * 2);
   ctx.fill();
 
-  // A few soft craters for texture
-  ctx.fillStyle = 'rgba(150, 165, 200, 0.35)';
-  [
-    [-faceR * 0.4, -faceR * 0.5, faceR * 0.11],
-    [faceR * 0.45, -faceR * 0.15, faceR * 0.08],
-    [-faceR * 0.15, faceR * 0.5, faceR * 0.13],
-    [faceR * 0.35, faceR * 0.45, faceR * 0.07],
-  ].forEach(([x, y, r]) => {
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
-  });
-
-  // Wide, surprised eyes
-  ctx.fillStyle = '#3a3f55';
-  [-1, 1].forEach((side) => {
-    ctx.beginPath();
-    ctx.ellipse(side * faceR * 0.32, -faceR * 0.08, faceR * 0.1, faceR * 0.12, 0, 0, Math.PI * 2);
-    ctx.fill();
-  });
-  ctx.fillStyle = '#fff';
-  [-1, 1].forEach((side) => {
-    ctx.beginPath();
-    ctx.arc(side * faceR * 0.32 + 3, -faceR * 0.11, faceR * 0.03, 0, Math.PI * 2);
-    ctx.fill();
-  });
-
-  // A little "oh!" mouth
-  ctx.fillStyle = '#3a3f55';
+  // Maria — the dark seas, which are what the eye actually recognises as
+  // "the moon" rather than "a white circle". Soft-edged and irregular, laid
+  // out roughly like the real near side: a big mass upper-left, a chain
+  // down the middle, a couple of smaller ones lower right.
+  //
+  // Clipped to the disc, so a blot that overruns its edge is cut off
+  // cleanly instead of bulging the silhouette — the moon's outline is
+  // perfectly circular and a lumpy one reads as wrong immediately.
+  ctx.save();
   ctx.beginPath();
-  ctx.ellipse(0, faceR * 0.28, faceR * 0.11, faceR * 0.14, 0, 0, Math.PI * 2);
+  ctx.arc(0, 0, faceR, 0, Math.PI * 2);
+  ctx.clip();
+  const maria = [
+    [-0.34, -0.38, 0.36, 0.2],
+    [-0.12, -0.15, 0.3, 0.16],
+    [0.1, -0.42, 0.2, 0.13],
+    [-0.05, 0.26, 0.26, 0.14],
+    [0.34, 0.2, 0.19, 0.1],
+    [0.3, -0.05, 0.13, 0.08],
+  ];
+  maria.forEach(([mx, my, mr, alpha]) => {
+    const blot = ctx.createRadialGradient(
+      mx * faceR,
+      my * faceR,
+      0,
+      mx * faceR,
+      my * faceR,
+      mr * faceR
+    );
+    blot.addColorStop(0, `rgba(150, 164, 196, ${alpha})`);
+    blot.addColorStop(0.7, `rgba(158, 172, 202, ${alpha * 0.55})`);
+    blot.addColorStop(1, 'rgba(160, 174, 204, 0)');
+    ctx.fillStyle = blot;
+    ctx.beginPath();
+    ctx.arc(mx * faceR, my * faceR, mr * faceR, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // A faint darkening round the rim. The real moon limb-darkens, and
+  // without it a flat disc sits on the sky like a sticker.
+  const limb = ctx.createRadialGradient(0, 0, faceR * 0.6, 0, 0, faceR);
+  limb.addColorStop(0, 'rgba(120, 136, 172, 0)');
+  limb.addColorStop(1, 'rgba(120, 136, 172, 0.3)');
+  ctx.fillStyle = limb;
+  ctx.beginPath();
+  ctx.arc(0, 0, faceR, 0, Math.PI * 2);
   ctx.fill();
+  ctx.restore();
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -1127,8 +1527,28 @@ moonSprite.scale.set(28, 28, 1);
 moonSprite.position.copy(MOON_DIRECTION).multiplyScalar(SKY_DISTANCE);
 scene.add(moonSprite);
 
-// A cheerful smiling sun, same hand-drawn/billboarded approach as the moon
-// above — rayed and warm-colored rather than glowing and pale.
+// The rising sun.
+//
+// This replaced a hand-drawn smiling sun with rays and a face, on the
+// owner's call — the daytime look is a sunrise now and wanted something
+// beautiful rather than something cheerful. Everything charming about the
+// old one is in the history if it is ever missed.
+//
+// What makes a low sun read as a low sun, and none of it is the disc:
+//
+//   * the disc itself is *small* and almost white. A big yellow ball is a
+//     child's drawing of the sun; the real thing subtends half a degree and
+//     is blown out well past any colour a screen can show.
+//   * everything around it is the effect. A wide, faint aureole out to many
+//     times the disc's radius is what atmosphere near the horizon does to
+//     sunlight, and it is the part the eye actually reads.
+//   * it is warmer at its edge than at its centre, because the light at the
+//     rim has travelled through more air. Centre near-white, rim gold,
+//     aureole amber.
+//
+// Drawn with premultiplied-looking additive falloff and rendered additively,
+// so it sits *on top of* whatever sky is behind it rather than punching a
+// square of its own background through the clouds.
 function makeSunTexture() {
   const size = 512;
   const canvas = document.createElement('canvas');
@@ -1137,68 +1557,33 @@ function makeSunTexture() {
   const ctx = canvas.getContext('2d');
   const c = size / 2;
 
-  ctx.translate(c, c);
-  ctx.fillStyle = '#ffd54a';
-  const rayCount = 16;
-  const outerR = size * 0.49;
-  const innerR = size * 0.33;
-  ctx.beginPath();
-  for (let i = 0; i < rayCount * 2; i++) {
-    const angle = (Math.PI / rayCount) * i;
-    const r = i % 2 === 0 ? outerR : innerR;
-    const x = Math.cos(angle) * r;
-    const y = Math.sin(angle) * r;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.closePath();
-  ctx.fill();
+  // The aureole: a wide, smooth, rapidly-falling glow filling most of the
+  // texture. The stops are close together near the middle and far apart
+  // toward the edge because the falloff is roughly inverse-square and a
+  // linear ramp reads as a flat disc with a hard edge.
+  const halo = ctx.createRadialGradient(c, c, 0, c, c, c);
+  halo.addColorStop(0.0, 'rgba(255, 246, 224, 1)');
+  halo.addColorStop(0.06, 'rgba(255, 226, 170, 0.92)');
+  halo.addColorStop(0.13, 'rgba(255, 186, 116, 0.55)');
+  halo.addColorStop(0.26, 'rgba(255, 148, 78, 0.24)');
+  halo.addColorStop(0.45, 'rgba(240, 116, 60, 0.09)');
+  halo.addColorStop(0.70, 'rgba(210, 96, 60, 0.03)');
+  halo.addColorStop(1.0, 'rgba(190, 90, 60, 0)');
+  ctx.fillStyle = halo;
+  ctx.fillRect(0, 0, size, size);
 
-  const faceR = size * 0.3;
-  const faceGradient = ctx.createRadialGradient(
-    -faceR * 0.3,
-    -faceR * 0.3,
-    faceR * 0.1,
-    0,
-    0,
-    faceR
-  );
-  faceGradient.addColorStop(0, '#fff2b0');
-  faceGradient.addColorStop(1, '#ffc93c');
-  ctx.fillStyle = faceGradient;
+  // The disc. Small — a tenth of the texture — and near-white, with just
+  // enough warmth at its own edge to keep it from reading as a hole.
+  const discR = size * 0.052;
+  const disc = ctx.createRadialGradient(c, c, 0, c, c, discR);
+  disc.addColorStop(0.0, 'rgba(255, 255, 252, 1)');
+  disc.addColorStop(0.72, 'rgba(255, 250, 232, 1)');
+  disc.addColorStop(0.93, 'rgba(255, 226, 168, 0.85)');
+  disc.addColorStop(1.0, 'rgba(255, 210, 140, 0)');
+  ctx.fillStyle = disc;
   ctx.beginPath();
-  ctx.arc(0, 0, faceR, 0, Math.PI * 2);
+  ctx.arc(c, c, discR, 0, Math.PI * 2);
   ctx.fill();
-
-  ctx.fillStyle = '#ffb3c6';
-  ctx.globalAlpha = 0.6;
-  ctx.beginPath();
-  ctx.ellipse(-faceR * 0.55, faceR * 0.15, faceR * 0.16, faceR * 0.1, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.ellipse(faceR * 0.55, faceR * 0.15, faceR * 0.16, faceR * 0.1, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalAlpha = 1;
-
-  ctx.fillStyle = '#3a2b1a';
-  [-1, 1].forEach((side) => {
-    ctx.beginPath();
-    ctx.ellipse(side * faceR * 0.32, -faceR * 0.08, faceR * 0.075, faceR * 0.095, 0, 0, Math.PI * 2);
-    ctx.fill();
-  });
-  ctx.fillStyle = '#fff';
-  [-1, 1].forEach((side) => {
-    ctx.beginPath();
-    ctx.arc(side * faceR * 0.32 + 3, -faceR * 0.11, faceR * 0.022, 0, Math.PI * 2);
-    ctx.fill();
-  });
-
-  ctx.strokeStyle = '#3a2b1a';
-  ctx.lineWidth = faceR * 0.05;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.arc(0, faceR * 0.12, faceR * 0.38, 0.18 * Math.PI, 0.82 * Math.PI);
-  ctx.stroke();
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -1208,11 +1593,21 @@ function makeSunTexture() {
 const sunMaterial = new THREE.SpriteMaterial({
   map: makeSunTexture(),
   transparent: true,
+  // Additive, which is the whole reason the aureole works. Under normal
+  // alpha blending the glow's faint outer stops *replace* the sky behind
+  // them in proportion to their alpha, so a cloud passing behind the sun is
+  // partly wiped out by a wash of orange. Adding instead means the sun
+  // lights the cloud rather than covering it, which is what light does.
+  blending: THREE.AdditiveBlending,
+  depthWrite: false,
   toneMapped: false,
   fog: false,
 });
 const sunSprite = new THREE.Sprite(sunMaterial);
-sunSprite.scale.set(28, 28, 1);
+// Much larger than the old 28, because most of this sprite is now empty
+// falloff rather than drawing — the visible disc inside it is about a tenth
+// of its width, so at 28 the sun itself would be a couple of pixels.
+sunSprite.scale.set(78, 78, 1);
 sunSprite.position.copy(SUN_DIRECTION).multiplyScalar(SKY_DISTANCE);
 scene.add(sunSprite);
 
@@ -1311,8 +1706,8 @@ function applyDayNight(day) {
   // being inspected. Pushed rather than removed outright (scene.fog = null)
   // so nothing downstream has to cope with it being absent — the grass shader
   // in particular takes its fog as plain uniforms.
-  const fogNear = DEBUG_MODE ? 4000 : cfg.fogNear;
-  const fogFar = DEBUG_MODE ? 5000 : cfg.fogFar;
+  const fogNear = debugFreeFly ? 4000 : cfg.fogNear;
+  const fogFar = debugFreeFly ? 5000 : cfg.fogFar;
   scene.fog.color.set(cfg.fogColor);
   scene.fog.near = fogNear;
   scene.fog.far = fogFar;
@@ -1327,10 +1722,32 @@ function applyDayNight(day) {
   setGrassFog(cfg.fogColor, fogNear, fogFar);
   // And the same for its lighting, which it also can't read from the scene.
   setGrassLight(cfg.sun.direction, cfg.grassLight, cfg.grassBackScatter);
+  setGrassMoonGlow(cfg.grassMoonGlow ?? 0, cfg.grassMoonColor ?? 0xffffff);
 
   sunMoonLight.color.set(cfg.sun.color);
   sunMoonLight.intensity = cfg.sun.intensity;
-  sunMoonLight.position.copy(cfg.sun.direction).multiplyScalar(6);
+  // Only the direction is stored here; where the light actually sits is
+  // recomputed every frame around the shadow box's centre (see
+  // updateShadowCamera), so setting position here would just be overwritten.
+  sunMoonLight.userData.direction = cfg.sun.direction;
+  shadowStrength = cfg.grassShadow;
+  // Rooms with the light on. Purely emissive — no extra point lights, since
+  // the exterior lamps below already carry the real lighting and a lit
+  // window's job here is to be seen, not to illuminate the lawn.
+  setHouseWindowsLit(!day);
+  // No lens flare off a moon. The effect is sized for a sun a hundred
+  // thousand times brighter than the scene, and at night it just fogs the
+  // screen whenever you happen to face the right way.
+  //
+  // Parked in variables rather than written straight into glarePass's
+  // uniforms, because applyDayNight runs once during setup — well before
+  // the composer and its passes exist further down the file. Touching the
+  // pass here is a temporal-dead-zone ReferenceError that kills the whole
+  // module mid-load, and the only symptom is the loading screen sitting at
+  // its first message forever.
+  glareStrength = cfg.glare ?? 0;
+  glareColor = cfg.glareColor ?? null;
+  updateShadowCamera(player ? player.position : ORIGIN);
 
   fillLight.color.set(cfg.fill.color);
   fillLight.intensity = cfg.fill.intensity;
@@ -1491,6 +1908,155 @@ const painterlyPass = new ShaderPass({
     }
   `,
 });
+// Sun glare — what you get for turning and looking into a low sun.
+//
+// Deliberately after bloom and before the painterly grade: bloom is about
+// bright *things in the scene* spilling into their surroundings, and this
+// is about light hitting the lens, which happens in front of all of that.
+// Putting it after the grade instead would leave it untouched by the warm
+// push and the vignette and it would sit on top of the image like a decal.
+//
+// Three parts, in rough order of how much they matter:
+//
+//   1. A broad veiling haze that lifts and warms the whole frame as the sun
+//      comes into view. This is the one doing the real work — glare is
+//      mostly a loss of contrast, not a shape.
+//   2. A bright bloom centred on the sun itself, plus a horizontal streak,
+//      which is what a wide anamorphic-ish lens does with a point source.
+//   3. Ghosts — a few soft discs spaced along the line from the sun through
+//      the centre of the screen, which is where internal reflections land
+//      in a real lens. Faint; they read as an artefact rather than a
+//      decoration.
+//
+// Occlusion is approximated rather than computed. There's no depth buffer
+// available at this point in the chain, so instead it samples the already-
+// rendered image at the sun's own screen position: bright means open sky,
+// dark means something is standing in front of it. That's a single tap and
+// it gets the important case exactly right — walking behind the tree line
+// and having the glare go out as trunks cross the sun.
+const glarePass = new ShaderPass({
+  uniforms: {
+    tDiffuse: { value: null },
+    // Where the sun is on screen, in UV. Off-screen values are meaningful
+    // and expected: the streak and the haze still reach in from outside the
+    // frame, which is what makes turning toward the sun feel gradual.
+    uSunUv: { value: new THREE.Vector2(0.5, 1.5) },
+    // How much the sun is in view at all: 0 when it's behind the camera.
+    uFacing: { value: 0 },
+    uColor: { value: new THREE.Color(0xffb066) },
+    // Screen aspect, so the halo is round rather than an ellipse.
+    uAspect: { value: 1 },
+    // Master switch — zero at night, where a moon shouldn't flare.
+    uStrength: { value: 1 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform vec2 uSunUv;
+    uniform float uFacing;
+    uniform float uAspect;
+    uniform float uStrength;
+    uniform vec3 uColor;
+    varying vec2 vUv;
+
+    void main() {
+      vec4 color = texture2D(tDiffuse, vUv);
+      float amount = uFacing * uStrength;
+      if (amount < 0.001) {
+        gl_FragColor = color;
+        return;
+      }
+
+      // Cheap occlusion: how bright the frame already is where the sun is.
+      // Clamped into the frame so a sun just off-screen samples the edge
+      // pixel nearest it rather than wrapping or clamping to a corner.
+      vec2 probe = clamp(uSunUv, vec2(0.0), vec2(1.0));
+      vec3 atSun = texture2D(tDiffuse, probe).rgb;
+      float open = smoothstep(0.28, 0.85, max(atSun.r, max(atSun.g, atSun.b)));
+      // Never all the way to zero — a sun behind bare branches still throws
+      // some glare, and snapping fully off as a trunk crosses it looks like
+      // a bug rather than an occlusion.
+      amount *= mix(0.25, 1.0, open);
+
+      // Aspect-corrected offset from the sun, so distances are circular.
+      vec2 d = (vUv - uSunUv) * vec2(uAspect, 1.0);
+      float dist = length(d);
+
+      // 1. Veiling haze across the whole frame. Small — this is the term
+      // that lifts the blacks, and it only takes a little before the image
+      // stops looking hazy and starts looking washed out.
+      color.rgb += uColor * amount * 0.06;
+
+      // 2. The halo, and the streak through it. The broad lobe fell off at
+      // 4.2 and covered most of the frame, which erased the sky's own
+      // gradient and every cloud in it — the glare was drowning the exact
+      // thing it was meant to be reacting to.
+      float halo = exp(-dist * 7.0) * 0.30 + exp(-dist * 16.0) * 0.60;
+      float streak = exp(-abs(d.y) * 52.0) * exp(-abs(d.x) * 2.1) * 0.38;
+      color.rgb += uColor * (halo + streak) * amount;
+
+      // 3. Ghosts along the sun-to-centre line.
+      vec2 toCentre = vec2(0.5) - uSunUv;
+      for (int i = 1; i <= 3; i++) {
+        float t = float(i) * 0.62;
+        vec2 gp = uSunUv + toCentre * t;
+        float gd = length((vUv - gp) * vec2(uAspect, 1.0));
+        // Each one a little wider and fainter than the last.
+        color.rgb += uColor * exp(-gd * (26.0 - float(i) * 5.0)) * 0.05 * amount;
+      }
+
+      gl_FragColor = color;
+    }
+  `,
+});
+composer.addPass(glarePass);
+
+const _sunScreen = new THREE.Vector3();
+const _toSun = new THREE.Vector3();
+const _camForward = new THREE.Vector3();
+
+// Points the glare pass at wherever the sun currently is on screen, and
+// tells it how squarely the camera is looking at it. Called every frame,
+// after the camera has finished moving for this one.
+function updateSunGlare() {
+  glarePass.uniforms.uStrength.value = glareStrength;
+  if (glareColor !== null) glarePass.uniforms.uColor.value.set(glareColor);
+  if (glareStrength < 0.001) {
+    glarePass.uniforms.uFacing.value = 0;
+    return;
+  }
+
+  // Where the sprite actually is, not SUN_DIRECTION — the sprite sits at a
+  // fixed world point and bobs, so at close range the two disagree by
+  // enough to slide the halo off the disc.
+  _sunScreen.copy(sunSprite.position);
+  _toSun.copy(_sunScreen).sub(camera.position).normalize();
+  camera.getWorldDirection(_camForward);
+  const align = _camForward.dot(_toSun);
+
+  // Ramp rather than a cutoff. The lower bound is well outside the frame
+  // (about 80 degrees off axis) so the veiling haze creeps in before the
+  // sun itself appears, which is what turning toward a low sun actually
+  // feels like — the image washes out first and the disc arrives after.
+  const facing = THREE.MathUtils.smoothstep(align, 0.15, 0.92);
+  glarePass.uniforms.uFacing.value = facing;
+
+  if (facing > 0.001) {
+    _sunScreen.project(camera);
+    glarePass.uniforms.uSunUv.value.set(
+      _sunScreen.x * 0.5 + 0.5,
+      _sunScreen.y * 0.5 + 0.5
+    );
+    glarePass.uniforms.uAspect.value = camera.aspect;
+  }
+}
+
 composer.addPass(painterlyPass);
 
 // Miranda's "trip" skill: a full-screen wiggle (UV displaced by layered
@@ -1793,9 +2359,11 @@ function clampOrbitToGround() {
   const distance = camera.position.distanceTo(controls.target);
   if (distance < 0.0001) return;
   const cosPhi = (camera.position.y - controls.target.y) / distance;
-  // Sampled under the camera rather than under the target, since that's
-  // the bit of ground it's actually in danger of dipping into.
-  const floor = terrainHeight(camera.position.x, camera.position.z) + 0.25;
+  // Sampled under the camera rather than under the target, since that's the
+  // bit of ground it's actually in danger of dipping into.
+  let under = terrainHeight(camera.position.x, camera.position.z);
+
+  const floor = under + 0.25;
   const drop = floor - controls.target.y;
 
   let limit = orbitMaxDistance;
@@ -1827,16 +2395,64 @@ let debugLookDragging = false;
 let debugLookLastX = 0;
 let debugLookLastY = 0;
 
+// Swap debug between the free-fly camera and the ordinary third-person one,
+// live. Both directions have to hand over cleanly or the switch is useless:
+// going to fixed, OrbitControls would otherwise derive an orbit from
+// wherever the free camera had flown to (often fifty metres away, aimed at
+// nothing); coming back, the free camera would snap to whatever heading it
+// held before, throwing away the view you were just looking at.
+function setDebugCamera(free) {
+  if (free === debugFreeFly) return;
+  debugFreeFly = free;
+  controls.enabled = !free;
+
+  if (free) {
+    // Seed the fly camera from where the orbit camera currently is, so the
+    // view doesn't jump at the moment of the switch.
+    orbitMaxDistance = 60;
+    const dir = camera.getWorldDirection(new THREE.Vector3());
+    debugYaw = Math.atan2(-dir.x, -dir.z);
+    debugPitch = Math.asin(THREE.MathUtils.clamp(dir.y, -1, 1));
+    debugLookReady = true;
+  } else {
+    // Re-attach to the player: aim at them and drop the camera a sensible
+    // distance behind, rather than letting OrbitControls invent a radius
+    // from the free camera's position.
+    orbitMaxDistance = 13;
+    controls.target.set(
+      player.position.x,
+      player.position.y + cameraAimHeight(),
+      player.position.z
+    );
+    camera.position.set(
+      player.position.x + 4.5,
+      player.position.y + 3.2,
+      player.position.z + 5.5
+    );
+    controls.update();
+  }
+
+  // Debug pushes the fog away so distance doesn't wash out whatever's being
+  // inspected — but the fixed camera exists to show what the game actually
+  // looks like, and no fog is exactly the wrong answer for that. Re-applying
+  // the current mode is what moves it (see applyDayNight).
+  applyDayNight(isDay);
+}
+
 if (DEBUG_MODE) {
-  // OrbitControls is off entirely — orbiting a target is the wrong model when
-  // what you want is to go and look at something.
-  controls.enabled = false;
+  // OrbitControls is off in free-fly — orbiting a target is the wrong model
+  // when what you want is to go and look at something. Fixed mode turns it
+  // back on (see setDebugCamera).
+  controls.enabled = !debugFreeFly;
 
   // Drag to look, not pointer lock. Lock would swallow clicks on the debug
   // panel, which is the other half of what debug mode is for. Directions match
   // the rest of the game: drag right and the view turns right, drag down and
   // it looks down.
   renderer.domElement.addEventListener('pointerdown', (e) => {
+    // Registered once, but only active in free-fly — in fixed mode
+    // OrbitControls owns the drag and both would turn at once.
+    if (!debugFreeFly) return;
     debugLookDragging = true;
     debugLookLastX = e.clientX;
     debugLookLastY = e.clientY;
@@ -2414,11 +3030,61 @@ clickMarker.rotation.x = -Math.PI / 2;
 clickMarker.visible = false;
 scene.add(clickMarker);
 
+// Where a ray first meets the roof, or null if it never does.
+//
+// Marched rather than raycast against the mesh. The roof is inside the
+// baked, merged house geometry, so a mesh hit can't tell roof from wall
+// without unpicking what it landed on — where the roof as a *height field*
+// is one function call per sample (roofSurfaceY), covers all four planes
+// and both hips for free, and can't disagree with the surface she's
+// standing on because it is the same surface.
+function marchToRoof(ray) {
+  const STEP = 0.35;
+  const MAX = 70;
+  let prevT = 0;
+  let prevAbove = true;
+  const p = new THREE.Vector3();
+  for (let t = STEP; t < MAX; t += STEP) {
+    ray.at(t, p);
+    const surface = roofSurfaceY(p.x, p.z);
+    const above = surface === null || p.y > surface;
+    // Crossing from above the surface to below it is the hit.
+    if (prevAbove && !above) {
+      // Bisect a few times, or the destination lands on a 35 cm grid and
+      // clicks feel like they snap.
+      let lo = prevT;
+      let hi = t;
+      for (let i = 0; i < 12; i++) {
+        const mid = (lo + hi) / 2;
+        ray.at(mid, p);
+        const s = roofSurfaceY(p.x, p.z);
+        if (s === null || p.y > s) lo = mid;
+        else hi = mid;
+      }
+      return ray.at(hi, new THREE.Vector3());
+    }
+    prevT = t;
+    prevAbove = above;
+  }
+  return null;
+}
+
 function getGroundPoint(clientX, clientY) {
   const rect = renderer.domElement.getBoundingClientRect();
   pointerNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
   pointerNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointerNDC, camera);
+
+  // On the roof, the roof *is* the ground. Without this the ray sails
+  // straight through the shingles to the lawn below, hands back a point
+  // inside the building's footprint, and clampTargetPoint then dutifully
+  // shoves it out to the nearest patch of grass — so every click sent her
+  // walking off the edge. That, not the camera, was what made being up
+  // there useless.
+  if (onRoof) {
+    const roofPoint = marchToRoof(raycaster.ray);
+    if (roofPoint) return roofPoint;
+  }
 
   // Hit the actual ground mesh, not a mathematical plane at y=0. That plane
   // was correct while the world was flat, but the terrain now stands up to
@@ -2766,14 +3432,28 @@ function exitHammockLounge() {
   controls.enabled = true;
 }
 
-const hammockGlow = createHoverGlow(3.4, 1.7, yard.userData.hammock.userData.attachHeight);
-yard.userData.hammock.add(hammockGlow);
+// On permanently rather than on hover. Hover still reads — it brightens
+// (see updateIdleGlows) — but the resting state is lit, so you can tell
+// from across the yard that the thing does something.
+const hammockGlow = addIdleGlow(
+  yard.userData.hammock,
+  3.4,
+  1.7,
+  yard.userData.hammock.userData.attachHeight
+);
+hammockGlow.userData.hideWhenLounging = true;
 let hammockHovered = false;
 function setHammockHover(hovered) {
   if (hovered === hammockHovered) return;
   hammockHovered = hovered;
-  hammockGlow.visible = hovered;
+  hammockGlow.userData.hovered = hovered;
   renderer.domElement.style.cursor = hovered ? 'pointer' : '';
+}
+
+// The ladder is tall and thin, so its glow is too — a square one centred on
+// it would spill halfway across the back wall.
+if (yard.userData.ladder) {
+  addIdleGlow(yard.userData.ladder, 1.1, 3.6, 1.7);
 }
 
 // Poops don't get a single shared glow the way Mom/Darla/the hammock do —
@@ -2873,6 +3553,26 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     return;
   }
 
+  // The ladder. Available to whoever is being played rather than Miranda
+  // only, unlike the hammock — a dog going up a ladder is a stretch, but
+  // it's the sort of stretch this game is made of, and gating it would mean
+  // the roof simply doesn't exist for anyone playing Darla.
+  if (!climbing && !mirandaLounging && hitsLadder(e.clientX, e.clientY)) {
+    if (onRoof) {
+      startClimb(true);
+    } else {
+      ladderTarget = true;
+      moveTarget = new THREE.Vector3(HOUSE_LADDER.x, 0, HOUSE_LADDER.standZ);
+      clickMarker.position.set(
+        moveTarget.x,
+        terrainHeight(moveTarget.x, moveTarget.z) + 0.02,
+        moveTarget.z
+      );
+      clickMarker.visible = true;
+    }
+    return;
+  }
+
   if (playerKind === 'miranda' && !mirandaLounging && hitsHammock(e.clientX, e.clientY)) {
     const hammock = yard.userData.hammock;
     mirandaLoungeTarget = true;
@@ -2931,11 +3631,13 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   if (mirandaLounging) exitHammockLounge();
   const clamped = clampTargetPoint(point.x, point.z);
   moveTarget = new THREE.Vector3(clamped.x, 0, clamped.z);
-  clickMarker.position.set(
-      moveTarget.x,
-      terrainHeight(moveTarget.x, moveTarget.z) + 0.02,
-      moveTarget.z
-    );
+  // The marker sits on whatever she's actually walking on, which on the
+  // roof is the shingles — at terrain height it would be buried inside the
+  // house, out of sight under her feet.
+  const markerY =
+    (onRoof ? roofSurfaceY(moveTarget.x, moveTarget.z) : null) ??
+    terrainHeight(moveTarget.x, moveTarget.z);
+  clickMarker.position.set(moveTarget.x, markerY + 0.02, moveTarget.z);
   clickMarker.visible = true;
 });
 
@@ -3047,7 +3749,30 @@ function insideFirePit(x, z) {
 // which is what it looks like.
 const FIRE_PIT_RIM_Y = terrainHeight(FIRE_PIT.x, FIRE_PIT.z) + FIRE_PIT.rimHeight;
 
+// The house's own base height. The graded pad is dead flat out to
+// TERRAIN_PAD (see terrainHeight), and the house sits at its centre, so
+// this one number serves the whole roof rather than needing a per-point
+// terrain sample under a building that is level by construction.
+const HOUSE_GROUND_Y = terrainHeight(0, HOUSE_ORIGIN_Z);
+
+// True only while she's actually up there. It has to be a state rather than
+// a test on position, because the roof and the lawn overlap in plan: if
+// groundHeightAt simply returned the roof whenever you stood inside the
+// building's outline, walking *past* the house at ground level would
+// teleport you onto it.
+let onRoof = false;
+
+// Absolute world height of the roof surface at a point, or null off it.
+function roofSurfaceY(x, z) {
+  const local = houseRoofHeight(x, z);
+  return local === null ? null : HOUSE_GROUND_Y + local;
+}
+
 function groundHeightAt(x, z) {
+  if (onRoof) {
+    const roof = roofSurfaceY(x, z);
+    if (roof !== null) return roof;
+  }
   if (Math.hypot(x - FIRE_PIT.x, z - FIRE_PIT.z) < FIRE_PIT.rimRadius) {
     return FIRE_PIT_RIM_Y;
   }
@@ -3081,6 +3806,11 @@ function clampToWorldRadius(x, z) {
 
 // Used for the per-frame movement step.
 function clampToWalkable(prevX, prevZ, x, z) {
+  // On the roof you are *above* the building, so its walls must stop
+  // blocking you — otherwise the whole roof is unreachable ground sitting
+  // inside a solid box. Walking off the edge is handled by beginFallOffRoof
+  // rather than by a wall.
+  if (onRoof) return clampToWorldRadius(x, z);
   const pushed = pushOutOfHouse(prevX, prevZ, x, z);
   // The pit stops you *walking* in, but you're allowed to jump in if you want
   // to. Two exemptions make that work: airborne, so a jump can carry you over
@@ -3096,6 +3826,10 @@ function clampToWalkable(prevX, prevZ, x, z) {
 // clamp, same idea as clampToWalkable but with no previous position to
 // slide from.
 function clampTargetPoint(x, z) {
+  // Same exemption as clampToWalkable: up on the roof you are above the
+  // building, so pushing the destination out of its footprint would make
+  // every point up there unreachable.
+  if (onRoof) return clampToWorldRadius(x, z);
   const outside = nearestPointOutsideHouse(x, z);
   const clear = pushOutOfFirePit(outside.x, outside.z);
   return clampToWorldRadius(clear.x, clear.z);
@@ -3483,6 +4217,16 @@ function updateMovement(delta) {
   // rather than beside it: everything downstream that treats forward as "the
   // player is driving" — cancelling a click-to-move target, waking her out of
   // the hammock — then applies to the mouse chord for free.
+  // Nothing drives her while she's on the ladder. The tween is short and
+  // uninterruptible by design (see startClimb) — accepting input here would
+  // let her walk off mid-rung with her position still being written by
+  // updateClimb.
+  if (climbing) {
+    moveTarget = null;
+    clickMarker.visible = false;
+    return true;
+  }
+
   const keyUp = pressedKeys.has('KeyW') || pressedKeys.has('ArrowUp') || bothMouseButtonsHeld;
   const keyDown = pressedKeys.has('KeyS') || pressedKeys.has('ArrowDown');
   const keyRight = pressedKeys.has('KeyD') || pressedKeys.has('ArrowRight');
@@ -3520,7 +4264,10 @@ function updateMovement(delta) {
     } else {
       moveTarget = null;
       clickMarker.visible = false;
-      if (mirandaLoungeTarget) {
+      if (ladderTarget) {
+        ladderTarget = false;
+        startClimb(false);
+      } else if (mirandaLoungeTarget) {
         mirandaLoungeTarget = false;
         enterHammockLounge();
       } else if (mirandaPoopTarget) {
@@ -3647,6 +4394,125 @@ function triggerJump() {
 // Keyed off crossing the rim specifically rather than "the ground got lower",
 // which would misfire constantly on the hill — walking downhill changes the
 // ground under her by more per frame than any sane threshold.
+// Walking off the roof drops you off it. Same reuse of the jump arc as the
+// fire pit rim below — no upward velocity, so it's a fall — but keyed off
+// leaving the roof's *plan outline* rather than a radius.
+//
+// Clearing `onRoof` here is what puts the house's walls back: from the
+// moment she's past the edge she's ordinary airborne, and she lands on
+// whatever is actually down there.
+function beginFallOffRoof() {
+  if (!onRoof || climbing) return;
+  const still = roofSurfaceY(player.position.x, player.position.z);
+  if (still !== null) {
+    lastRoofY = still;
+    return;
+  }
+  onRoof = false;
+  isJumping = true;
+  jumpVelocity = 0;
+  jumpHeight = 0;
+  jumpGroundY = lastRoofY;
+}
+let lastRoofY = 0;
+
+// ── the roof ladder ────────────────────────────────────────────────────
+//
+// Clicking it walks her to the foot the ordinary click-to-move way and then
+// hands off to a scripted climb, in exactly the idiom the hammock already
+// uses (mirandaLoungeTarget). Clicking it again while she's up there brings
+// her back down.
+//
+// The climb is a tween rather than real movement, and deliberately so:
+// there's no ladder collision, no vertical movement in the controller, and
+// building either just for this would be a great deal of machinery for one
+// prop. What it costs is that the climb can't be interrupted halfway.
+const CLIMB_SECONDS = 1.9;
+// Where the rungs end and stepping onto the shingles begins. Below this the
+// tween follows the ladder; above it she moves onto the roof.
+const CLIMB_STEP_OFF = 0.78;
+
+let climbing = false;
+let climbT = 0;
+let climbDown = false;
+let ladderTarget = false;
+
+function atLadderFoot() {
+  return {
+    x: HOUSE_LADDER.x,
+    y: HOUSE_GROUND_Y,
+    z: HOUSE_LADDER.standZ,
+  };
+}
+function atLadderTop() {
+  return {
+    x: HOUSE_LADDER.x,
+    y: HOUSE_GROUND_Y + HOUSE_LADDER.topY,
+    z: HOUSE_LADDER.topZ,
+  };
+}
+function atRoofArrival() {
+  const y = roofSurfaceY(HOUSE_LADDER.x, HOUSE_LADDER.arriveZ);
+  return {
+    x: HOUSE_LADDER.x,
+    y: y === null ? HOUSE_GROUND_Y + HOUSE_LADDER.topY : y,
+    z: HOUSE_LADDER.arriveZ,
+  };
+}
+
+function startClimb(down) {
+  climbing = true;
+  climbDown = down;
+  climbT = 0;
+  moveTarget = null;
+  ladderTarget = false;
+  // Facing the house going up, facing out coming down — she climbs looking
+  // at the rungs either way, which is the one thing that would look wrong.
+  player.rotation.y = down ? 0 : Math.PI;
+}
+
+function updateClimb(delta) {
+  if (!climbing) return;
+  climbT = Math.min(1, climbT + delta / CLIMB_SECONDS);
+  // Read the tween as always going *up*, then play it backwards for the
+  // descent. One path, so the two directions can't disagree about where the
+  // ladder is.
+  const t = climbDown ? 1 - climbT : climbT;
+  const foot = atLadderFoot();
+  const top = atLadderTop();
+  const roof = atRoofArrival();
+
+  let from = foot;
+  let to = top;
+  let k = t / CLIMB_STEP_OFF;
+  if (t > CLIMB_STEP_OFF) {
+    from = top;
+    to = roof;
+    k = (t - CLIMB_STEP_OFF) / (1 - CLIMB_STEP_OFF);
+  }
+  player.position.set(
+    from.x + (to.x - from.x) * k,
+    from.y + (to.y - from.y) * k,
+    from.z + (to.z - from.z) * k
+  );
+
+  if (climbT >= 1) {
+    climbing = false;
+    onRoof = !climbDown;
+    if (onRoof) lastRoofY = player.position.y;
+  }
+}
+
+function hitsLadder(clientX, clientY) {
+  const ladder = yard.userData.ladder;
+  if (!ladder) return false;
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointerNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointerNDC, camera);
+  return raycaster.intersectObject(ladder, true).length > 0;
+}
+
 function beginFallOffRim() {
   const overRim =
     Math.hypot(player.position.x - FIRE_PIT.x, player.position.z - FIRE_PIT.z) <
@@ -3895,8 +4761,14 @@ function animate() {
   // 1/15s is low enough that nothing can cross a wall or a trigger in one
   // frame, and high enough that a genuine slow frame still animates rather
   // than stuttering in slow motion.
-  const delta = Math.min(clock.getDelta(), 1 / 15);
+  // Kept unclamped for the FPS readout specifically. The clamp below exists
+  // to stop physics exploding after a long stall, but it also means `delta`
+  // can never report worse than 15 fps — which would quietly hide exactly
+  // the spikes the counter is there to catch.
+  const rawDelta = clock.getDelta();
+  const delta = Math.min(rawDelta, 1 / 15);
   elapsed += delta;
+  updateDebugFps(rawDelta);
 
   // Sent to the peer once, at the very end of this function, once every
   // way Darla or Miranda might have moved this frame — WASD/click-to-move
@@ -3904,7 +4776,7 @@ function animate() {
   // fetch/cheese/leash commands further down — has had its say.
   let localIsMoving = false;
 
-  if (DEBUG_MODE) updateDebugFly(delta);
+  if (debugFreeFly) updateDebugFly(delta);
 
   if (gameStarted) {
     // Darla chasing Mom down to bite her already works unmodified in
@@ -3918,11 +4790,16 @@ function animate() {
       localIsMoving = updateFlight(delta);
     } else {
       localIsMoving = updateMovement(delta);
+      // The climb owns her position outright for its couple of seconds, the
+      // same way lounging does — the ground-relative math below would drag
+      // her straight back down the ladder every frame.
+      updateClimb(delta);
       // While lounging her position/pose is fixed by enterHammockLounge —
       // the usual walk-cycle/jump-height math would otherwise stomp her y
       // back toward 0 every frame.
-      if (!mirandaLounging) {
+      if (!mirandaLounging && !climbing) {
         const ground = groundHeightAt(player.position.x, player.position.z);
+        beginFallOffRoof();
         beginFallOffRim();
         const airY = updateJump(delta, ground);
         const baseY =
@@ -4110,7 +4987,7 @@ function animate() {
   // than drift toward wherever the player wanders off to.
   // ...and not while she's in the hammock, which parks the camera at her
   // head looking up and wants it left exactly there.
-  if (gameStarted && !flightActive && !DEBUG_MODE && !mirandaLounging) {
+  if (gameStarted && !flightActive && !debugFreeFly && !mirandaLounging) {
     // Aim just above the player's feet, wherever those actually are. This
     // used to be a flat 0.5 — fine on level ground, but with the hill in
     // place that's an absolute world height, so standing on the crown the
@@ -4128,6 +5005,8 @@ function animate() {
   // code) only ever looked right for whichever sprite happened to sit at
   // that exact height, which silently broke the sun once it got its own
   // real direction instead of just reusing the moon's spot in the sky.
+  updateIdleGlows(elapsed);
+
   const skyBob = Math.sin(elapsed * 0.8) * 0.6;
   moonSprite.position.y = MOON_DIRECTION.y * SKY_DISTANCE + skyBob;
   sunSprite.position.y = SUN_DIRECTION.y * SKY_DISTANCE + skyBob;
@@ -4172,7 +5051,7 @@ function animate() {
   // Debug is skipped for the same reason as the other two: updateDebugFly owns
   // camera.position outright now, and .update() would recompute it from
   // OrbitControls' spherical state and drag it straight back to the target.
-  if (!flightActive && !mirandaLounging && !DEBUG_MODE) {
+  if (!flightActive && !mirandaLounging && !debugFreeFly) {
     clampOrbitToGround();
     controls.update();
     // Tilting all the way up rolls the camera in until it's inside the
@@ -4182,9 +5061,27 @@ function animate() {
     // hence staying out of its way here.
     player.visible = camera.position.distanceTo(controls.target) > PLAYER_HIDE_DISTANCE;
   }
+  // There is deliberately no "lift the camera off the roof" step here.
+  //
+  // One was written, at 0.9 m of clearance and then 2.2 m, on the theory
+  // that the camera was burying itself in the shingles. It never fired
+  // once: a probe showed the camera sitting a good five metres *above*
+  // the roof the whole time. The screen was full of shingles for an
+  // unrelated reason — clicking on the roof punched a ray straight
+  // through it to the lawn below, and clampTargetPoint then pushed that
+  // point out of the building's footprint, so every click walked her off
+  // the edge. See marchToRoof in getGroundPoint; fixing the click fixed
+  // the camera, and clampOrbitToGround handles the rest unchanged.
+
   // After controls.update(), so the dome is centred on where the camera
   // actually ended up this frame rather than trailing it by one.
   sky.update(elapsed, camera.position);
+  // The shadow box travels with whoever's being played. In debug the free
+  // camera goes wherever it likes, so it follows that instead — otherwise
+  // flying out to inspect the tree line leaves the shadows behind at
+  // Darla's feet.
+  updateShadowCamera(debugFreeFly ? camera.position : player.position);
+  updateSunGlare();
   composer.render();
 }
 

@@ -928,16 +928,32 @@ export function createMom() {
   group.userData.legs = { legL: legPivots[-1], legR: legPivots[1] };
   group.userData.arms = { armL: armPivots[-1], armR: armPivots[1] };
   group.userData.flicks = flicks;
+  group.userData.lipMat = lipMat;
 
   setMomNight(group, false);
 
   return group;
 }
 
-// Her after-dark face: winged eyeliner. Bare-eyed by day.
+// Her after-dark face: winged eyeliner, and black lipstick in place of the
+// daytime berry.
 //
-// Visibility rather than a swapped material, so the day/night fade can capture
-// the same head both ways and wipe between the two — see transition.js.
+// The eyeliner is done by *visibility* rather than by swapping a material.
+// That was originally so the day/night fade could capture the same head in
+// both states and wipe between the stills; the fade is a drawn portrait now
+// (transition.js), so the constraint is gone — but visibility is still the
+// right call for geometry that simply isn't there by day.
+//
+// The lips are the opposite case: the geometry is the same either way and
+// only the colour changes, so this recolours the shared material. She is the
+// only thing using it.
+//
+// COLORS.lips is the day value; night is near-black with a violet cast
+// rather than pure black, which under her cel shading would flatten into a
+// hole with no form in it at all.
+const LIPS_NIGHT = 0x110a13;
+
 export function setMomNight(group, night) {
   for (const flick of group.userData.flicks ?? []) flick.visible = night;
+  group.userData.lipMat?.color.set(night ? LIPS_NIGHT : COLORS.lips);
 }

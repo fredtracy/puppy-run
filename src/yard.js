@@ -1,6 +1,14 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { createSouthernPine } from './pine.js';
+import {
+  createSouthernPine,
+  buildSouthernPineParts,
+  createPineBarkMaterial,
+  createNeedleAssets,
+  composeTuftMatrix,
+  taperedTube,
+} from './pine.js';
+import { buildBroadleafParts, createLeafAssets } from './broadleaf.js';
 import {
   createHouse,
   isHousePaved,
@@ -42,38 +50,6 @@ function makeSpeckleTexture(base, variance, repeatX, repeatY) {
   // seen nearly edge-on. The renderer clamps this to whatever the GPU
   // actually supports, so it's safe to just ask for the max.
   texture.anisotropy = 16;
-  return texture;
-}
-
-// A blotchy "clumps of leaves" value texture — soft overlapping circles at a
-// few brightness levels, tiled onto the canopy blobs and multiplied by each
-// material's own green tint (see LEAF_MATS below). Cheap to generate once
-// and share across every tree instead of a downloaded photo, which doesn't
-// map cleanly onto a handful of low-poly spheres anyway.
-function makeFoliageTexture() {
-  const size = 256;
-  const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = 'rgb(190,190,190)';
-  ctx.fillRect(0, 0, size, size);
-  for (let i = 0; i < 140; i++) {
-    const x = Math.random() * size;
-    const y = Math.random() * size;
-    const r = 6 + Math.random() * 22;
-    const shade = Math.random() > 0.5 ? 120 + Math.random() * 40 : 210 + Math.random() * 45;
-    ctx.fillStyle = `rgba(${shade},${shade},${shade},${0.35 + Math.random() * 0.35})`;
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(2, 2);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = 8;
   return texture;
 }
 
@@ -222,13 +198,6 @@ function buildYardSign(text) {
   return group;
 }
 
-const foliageTexture = makeFoliageTexture();
-const PINE_MATS = [0x2f5233, 0x386040, 0x264a2c].map(
-  (color) => new THREE.MeshStandardMaterial({ color, map: foliageTexture, roughness: 0.88 })
-);
-const LEAF_MATS = [0x4a7c3f, 0x567f3f, 0x3f6b38, 0x6b8f42].map(
-  (color) => new THREE.MeshStandardMaterial({ color, map: foliageTexture, roughness: 0.85 })
-);
 const barkTextures = loadBarkTextures();
 const TRUNK_MAT = new THREE.MeshStandardMaterial({
   map: barkTextures.map,
@@ -237,61 +206,144 @@ const TRUNK_MAT = new THREE.MeshStandardMaterial({
   roughness: 1,
 });
 
-function createTree(kind, rand = Math.random) {
-  const group = new THREE.Group();
-  const trunkH = kind === 'pine' ? 1.2 + rand() * 0.6 : 0.9 + rand() * 0.4;
-  const trunk = mesh(new THREE.CylinderGeometry(0.08, 0.11, trunkH, 9), TRUNK_MAT);
-  trunk.position.y = trunkH / 2;
-  group.add(trunk);
+// ── the forest's trees ─────────────────────────────────────────────────
+//
+// Real limb geometry, from the same builders as the two hero pines at the
+// road (pine.js) and their deciduous counterpart (broadleaf.js). What used
+// to be here was a cylinder wearing four spheres, or a stack of cones.
+//
+// The thing that makes this affordable is that no tree in the forest is
+// generated. A dozen or so are built once, up front, and every tree in the
+// world is one of those stamped in with its own position, rotation and
+// scale. Generating each one for real is roughly 8ms of curve and Frenet
+// frame maths, which at ~700 trees would be about six seconds — as much
+// again as the entire rest of the load (see notes/load-times.md).
+//
+// The repetition doesn't read, and the reason it doesn't is worth writing
+// down, because "just reuse a few models" sounds like it obviously should:
+// each stamp gets a free yaw, a non-uniform scale and its own foliage tint,
+// and a tree is a silhouette rather than a face — you cannot spot two
+// matching silhouettes at forest density the way you'd instantly spot two
+// identical houses.
+//
+// Everything else about the cost follows from stamping. All the wood in a
+// chunk merges into one mesh per bark material, and all the foliage becomes
+// one InstancedMesh per kind, so a chunk of forty real trees is four draw
+// calls — where forty separate Groups of limbs and clusters would have been
+// several hundred.
+const BROADLEAF_TEMPLATES = 10;
+const PINE_TEMPLATES = 4;
 
-  if (kind === 'pine') {
-    // Each tier gets its own slight color pick and a small horizontal
-    // jitter/rotation so the stack reads as a slightly shaggy conifer
-    // instead of three perfectly concentric cones.
-    for (let i = 0; i < 4; i++) {
-      const r = 0.85 - i * 0.17;
-      const h = 0.95 - i * 0.08;
-      const cone = mesh(
-        new THREE.ConeGeometry(r, h, 10, 1, false),
-        PINE_MATS[Math.floor(rand() * PINE_MATS.length)]
-      );
-      cone.position.set(
-        (rand() - 0.5) * 0.08,
-        trunkH + i * 0.55 + h * 0.4,
-        (rand() - 0.5) * 0.08
-      );
-      cone.rotation.y = rand() * Math.PI * 2;
-      group.add(cone);
-    }
-  } else {
-    // A fuller, more varied canopy: more blobs than before, each with its
-    // own material pick and a slight squash so they read as leaf clumps
-    // rather than perfect spheres.
-    const blobCount = 4 + Math.floor(rand() * 2);
-    for (let i = 0; i < blobCount; i++) {
-      const r = 0.5 + rand() * 0.38;
-      const foliageMat = LEAF_MATS[Math.floor(rand() * LEAF_MATS.length)];
-      const blob = mesh(new THREE.SphereGeometry(r, 10, 8), foliageMat);
-      const scaleY = 0.82 + rand() * 0.25;
-      blob.scale.set(1, scaleY, 1);
-      // The vertical offset is derived from this blob's own (already
-      // rolled) half-height rather than picked independently — otherwise
-      // an unlucky combination (high offset, small/squashed blob) leaves a
-      // gap above the trunk instead of overlapping it.
-      const halfExtent = r * scaleY;
-      const dip = halfExtent * (0.2 + rand() * 0.5);
-      blob.position.set(
-        (rand() - 0.5) * 0.7,
-        trunkH + halfExtent - dip,
-        (rand() - 0.5) * 0.7
-      );
-      group.add(blob);
-    }
+// Deliberately small — this is a yard, and the two hero pines out front are
+// only about 5 m. The old forest trees topped out around 3.5 m, which is
+// shoulder height on a real tree line and part of why the woods read as
+// scenery rather than as woods.
+const FOREST_TREE_HEIGHT = { min: 4.6, max: 8.2 };
+
+// Built on first use rather than at module load: yard.js is imported for
+// terrainHeight and friends by code that never builds a forest, and a
+// couple of hundred milliseconds of curve maths shouldn't happen just
+// because someone imported the module.
+let treeTemplates = null;
+
+function getTreeTemplates() {
+  if (treeTemplates) return treeTemplates;
+  // Fixed seed, so the world's dozen tree shapes are the same every load —
+  // same reason the chunks themselves are seeded.
+  const rand = mulberry32(0x7ee5eed);
+  const lerpHeight = () =>
+    FOREST_TREE_HEIGHT.min + rand() * (FOREST_TREE_HEIGHT.max - FOREST_TREE_HEIGHT.min);
+
+  const broadleaf = [];
+  for (let i = 0; i < BROADLEAF_TEMPLATES; i++) {
+    broadleaf.push(
+      buildBroadleafParts(rand, {
+        height: lerpHeight(),
+        // A couple of multi-stemmed ones in the mix. The three trees on the
+        // left of the owner's photo are crepe myrtles, which are never
+        // single-trunked, and a stand where every tree has exactly one stem
+        // is the sort of wrong you notice without being able to say why.
+        stems: i < 3 ? 2 + (i % 2) : 1,
+        // Crowded trees are drawn up narrow, open-grown ones spread. Mixing
+        // both is what stops the canopy reading as one repeated blob.
+        spread: 0.3 + rand() * 0.22,
+        density: 0.85,
+      })
+    );
   }
 
-  group.rotation.y = rand() * Math.PI * 2;
-  group.scale.setScalar(0.8 + rand() * 0.6);
-  return group;
+  const pine = [];
+  for (let i = 0; i < PINE_TEMPLATES; i++) {
+    pine.push(
+      buildSouthernPineParts(rand, {
+        height: lerpHeight() * 1.05,
+        trunkRadius: 0.2 + rand() * 0.1,
+        spread: 0.26 + rand() * 0.1,
+        whorls: 8,
+        // A forest pine carries about a third of a hero pine's twigs and
+        // needle clusters. Pines were coming out at four times a
+        // broadleaf's triangle count for 30% of the trees, which is the
+        // wrong way round — a whorled conifer has far more limbs than a
+        // recursive broadleaf of the same size, so it needs more cutting,
+        // not less.
+        density: 0.38,
+        detail: 0.5,
+      })
+    );
+  }
+
+  const leafRand = mulberry32(0x1eaf00);
+  treeTemplates = {
+    broadleaf,
+    pine,
+    barkMat: TRUNK_MAT,
+    pineBarkMat: createPineBarkMaterial(mulberry32(0xba4c)),
+    leaves: createLeafAssets(leafRand),
+    needles: createNeedleAssets(mulberry32(0x0ee01e)),
+  };
+  return treeTemplates;
+}
+
+// The spread of greens a single tree's foliage gets tinted to. Applied per
+// tree through instanceColor, so neighbours differ — one flat green across
+// a whole wood is the other half of why the old canopies read as plastic.
+const FOLIAGE_TINTS = [0x8fae74, 0x7f9e66, 0xa2bb84, 0x6f8f5c, 0x93a86e, 0x86a56f].map(
+  (hex) => new THREE.Color(hex)
+);
+
+const UP_AXIS = new THREE.Vector3(0, 1, 0);
+
+// Collapses one kind's worth of stamped trees into two objects: every
+// trunk, limb and twig in the chunk as a single merged mesh, and every
+// foliage cluster as a single InstancedMesh.
+function addTreeMeshes(group, woodGeos, tufts, barkMat, foliageAssets) {
+  if (!woodGeos.length) return;
+
+  const trees = mesh(mergeGeometries(woodGeos), barkMat);
+  group.add(trees);
+  // The clones were only ever a staging buffer for the merge; without this
+  // the world holds a second full copy of every tree's geometry on the GPU.
+  woodGeos.forEach((geo) => geo.dispose());
+
+  if (!tufts.length) return;
+  const instances = new THREE.InstancedMesh(
+    foliageAssets.geometry,
+    foliageAssets.material,
+    tufts.length
+  );
+  for (let i = 0; i < tufts.length; i++) {
+    instances.setMatrixAt(i, tufts[i].matrix);
+    instances.setColorAt(i, tufts[i].tint);
+  }
+  instances.instanceMatrix.needsUpdate = true;
+  if (instances.instanceColor) instances.instanceColor.needsUpdate = true;
+  instances.castShadow = true;
+  instances.receiveShadow = true;
+  // Same reason as the pine's: without a depth material that honours
+  // alphaTest, the shadow pass throws the shadow of a solid box per
+  // cluster and the dappled shade under the canopy turns into dark slabs.
+  instances.customDepthMaterial = foliageAssets.depthMaterial;
+  group.add(instances);
 }
 
 // A small seeded PRNG (mulberry32) so a given chunk always generates the
@@ -349,12 +401,18 @@ const TREE_SPACING = 3.0;
 const OPEN_X_MAX = 16;
 const OPEN_X_NARROW = -19;
 const OPEN_X_WIDE = -21;
+// Hoisted out of inOpenArea so the tree line below can measure distance to
+// the same boundary the clearing is actually cut from, rather than against
+// a second copy of these numbers that would drift the first time one moved.
+const OPEN_Z_MIN = -48;
+const OPEN_Z_MAX = 18;
 const openXMin = (z) => {
   const t = Math.min(1, Math.max(0, (-18 - z) / 8));
   return OPEN_X_NARROW + (OPEN_X_WIDE - OPEN_X_NARROW) * smootherstep(t);
 };
 
-const inOpenArea = (x, z) => x > openXMin(z) && x < OPEN_X_MAX && z > -48 && z < 18;
+const inOpenArea = (x, z) =>
+  x > openXMin(z) && x < OPEN_X_MAX && z > OPEN_Z_MIN && z < OPEN_Z_MAX;
 
 // The straight run of driveway between where the house's own slab stops
 // (HOUSE_DRIVEWAY) and the road.
@@ -503,12 +561,262 @@ function ditchDepthAt(x, z) {
   return DITCH_DEPTH * profile * smootherstep(dx / DITCH_FILL_HALF);
 }
 
+// ── the tree line ──────────────────────────────────────────────────────
+//
+// What reads as "woods" in the owner's photo of the real yard isn't the
+// trees. It's that there is no visible ground behind the mown edge: a
+// solid understory of privet, vine and brush fills the first two or three
+// metres, and past that first metre the inside of the wood goes nearly
+// black. The trees are what you see *above* that mass — they are not what
+// closes the sightline.
+//
+// What this file had was the opposite: well-spaced trunks standing on
+// lawn, grass running underneath them, and clear sky between every one of
+// them out to the fog. Adding more createTree wouldn't have fixed it,
+// because a trunk is mostly empty space at eye level and stacking them
+// only makes a denser colonnade.
+//
+// So the brush is its own layer, separate from the trees and drawn from
+// its own PRNG (see createTreeChunk) so that adding it doesn't reshuffle
+// a forest and a lawn that were already placed. Darla's eye is about a
+// foot off the ground, which is the one break the geometry gets here: the
+// band doesn't have to be tall to be opaque, it has to have no gap
+// underneath.
+
+// How deep the band runs, measured out from the clearing edge. Deep enough
+// that a gap in the front row is backed by two or three more behind it —
+// one row of anything, however tight, still shows daylight at some angle.
+const BRUSH_DEPTH = 4.2;
+// How far the inner edge wanders in and out of that line. The clearing is
+// a box (see inOpenArea); brush planted straight along it would end on the
+// same visible straight edge the trees do and read as a clipped hedge. The
+// real line has bays several metres deep and points that jut out into the
+// mown grass — and it's the negative half of this range, the brush growing
+// *inside* the clearing, that does most of that work.
+const BRUSH_BAY = 2.2;
+// Tighter than it looks, because clumps are ~1 m across and overlap by
+// design. This is the number that decides whether the band is opaque, and
+// it's the one to pull if it isn't. Pulled from 1.15 when the sphere blobs
+// were replaced with leaf clusters — the spheres were solid by
+// construction and leaf cards are not, so the same layout stopped being
+// enough on its own.
+const BRUSH_SPACING = 1.0;
+// Raised from 1.5: at that floor the shortest runs of the band topped out
+// right where a 1.5 m sightline runs, and you could see over them (5 holes
+// in 240 rays at that height, against 1 at Darla's own eye level).
+const BRUSH_MIN_HEIGHT = 1.9;
+const BRUSH_MAX_HEIGHT = 3.1;
+
+// How far outside the clearing a point is, in metres: negative inside, 0 on
+// the boundary, growing into the woods. Ordinary exterior box distance,
+// except the west edge isn't straight so it comes from openXMin(z).
+function woodsDepth(x, z) {
+  const dx = Math.max(openXMin(z) - x, x - OPEN_X_MAX);
+  const dz = Math.max(OPEN_Z_MIN - z, z - OPEN_Z_MAX);
+  return Math.hypot(Math.max(dx, 0), Math.max(dz, 0)) + Math.min(Math.max(dx, dz), 0);
+}
+
+// The wander applied to that boundary. Two octaves rather than one: a
+// single octave gives a smooth rolling edge that still reads as drawn,
+// where the broad-plus-ragged pair gives bays with a fringe on them.
+function brushEdge(x, z) {
+  const broad = valueNoise(x / 11 + 61.3, z / 11 - 24.8);
+  const fine = valueNoise(x / 3.4 - 12.7, z / 3.4 + 88.1);
+  return (broad * 0.7 + fine * 0.3 - 0.5) * 2 * BRUSH_BAY;
+}
+
+// Height varies as a field, not per clump. Rolled independently each clump
+// it comes out as even static at 2 m; as a field the line has genuinely
+// tall thickets and lower runs between them, which is what the photo has.
+function brushHeight(x, z) {
+  const n = valueNoise(x / 9.5 - 40.2, z / 9.5 + 17.6);
+  return BRUSH_MIN_HEIGHT + n * (BRUSH_MAX_HEIGHT - BRUSH_MIN_HEIGHT);
+}
+
+// Deliberately darker and less yellow than FOLIAGE_TINTS. Canopy foliage is
+// lit from above and this isn't — understory sits under everything else.
+const BRUSH_TINTS = [0x5c7a4a, 0x4e6b40, 0x678451, 0x445c38, 0x5a7346].map(
+  (hex) => new THREE.Color(hex)
+);
+
+// Brush stems are the same photographed bark as everything else, knocked
+// well down. They're 2-3 cm thick and mostly buried in leaves, but a
+// full-brightness twig showing through the dark interior of a thicket is
+// exactly the sort of thing the eye picks out.
+const BRUSH_STEM_MAT = new THREE.MeshStandardMaterial({
+  map: barkTextures.map,
+  color: 0x7c7060,
+  roughness: 1,
+});
+
+// The understory's own leaf cluster: smaller leaves, half as many again,
+// and more twigs than the canopy's. See makeLeafClusterTexture — the
+// canopy's job is to be see-through and this one's job is the opposite.
+let brushLeaves = null;
+function getBrushLeaves() {
+  if (!brushLeaves) {
+    // These numbers are a measurement, not a taste call. A leaf card is
+    // mostly empty space, so what decides whether the band is opaque is how
+    // much of one card is solid at alphaTest times how many cards a
+    // sightline crosses. At the canopy's settings a card was 24% solid and
+    // an eye-height ray crossed twelve of them, which leaves 0.76^12 — an
+    // 18% chance of seeing clean through. These take one card to ~45%.
+    brushLeaves = createLeafAssets(mulberry32(0xb0075), {
+      leafCount: 130,
+      leafScale: 0.92,
+      stemCount: 16,
+    });
+  }
+  return brushLeaves;
+}
+
+// One thicket: a handful of thin stems arching up and out from a common
+// root, with leaf clusters strung along them.
+//
+// This replaced a stack of squashed spheres. The spheres were opaque and
+// cheap and that was the whole of their case — they read as exactly what
+// they were, which is the same complaint the old trees had, and standing
+// them next to rebuilt trees made it obvious. Privet and vine tangle isn't
+// a mass with a surface; it's a thousand small leaves at every depth, and
+// the only honest way to get that is to put a thousand small leaves there.
+function addBrushClump(stemGeos, clusters, x, z, groundY, shade, rand) {
+  const clumpHeight = brushHeight(x, z) * (0.85 + rand() * 0.3);
+  const stems = 3 + Math.floor(rand() * 4);
+  const tint = BRUSH_TINTS[Math.floor(rand() * BRUSH_TINTS.length)]
+    .clone()
+    .multiplyScalar(shade);
+
+  for (let s = 0; s < stems; s++) {
+    const az = rand() * Math.PI * 2;
+    // Off vertical. Brush stems lean out hard — that's what makes a thicket
+    // wider than it is tall and lets neighbouring clumps interlock instead
+    // of standing as separate bushes with gaps between them.
+    const lean = 0.3 + rand() * 0.55;
+    const len = clumpHeight * (0.85 + rand() * 0.45);
+    const bx = x + (rand() - 0.5) * 0.35;
+    const bz = z + (rand() - 0.5) * 0.35;
+
+    const segs = 3;
+    const pts = [];
+    for (let i = 0; i <= segs; i++) {
+      const t = i / segs;
+      // Reaches out faster than it climbs, and the tip nods over — an
+      // arching cane, not a straight rod planted at an angle.
+      const out = Math.sin(lean) * len * t ** 1.35;
+      const up = Math.cos(lean) * len * t - len * 0.14 * t * t;
+      pts.push(
+        new THREE.Vector3(bx + Math.cos(az) * out, groundY + up, bz + Math.sin(az) * out)
+      );
+    }
+    const curve = new THREE.CatmullRomCurve3(pts);
+    const r = 0.016 + rand() * 0.016;
+    stemGeos.push(taperedTube(curve, r, r * 0.4, segs, 4));
+
+    const perStem = 3 + Math.floor(rand() * 3);
+    for (let i = 0; i < perStem; i++) {
+      // From very low on the cane, not just the outer end. Daylight
+      // underneath the band is the one gap that matters — Darla's eye is
+      // about a foot off the ground.
+      const t = 0.1 + rand() * 0.9;
+      clusters.push({
+        matrix: composeTuftMatrix(new THREE.Matrix4(), {
+          pos: curve.getPointAt(t),
+          dir: curve.getTangentAt(t),
+          size: 0.34 + rand() * 0.26,
+          roll: rand() * Math.PI * 2,
+        }),
+        tint,
+      });
+    }
+  }
+
+  // A skirt of foliage around the base, placed on the ground rather than
+  // strung on a cane. The canes all converge at the root and arch away
+  // upward, so foliage hung along them is at its thinnest exactly where
+  // they meet the ground — a sightline at 0.3 m crossed twelve leaf cards
+  // where one at 0.8 m crossed twenty. That's the one height that has to be
+  // solid, because it's the height Darla's eye is at.
+  const skirt = 3 + Math.floor(rand() * 3);
+  for (let i = 0; i < skirt; i++) {
+    const a = rand() * Math.PI * 2;
+    const radius = rand() * 0.55;
+    clusters.push({
+      matrix: composeTuftMatrix(new THREE.Matrix4(), {
+        pos: new THREE.Vector3(
+          x + Math.cos(a) * radius,
+          groundY + 0.02 + rand() * 0.2,
+          z + Math.sin(a) * radius
+        ),
+        // Splayed out and up, the way low growth reaches out from under a
+        // thicket rather than standing straight up inside it.
+        dir: new THREE.Vector3(
+          Math.cos(a) * 0.75,
+          0.5 + rand() * 0.6,
+          Math.sin(a) * 0.75
+        ).normalize(),
+        size: 0.34 + rand() * 0.26,
+        roll: rand() * Math.PI * 2,
+      }),
+      tint,
+    });
+  }
+}
+
+function createChunkBrush(cx, cz, rand) {
+  const originX = cx * CHUNK_SIZE;
+  const originZ = cz * CHUNK_SIZE;
+
+  // Cheap early-out for the chunks that can't touch the band at all, which
+  // is most of them — the band is a ring a few metres wide and the world is
+  // a disc. woodsDepth is a distance, so it can't change by more than
+  // roughly the distance travelled; a chunk's centre being further from the
+  // band than the chunk's own half-diagonal (~12.7, rounded up to 16 for
+  // the west edge's slope) means no point in it can reach.
+  const centerDepth = woodsDepth(originX + CHUNK_SIZE / 2, originZ + CHUNK_SIZE / 2);
+  if (Math.abs(centerDepth) > BRUSH_DEPTH + BRUSH_BAY + 16) return null;
+
+  const stemGeos = [];
+  const clusters = [];
+  for (let lx = 0; lx < CHUNK_SIZE; lx += BRUSH_SPACING) {
+    for (let lz = 0; lz < CHUNK_SIZE; lz += BRUSH_SPACING) {
+      const x = originX + lx + (rand() - 0.5) * BRUSH_SPACING * 0.8;
+      const z = originZ + lz + (rand() - 0.5) * BRUSH_SPACING * 0.8;
+      const depth = woodsDepth(x, z) - brushEdge(x, z);
+      if (depth < 0 || depth > BRUSH_DEPTH) continue;
+      // The road punches straight through the wall rather than being
+      // walled off at the property line — it's a county road that carries
+      // on into the woods both ways, and a hole it disappears into reads
+      // better than pavement ending against a hedge.
+      if (inRoad(x, z) || inHouse(x, z)) continue;
+
+      const shade = 1 - 0.6 * smootherstep(depth / BRUSH_DEPTH);
+      addBrushClump(stemGeos, clusters, x, z, terrainHeight(x, z), shade, rand);
+    }
+  }
+
+  if (!stemGeos.length) return null;
+  const group = new THREE.Group();
+  addTreeMeshes(group, stemGeos, clusters, BRUSH_STEM_MAT, getBrushLeaves());
+  return group;
+}
+
 export function createTreeChunk(cx, cz) {
   const group = new THREE.Group();
   const seed = (cx * 374761393 + cz * 668265263) ^ 0x9e3779b9;
   const rand = mulberry32(seed);
   const originX = cx * CHUNK_SIZE;
   const originZ = cz * CHUNK_SIZE;
+
+  const templates = getTreeTemplates();
+  // One bucket of wood geometry and one list of foliage placements per
+  // kind, filled by the loop and collapsed into four objects at the end.
+  const wood = { broadleaf: [], pine: [] };
+  const foliage = { broadleaf: [], pine: [] };
+  const stamp = new THREE.Matrix4();
+  const tuftMatrix = new THREE.Matrix4();
+  const quat = new THREE.Quaternion();
+  const pos = new THREE.Vector3();
+  const scl = new THREE.Vector3();
 
   for (let lx = 0; lx < CHUNK_SIZE; lx += TREE_SPACING) {
     for (let lz = 0; lz < CHUNK_SIZE; lz += TREE_SPACING) {
@@ -517,12 +825,39 @@ export function createTreeChunk(cx, cz) {
       if (inOpenArea(x, z) || inHouse(x, z) || inRoad(x, z)) continue;
       if (rand() < 0.1) continue; // thin out a bit so it reads as a forest, not a wall
 
-      const kind = rand() < 0.3 ? 'pine' : 'round';
-      const tree = createTree(kind, rand);
-      tree.position.set(x, terrainHeight(x, z), z);
-      group.add(tree);
+      const kind = rand() < 0.3 ? 'pine' : 'broadleaf';
+      const pool = templates[kind];
+      const template = pool[Math.floor(rand() * pool.length)];
+
+      // Non-uniform on purpose: scaling height and girth together means two
+      // stamps of the same template are the same tree at two distances, and
+      // the eye reads that. Squashing one and stretching another gives two
+      // trees, from the same 40 KB of geometry.
+      const s = 0.78 + rand() * 0.5;
+      pos.set(x, terrainHeight(x, z), z);
+      quat.setFromAxisAngle(UP_AXIS, rand() * Math.PI * 2);
+      scl.set(s * (0.88 + rand() * 0.26), s, s * (0.88 + rand() * 0.26));
+      stamp.compose(pos, quat, scl);
+
+      wood[kind].push(template.wood.clone().applyMatrix4(stamp));
+
+      const tint = FOLIAGE_TINTS[Math.floor(rand() * FOLIAGE_TINTS.length)];
+      for (const tuft of template.tufts) {
+        composeTuftMatrix(tuftMatrix, tuft).premultiply(stamp);
+        foliage[kind].push({ matrix: tuftMatrix.clone(), tint });
+      }
     }
   }
+
+  addTreeMeshes(group, wood.broadleaf, foliage.broadleaf, templates.barkMat, templates.leaves);
+  addTreeMeshes(group, wood.pine, foliage.pine, templates.pineBarkMat, templates.needles);
+
+  // Its own stream, not the chunk's shared `rand`. Drawing brush from that
+  // one would shift every subsequent draw and re-roll the entire forest and
+  // lawn — deterministic still, but a different world than the one that was
+  // tuned.
+  const brush = createChunkBrush(cx, cz, mulberry32(seed ^ 0x5bf03635));
+  if (brush) group.add(brush);
 
   const grass = createChunkGrass(cx, cz, rand);
   if (grass) group.add(grass);
@@ -1308,33 +1643,60 @@ function makeStripeTexture(colorA, colorB) {
   return texture;
 }
 
-// A round tree with a fixed (not randomized) trunk height, so the hammock
-// fabric can be attached at a reliably known point.
+// The hammock's two trees. Same builder as the forest's broadleaves, but
+// these get built for real rather than stamped from a template — there are
+// two of them, they stand in the middle of the yard where they're looked at
+// closely, and the hammock has to attach at a known point.
+//
+// `forkAt` is what pins that point: the trunk hands over to its leaders at
+// height * forkAt, so working backwards from the 1.1 m the fabric wants
+// fixes the tree's overall height. That's why the number is derived here
+// instead of picked.
+const HAMMOCK_ATTACH_HEIGHT = 1.1;
+// Sets the tree's overall height, since the fork has to land at hammock
+// height: 1.1 / 0.25 is a 4.4 m tree.
+//
+// Do not "fix" the camera starting inside these by lowering this. It looks
+// like it should work — a lower fork means a taller tree — and it does the
+// opposite, because the crown runs from the fork to the top. At 0.25 the
+// crown is 1.1 m to 4.4 m and the 4.5 m spawn camera clears it by a
+// whisker; at 0.16 it's 1.1 m to 6.9 m and the camera is squarely inside
+// it. Tried, measured, reverted.
+const HAMMOCK_FORK_AT = 0.25;
+
 function createHammockTree() {
   const group = new THREE.Group();
-  const trunkH = 1.1;
-  const trunk = mesh(new THREE.CylinderGeometry(0.09, 0.12, trunkH, 9), TRUNK_MAT);
-  trunk.position.y = trunkH / 2;
-  group.add(trunk);
+  const templates = getTreeTemplates();
+  const rand = mulberry32(0x4a3b17 + Math.floor(Math.random() * 1e6));
+  const parts = buildBroadleafParts(rand, {
+    height: HAMMOCK_ATTACH_HEIGHT / HAMMOCK_FORK_AT,
+    forkAt: HAMMOCK_FORK_AT,
+    // Open-grown, so it spreads — these stand alone on mown lawn rather
+    // than being drawn up narrow by a stand around them.
+    spread: 0.52,
+  });
 
-  const blobCount = 5;
-  for (let i = 0; i < blobCount; i++) {
-    const r = 0.5 + Math.random() * 0.38;
-    const foliageMat = LEAF_MATS[Math.floor(Math.random() * LEAF_MATS.length)];
-    const blob = mesh(new THREE.SphereGeometry(r, 10, 8), foliageMat);
-    const scaleY = 0.82 + Math.random() * 0.25;
-    blob.scale.set(1, scaleY, 1);
-    const halfExtent = r * scaleY;
-    const dip = halfExtent * (0.2 + Math.random() * 0.5);
-    blob.position.set(
-      (Math.random() - 0.5) * 0.7,
-      trunkH + halfExtent - dip,
-      (Math.random() - 0.5) * 0.7
-    );
-    group.add(blob);
-  }
+  const wood = mesh(parts.wood, templates.barkMat);
+  group.add(wood);
 
-  group.userData.trunkHeight = trunkH;
+  const instances = new THREE.InstancedMesh(
+    templates.leaves.geometry,
+    templates.leaves.material,
+    parts.tufts.length
+  );
+  const m = new THREE.Matrix4();
+  const tint = FOLIAGE_TINTS[Math.floor(Math.random() * FOLIAGE_TINTS.length)];
+  parts.tufts.forEach((tuft, i) => {
+    instances.setMatrixAt(i, composeTuftMatrix(m, tuft));
+    instances.setColorAt(i, tint);
+  });
+  instances.instanceMatrix.needsUpdate = true;
+  if (instances.instanceColor) instances.instanceColor.needsUpdate = true;
+  instances.castShadow = true;
+  instances.customDepthMaterial = templates.leaves.depthMaterial;
+  group.add(instances);
+
+  group.userData.trunkHeight = HAMMOCK_ATTACH_HEIGHT;
   return group;
 }
 
@@ -1478,6 +1840,30 @@ export function terrainHeight(x, z) {
 const LAWN_SIZE = 120;
 const LAWN_SEGMENTS = 200;
 
+// How much light reaches the ground at a point, 1 in the open and near
+// nothing under the wood.
+//
+// The tree line can be perfectly opaque and the woods still give themselves
+// away the moment the camera lifts: you look down over the brush onto a
+// forest floor lit exactly like mown lawn, and bright even ground behind a
+// dark wall reads as a painted backdrop. A real canopy takes something like
+// nine tenths of the light, and that contrast is most of what makes a wood
+// look deep from outside it.
+//
+// This can't come from the actual shadow pass — the shadow camera is a 28 m
+// box that follows Darla (see sunMoonLight in main.js), so the woods across
+// the yard are outside it and always will be. It's baked into the ground
+// instead, which is free and doesn't care how far away it is.
+//
+// Starts just inside the clearing rather than exactly on the boundary,
+// because the trees overhang the edge — a tree line whose shade begins on
+// the same line its trunks do reads as a wall with a spotlight at its foot.
+const CANOPY_SHADE_FLOOR = 0.2;
+function canopyShade(x, z) {
+  const t = Math.min(1, Math.max(0, (woodsDepth(x, z) + 1.6) / 6));
+  return 1 - (1 - CANOPY_SHADE_FLOOR) * smootherstep(t);
+}
+
 function createLawn() {
   // No normalMap/roughnessMap here — those came from the old photo
   // texture, and painted-on strokes don't have a matching bump/gloss
@@ -1491,11 +1877,19 @@ function createLawn() {
   // a vertex's world Z is minus its local y — hence the sign flip when
   // sampling.
   const pos = geo.attributes.position;
+  const shade = new Float32Array(pos.count * 3);
   for (let i = 0; i < pos.count; i++) {
     const worldX = pos.getX(i);
     const worldZ = -pos.getY(i);
     pos.setZ(i, terrainHeight(worldX, worldZ));
+    // Vertices sit 0.6 m apart on a 6 m ramp, so this resolves the gradient
+    // ten times over — no need for a finer mesh to carry it.
+    const k = canopyShade(worldX, worldZ);
+    shade[i * 3] = k;
+    shade[i * 3 + 1] = k;
+    shade[i * 3 + 2] = k;
   }
+  geo.setAttribute('color', new THREE.BufferAttribute(shade, 3));
   geo.computeVertexNormals();
 
   const ground = new THREE.Mesh(
@@ -1503,6 +1897,7 @@ function createLawn() {
     new THREE.MeshStandardMaterial({
       map,
       color: 0x8fcf72,
+      vertexColors: true,
       roughness: 1,
     })
   );
@@ -1780,15 +2175,46 @@ function createLushGrassMaterial(species, palette) {
       uFireColor: { value: new THREE.Color(0xff8a3d) },
       uFireIntensity: { value: 0 },
       uFireRange: { value: 6.5 },
+      // Shadows, sampled by hand for the same reason the lighting is: this
+      // is a raw ShaderMaterial, so Three's shadow plumbing passes it by
+      // entirely. Without these the trees threw shade onto the lawn *mesh*
+      // and every blade standing on top of it stayed in full sun, which
+      // hides the effect exactly where the ground is most visible.
+      //
+      // Fed from main.js each frame (setGrassShadow) out of the same
+      // DirectionalLight everything else shadows from, so grass shade and
+      // house shade are the same shadow map and cannot disagree.
+      uShadowMap: { value: null },
+      uShadowMatrix: { value: new THREE.Matrix4() },
+      uShadowTexel: { value: 1 / 2048 },
+      uShadowBias: { value: -0.0006 },
+      // Starts at zero and stays there until the map exists — the sampler
+      // is branched out entirely while it's 0, so the first frames don't
+      // read an unbound texture.
+      uShadowStrength: { value: 0 },
+      // Moonlight rim on the blade tips. Zero by day.
+      uMoonGlow: { value: 0 },
+      uMoonColor: { value: new THREE.Color(0x9fd8e8) },
     },
     vertexShader: `
       attribute float instanceRandom;
+      // How much daylight reaches this blade — see canopyShade. Baked per
+      // blade in JS rather than recomputed here, because the clearing's
+      // boundary is a real piece of geometry (openXMin, woodsDepth) and a
+      // second copy of it in GLSL is a copy that drifts.
+      attribute float instanceShade;
       uniform float uTime;
       uniform float uAngPerPx;
       uniform float uMinBladePx;
+      uniform mat4 uShadowMatrix;
+      // highp deliberately: a shadow depth compared at mediump bands badly
+      // across a 68 m map, and the artefact looks like stripes of shade
+      // lying across the lawn.
+      varying highp vec4 vShadowCoord;
       varying float vHeightT;
       varying float vRandom;
       varying float vFogDepth;
+      varying float vShade;
       varying vec3 vNormalW;
       varying vec3 vWorldPos;
 
@@ -1796,6 +2222,7 @@ function createLushGrassMaterial(species, palette) {
         float t = position.y / ${bladeHeight.toFixed(3)};
         vHeightT = t;
         vRandom = instanceRandom;
+        vShade = instanceShade;
         vNormalW = normalize(mat3(instanceMatrix) * normal);
 
         // Same angular width floor as the lawn blade — see the comment
@@ -1858,6 +2285,12 @@ function createLushGrassMaterial(species, palette) {
 
         vec4 worldPos = modelMatrix * restPos;
         vWorldPos = worldPos.xyz;
+        // Offset along the normal before projecting into the shadow map —
+        // the same trick as DirectionalLight.shadow.normalBias, and it earns
+        // its keep here more than anywhere: a blade is a thin double-sided
+        // sliver whose normal swings through most of a hemisphere, which is
+        // the worst possible case for a flat depth bias.
+        vShadowCoord = uShadowMatrix * vec4(worldPos.xyz + vNormalW * 0.04, 1.0);
 
         vec4 mvPosition = modelViewMatrix * restPos;
         vFogDepth = -mvPosition.z;
@@ -1865,13 +2298,48 @@ function createLushGrassMaterial(species, palette) {
       }
     `,
     fragmentShader: `
-      precision mediump float;
+      // highp, where this was mediump. Shadow depth arrives packed across
+      // an RGBA8 texel and has to be unpacked to a float — at mediump's
+      // ten-bit mantissa that quantises into visible bands of shade lying
+      // across the lawn. Three's own materials run highp by default (it's
+      // the renderer's default precision), so this only brings the grass in
+      // line with everything else it stands next to.
+      precision highp float;
+      ${THREE.ShaderChunk.packing}
       varying float vHeightT;
       varying float vRandom;
       varying float vFogDepth;
+      varying float vShade;
+      varying highp vec4 vShadowCoord;
       varying vec3 vNormalW;
       varying vec3 vWorldPos;
+      uniform highp sampler2D uShadowMap;
+      uniform float uShadowTexel;
+      uniform float uShadowBias;
+      uniform float uShadowStrength;
+      uniform float uMoonGlow;
+      uniform vec3 uMoonColor;
       uniform vec3 fogColor;
+
+      // 1 lit, 0 fully shadowed. Three-by-three PCF — one tap gives hard
+      // aliased edges on branch shadows, which is the one shape where a
+      // stair-stepped outline is unmistakable.
+      float shadowMask() {
+        highp vec3 c = vShadowCoord.xyz / vShadowCoord.w;
+        // Outside the map is lit, not dark. Getting this backwards puts the
+        // whole world beyond the shadow box in shade.
+        if (c.x < 0.0 || c.x > 1.0 || c.y < 0.0 || c.y > 1.0 || c.z > 1.0) return 1.0;
+        c.z += uShadowBias;
+        float sum = 0.0;
+        for (int y = -1; y <= 1; y++) {
+          for (int x = -1; x <= 1; x++) {
+            vec2 uv = c.xy + vec2(float(x), float(y)) * uShadowTexel;
+            sum += step(c.z, unpackRGBAToDepth(texture2D(uShadowMap, uv)));
+          }
+        }
+        return sum / 9.0;
+      }
+
       uniform float fogNear;
       uniform float fogFar;
       uniform vec3 uLightDir;
@@ -1985,10 +2453,45 @@ function createLushGrassMaterial(species, palette) {
         // distance instead of resolving into shapes.
         color *= 0.85 + vRandom * 0.3;
 
+        // Cast shade from whichever of the sun or moon is up, off the same
+        // shadow map the house and the trees use. Applied after all the
+        // direct-light terms above rather than before, so a blade standing
+        // in a tree's shadow loses its highlight and its back-scatter
+        // together — light coming *through* a blade needs light to reach it
+        // first, and shading only the diffuse term left blades glowing
+        // green inside the shadow of the thing lighting them.
+        if (uShadowStrength > 0.001) {
+          color *= mix(1.0 - uShadowStrength, 1.0, shadowMask());
+        }
+
+        // Canopy shade, for the same reason and by the same numbers as the
+        // ground mesh underneath (see canopyShade). Before this, culling the
+        // ground to near-black under the wood just left the sparse blades
+        // out there glowing on top of it.
+        color *= vShade;
+
         // The whole reason the lawn glowed after dark: every term above is
         // baked daylight, so without this the grass stayed at noon while the
         // rest of the scene went dark around it.
         color *= uLightColor;
+
+        // Moonlight rim. Added after the day/night tint, like the firelight
+        // below and for the same reason: it's its own source, so it
+        // shouldn't be dimmed by the night tint that exists to darken
+        // *daylight*.
+        //
+        // Two terms multiplied together, and both matter. The (1 - ndl)
+        // puts it on blades presenting an edge to the moon rather than a
+        // face, which is what a rim light is — lighting the faces instead
+        // just makes the lawn brighter. And vHeightT^3 keeps it in the top
+        // fraction of each blade, so it reads as a catchlight running along
+        // the top of the sward instead of the whole field fluorescing.
+        if (uMoonGlow > 0.001) {
+          float rim = (1.0 - ndl) * pow(vHeightT, 3.0);
+          // Shaded grass shouldn't catch the moon either — the same shadow
+          // mask the direct light uses, so a blade under a tree stays dark.
+          color += uMoonColor * rim * uMoonGlow * vShade;
+        }
 
         // Firelight, added *after* the day/night tint rather than before —
         // the fire is its own source, so it shouldn't be dimmed by how dark
@@ -2046,6 +2549,36 @@ export function setGrassLight(direction, color, backScatter) {
     m.uniforms.uLightDir.value.copy(direction).normalize();
     m.uniforms.uLightColor.value.set(color);
     m.uniforms.uBackScatter.value = backScatter;
+  });
+}
+
+// The moonlight rim — a cool catchlight along the blade tips. Its own
+// setter rather than another argument to setGrassLight, because it is only
+// ever non-zero in one of the two modes and reads better as its own thing.
+export function setGrassMoonGlow(strength, color) {
+  grassMaterials.forEach((m) => {
+    m.uniforms.uMoonGlow.value = strength;
+    m.uniforms.uMoonColor.value.set(color);
+  });
+}
+
+// The shadow map, and the world-to-shadow matrix that goes with it, taken
+// straight off the scene's DirectionalLight. Called every frame, because
+// the shadow box travels with the player and both change as it moves.
+//
+// `strength` is how dark full shadow gets, and it's per-mode: a hard-edged
+// tree shadow that reads well under the sun is far too heavy under a moon.
+export function setGrassShadow(map, matrix, strength) {
+  grassMaterials.forEach((m) => {
+    m.uniforms.uShadowMap.value = map;
+    if (map) {
+      m.uniforms.uShadowMatrix.value.copy(matrix);
+      m.uniforms.uShadowTexel.value = 1 / (map.image?.width || 2048);
+    }
+    // Zero while there's no map, which branches the sampler out of the
+    // shader entirely rather than reading an unbound texture on the first
+    // frames.
+    m.uniforms.uShadowStrength.value = map ? strength : 0;
   });
 }
 
@@ -2248,6 +2781,7 @@ function buildGrassMesh(speciesKey, entries, rand) {
   const geometry = createBladeGeometry(profile);
   const field = new THREE.InstancedMesh(geometry, GRASS_MATERIALS[speciesKey], entries.length);
   const instanceRandom = new Float32Array(entries.length);
+  const instanceShade = new Float32Array(entries.length);
   const matrices = field.instanceMatrix.array;
   const lean = profile.lean;
   const tiltBase = profile.tiltBase ?? 0;
@@ -2293,8 +2827,14 @@ function buildGrassMesh(speciesKey, entries, rand) {
     const scale = (profile.scaleMin + rand() * profile.scaleRange) * (0.72 + vigour * 0.28);
     writeInstanceMatrix(matrices, i, x, terrainHeight(x, z) + lift, z, rx, ry, rz, scale);
     instanceRandom[i] = rand();
+    // Not a rand() draw, deliberately — it's a pure function of position.
+    // The rand() call order in this loop is load-bearing (see above), so
+    // anything added here that consumed the stream would reshuffle the
+    // entire lawn.
+    instanceShade[i] = canopyShade(x, z);
   });
   geometry.setAttribute('instanceRandom', new THREE.InstancedBufferAttribute(instanceRandom, 1));
+  geometry.setAttribute('instanceShade', new THREE.InstancedBufferAttribute(instanceShade, 1));
   field.instanceMatrix.needsUpdate = true;
   return field;
 }
@@ -2914,6 +3454,9 @@ export function createYard() {
   // Handed up so main.js's day/night toggle can switch the porch and garage
   // lamps on after dark (see createHouse).
   group.userData.nightLights = house.userData.nightLights;
+  // Passed straight through for the same reason as the lights: main.js owns
+  // the click-to-climb and the glow, and needs the object to raycast.
+  group.userData.ladder = house.userData.ladder;
 
   // "FORT DARLA" — staked in the front lawn beside the walk rather than
   // hung on the house, and clear of the walk's outer edge so it reads as
