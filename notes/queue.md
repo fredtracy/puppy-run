@@ -44,77 +44,46 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       check above is arithmetic. The water *material* especially — a flat
       translucent standard material — is a placeholder that wants a real look.
 
-- [ ] **Optimize — 30fps even on low quality.** Reported 2026-07-30, and the
-      "even on low" is the whole clue: low is ~19.5% of high's blade count
-      (spacing 0.068 vs 0.03, and count goes as 1/spacing²), so if that barely
-      moves the needle then **grass is not the bottleneck** and every previous
-      optimisation instinct on this project points the wrong way.
+- [ ] **Optimize - 30fps even on low quality.** Reported 2026-07-30.
+      **Could not be reproduced 2026-07-31**, and the measurements say there is
+      currently nothing wrong. Left open only until the owner confirms against
+      their own normal-play window.
 
-      What changed the same day, in rough order of suspicion:
+      Measured properly this time: pane visible, GPU warm, `gameDebug.benchRender`
+      driving the composer with `gl.finish()`. Budget for 60fps is 16.7 ms.
 
-      1. **The forest is now ~1.1M triangles of real branch geometry** where it
-         used to be ~40k of cones and spheres, and all of it casts shadows —
-         so the shadow pass draws it a second time. `castShadow` on the merged
-         per-chunk tree meshes is the single biggest lever to test first, and
-         it's one line.
-      2. **The shadow map went from a 28 m box to 68 m** on the same 2048 map,
-         so far more geometry falls inside the frustum every frame.
-      3. **108k instanced foliage clusters** with `alphaTest`, which forces
-         per-fragment discard and defeats early-Z.
-      4. The grass fragment shader went `mediump` → `highp`, and now also does
-         a 3×3 PCF shadow lookup per fragment. On the most-covered surface in
-         the scene.
+      | view | ms | calls | tris |
+      |---|---|---|---|
+      | mid-yard facing house (worst) | 7.7 | 458 | 10.2 M |
+      | on the roof | 6.6 | 487 | 9.2 M |
+      | mid-yard facing woods | 5.8 | 410 | 7.4 M |
+      | at the pond | 3.6 | 326 | 3.8 M |
+      | inside the woods | 3.0 | 334 | 4.0 M |
+      | front, across the road | 2.7 | 309 | 1.9 M |
 
-      Measure before tuning (see the roof-camera item below for why that
-      sentence is in here). A DevTools GPU capture would settle it faster
-      than any amount of guessing.
+      **Worst case is 7.7 ms against 16.7 - better than 2x headroom.** The
+      on-screen counter reads 60/59 in every view.
 
-      **First measurement, 2026-07-30, and it rules grass out.** The debug
-      quality buttons now thin the lawn live (`setGrassDensity`). Going from
-      100% to 19% of blades — the same blade count a real `low` load builds —
-      moved the frame rate **not at all**: 60 avg / 59 low before, 60 / 59
-      after, same view, same session. Whatever is costing frames, it is not
-      the number of blades.
+      **Resolution is nearly free.** 16x the pixels (197k to 3.16M, pixelRatio
+      0.75 to 3.0) moved the frame from 3.9 to 4.5 ms. So it is *not*
+      fill-bound: not grass overdraw, not the alpha-tested foliage, not the
+      post chain. Every fill-rate theory in the original filing is dead.
 
-      **Second pass, 2026-07-31, with real instrumentation**
-      (`gameDebug.benchRender` — drives the composer directly and calls
-      `gl.finish()`, so it measures GPU work rather than command submission,
-      and works with the page backgrounded where rAF sampling can't).
+      **Grass costs about 30%,** which corrects the earlier "grass is not the
+      bottleneck": 100% to 0% density takes the worst view from 7.7 to ~5.4 ms,
+      and 10.2M triangles to 2.0M. Real, but not what stands between anyone
+      and 60fps.
 
-      Counts are solid — they're CPU-side and don't care about throttling:
+      **Most likely explanation for the original report:** the GPU idles at
+      149 MHz against a 2100 MHz maximum and only ramps under sustained load.
+      Any reading taken while the browser pane was backgrounded, unfocused, or
+      behind a slept display was measuring a downclocked card - exactly the
+      condition that caused the rest of 2026-07-31's confusion.
 
-      | | draw calls | triangles |
-      |---|---|---|
-      | baseline, mid-yard | 474 | 10.45 M |
-      | grass hidden | 409 | 2.29 M |
-      | shadows off | 154 | 8.71 M |
-      | shadow box ±16 instead of ±34 | 384 | — |
-
-      Three things fall out:
-
-      1. **Grass is 78% of all triangles** (8.17 M of 10.45 M) and hiding it
-         barely moves the clock. The game is not triangle-bound. That is the
-         second independent result saying leave the grass alone.
-      2. **The shadow pass is 320 of the 474 draw calls** and re-renders the
-         woods. It is the largest single structural cost in the frame.
-         `SHADOW_HALF_EXTENT` is now 26 (was 34) on the back of this — worth
-         ~50 calls.
-      3. Post-processing is ~0.1-0.3 ms of ~2 ms. Not the problem.
-
-      **What is NOT established, and don't trust it until it is:** any of the
-      timings. The baseline read 3.8, 2.1 and 1.9 ms across three runs of the
-      same scene, and the browser pane was hidden throughout (GPU throttled,
-      drawing buffer only 1014×918). At that size the whole frame renders in
-      ~2 ms here, against the ~33 ms the owner is seeing — a 15x gap that
-      geometry at the same resolution cannot explain. So either their GPU is
-      much weaker, or the cost is resolution-dependent in a way this pane
-      never exercises.
-
-      **Next step, and it needs the pane visible:** re-run `benchRender` at
-      the owner's real window size, then bisect fill-rate suspects — grass
-      overdraw, the alpha-tested foliage, the post chain — by resolution
-      rather than by object count. Cutting `renderer.setPixelRatio` in half
-      is the fastest single test of "is this fill-bound at all".
+      **To close this:** open the game in a normal window, play for a minute,
+      read the debug counter. 60 means done. 30 means there is a real
+      difference between that window and the preview pane worth chasing -
+      start by comparing `benchRender` in both.
 
 - [x] **Chimney and hammock both have collision.** Chimney:
       `HOUSE_CHIMNEY` + `pushOutOfChimney`, deliberately outside

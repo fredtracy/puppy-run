@@ -319,6 +319,26 @@ if (DEBUG_MODE) {
     renderer,
     scene,
     camera,
+    // No `composer` property here, deliberately. It's a `const` declared
+    // about 1,300 lines further down, so naming it in this object literal
+    // reads it at construction time and throws a temporal-dead-zone
+    // ReferenceError — which kills the module mid-load and shows up only
+    // as a loading screen that never finishes with the debug panel
+    // already drawn on top of it. Third time today. benchRender below
+    // refers to `composer` inside a function body, which is fine: that
+    // isn't evaluated until it's called.
+    //
+    // Re-exported rather than left to be imported from the console.
+    //
+    // `await import('/puppy-run/src/yard.js')` in devtools can hand back a
+    // *different module instance* from the one the game is running —
+    // different Vite query string, separate module registry entry — and
+    // that copy has never built a world, so its grassFields array is
+    // empty and setGrassDensity silently does nothing. It looks exactly
+    // like a working call: no error, and a measurement that says grass
+    // density has no effect on frame time. It cost a wrong conclusion
+    // once already.
+    setGrassDensity,
     // Render cost, measured by driving the composer directly rather than
     // by watching frames go by.
     //
