@@ -1609,10 +1609,17 @@ const BACK_WALK = {
   zMax: BACK_WALK_Z1,
 };
 
+// The walk ring, whose slabs have rounded corners — so the mask has to
+// round its corners too, with the same radius and the same clamp.
+//
+// This is why the grass went missing at the outside corners of the walk.
+// Rounding the concrete (roundedSlab) left the mask as plain rectangles, so
+// at every corner a chunk of about (1 - pi/4) * r^2 — over a square metre at
+// this radius — was being reported as paved with no concrete actually on it.
+// Grass dutifully stayed off it, and the result was bare ground.
+const ROUNDED_FLATWORK = [...PERIMETER, BACK_WALK].map(toWorld);
+
 const FLATWORK = [
-  // the walk that rings the whole building
-  ...PERIMETER.map(toWorld),
-  toWorld(BACK_WALK),
   // the covered patio's own slab, inside the building outline
   toWorld({ xMin: PORCH.xMin, xMax: PORCH.xMax, zMin: PORCH_BACK_Z, zMax: HALF_D }),
   // driveway out to where yard.js picks it up
@@ -1630,6 +1637,27 @@ const FLATWORK = [
 ];
 
 const inBox = (x, z, b) => x > b.xMin && x < b.xMax && z > b.zMin && z < b.zMax;
+
+// Point-in-rounded-rectangle, matching roundedSlab's geometry exactly —
+// including its radius clamp, so narrow slabs degrade to stadium ends here
+// the same way they do in the mesh. A rounded rect is the union of two
+// crosswise rectangles and four corner discs, which is cheaper and more
+// obvious than an inset-and-distance formulation.
+const inRoundedBox = (x, z, b) => {
+  const w = b.xMax - b.xMin;
+  const d = b.zMax - b.zMin;
+  const r = Math.max(0.01, Math.min(WALK_CORNER_R, w / 2 - 0.001, d / 2 - 0.001));
+  if (x <= b.xMin || x >= b.xMax || z <= b.zMin || z >= b.zMax) return false;
+  // The cross: everything except the four corner squares. Both bounds, not
+  // either — a point only escapes the corner squares by being inside the
+  // full span of one axis.
+  if (x >= b.xMin + r && x <= b.xMax - r) return true;
+  if (z >= b.zMin + r && z <= b.zMax - r) return true;
+  // In a corner square, so it only counts inside the fillet.
+  const cx = x < b.xMin + r ? b.xMin + r : b.xMax - r;
+  const cz = z < b.zMin + r ? b.zMin + r : b.zMax - r;
+  return Math.hypot(x - cx, z - cz) < r;
+};
 
 // Bed and front walk together, as one polygon in world coordinates.
 //
@@ -1672,6 +1700,7 @@ export function isHousePaved(x, z) {
   return (
     HOUSE_SOLIDS.some((b) => inBox(x, z, b))
     || FLATWORK.some((b) => inBox(x, z, b))
+    || ROUNDED_FLATWORK.some((b) => inRoundedBox(x, z, b))
     || inFrontPaved(x, z)
   );
 }
@@ -2310,10 +2339,25 @@ export function createHouse() {
   // light as a continuous darker band down both edges of the driveway and
   // read as a raised concrete curb, which no part of this property has.
   const SLAB = 0.05;
-  const slab = (b, y = SLAB / 2, t = SLAB) => place(
-    concreteBox(b.xMax - b.xMin, t, b.zMax - b.zMin),
-    (b.xMin + b.xMax) / 2, y, (b.zMin + b.zMax) / 2
-  );
+
+  // Every piece of flatwork tops out at exactly SLAB, and the pieces overlap
+  // each other by design — the ring is built as one dilated slab per mass
+  // precisely so that neighbours run into one another instead of leaving
+  // notches. Overlapping surfaces at an identical height are coplanar, and
+  // coplanar faces z-fight: the depth test has no basis to choose between
+  // them, so which one wins is decided per pixel and flips as the camera
+  // moves. That's the flicker, and it's why it reads as one layer of
+  // sidewalk with another just under it — because that is literally what it
+  // is.
+  //
+  // So each piece is laid a hair higher than the last. A millimetre is far
+  // more than the depth buffer needs to separate them at any distance the
+  // walk is actually looked at, and far less than a pixel covers, so the
+  // steps can't be seen. The running total stays under the entry stoop's
+  // 2 cm, which has to remain the highest thing here.
+  const SLAB_LIFT = 0.001;
+  let slabsPlaced = 0;
+  const nextLift = () => slabsPlaced++ * SLAB_LIFT;
 
   // Same slab, but with its corners rounded off.
   //
@@ -2364,7 +2408,7 @@ export function createHouse() {
     }
     return place(
       mesh(geo, CONCRETE_MAT),
-      (b.xMin + b.xMax) / 2, y - t / 2, (b.zMin + b.zMax) / 2
+      (b.xMin + b.xMax) / 2, y - t / 2 + nextLift(), (b.zMin + b.zMax) / 2
     );
   };
 
@@ -2386,7 +2430,7 @@ export function createHouse() {
   const driveLen = GARAGE_FRONT_Z - DRIVEWAY_END_Z;
   group.add(place(
     concreteBox(GARAGE_W + WALK_W * 2, SLAB, driveLen),
-    GARAGE_CX, SLAB / 2, GARAGE_FRONT_Z - driveLen / 2
+    GARAGE_CX, SLAB / 2 + nextLift(), GARAGE_FRONT_Z - driveLen / 2
   ));
   // The planting bed, and the walk that runs *outside* it.
   //
@@ -2457,7 +2501,10 @@ export function createHouse() {
     }
     const m = mesh(geo, CONCRETE_MAT);
     m.rotation.x = -Math.PI / 2;
-    group.add(place(m, 0, SLAB, 0));
+    // Laid last, so it sits on top of the perimeter walk it runs into rather
+    // than fighting it — this is the piece in front of the door, which is
+    // where the flicker was most visible.
+    group.add(place(m, 0, SLAB + nextLift(), 0));
   }
   // Entry stoop, joining the walk to the recessed front door, and running
   // the whole depth of the alcove as the real one does.
