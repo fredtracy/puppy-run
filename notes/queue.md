@@ -7,6 +7,58 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
 
 ## Open
 
+- [ ] **Calling Darla still walks her through the fire pit.** Reported
+      2026-07-31, after the 2026-07-30 fix that claimed to close it. That fix
+      was committed **unverified** (the pane was hidden, so her AI couldn't be
+      driven) and it does not work.
+
+      **Diagnosed, not yet fixed.** Calling her sets `darlaFetchState =
+      'returning'`, so she goes through `updateDarlaFetch` — which *is* one of
+      the three paths the push-out was added after, so the wiring is right.
+      The bug is the exemption: the push-out is skipped when
+      `insideFirePit(darla.position)` is true, and she can **tunnel into that
+      state in a single frame**. `FIRE_PIT_INSIDE` is only 0.08 smaller than
+      `FIRE_PIT_CLEARANCE`, and at her run speed one frame at 60fps carries
+      her about 0.083 m — so she steps from just outside the blocked radius to
+      inside the "already in, leave her alone" radius in one move, is exempted
+      from then on, and strolls through the fire.
+
+      This is the same hysteresis gap that's written up in the Done section
+      for the *player*, where 0.08 was chosen to stop a boundary point
+      re-measuring as inside. It is big enough for that and far too small to
+      survive a moving character.
+
+      **Fix:** drop the already-inside exemption for her commanded paths
+      entirely. It exists so a player who jumped in can walk out — Darla
+      never legitimately starts inside during fetch/cheese/leash, so she
+      should be pushed out unconditionally. Keep the airborne exemption.
+
+- [ ] **"Everywhere walkable" isn't, and the reason is that the map has no
+      corners.** Reported 2026-07-31: can't reach the corner of the map.
+
+      The world is a **disc**, not a square. `clampToWorldRadius` pulls the
+      player back to a circle of radius `MOVEMENT_RADIUS` (now 54), and
+      generation is a disc of `WORLD_RADIUS` 55 — so the far corners of what
+      looks like a square map simply do not exist. Raising the clamp cannot
+      fix this; there is nothing out there to stand on.
+
+      Two honest options, and they cost very differently:
+
+      1. **Square the world.** Generate to a box rather than a radius and
+         clamp to the box. Corners at radius 55*sqrt(2) = 78 means roughly
+         *twice* the generated area, and grass is ~97% of world-build time —
+         so expect the load to go from ~6s to well over 10s unless density
+         falls off much harder with distance.
+      2. **Make the disc read as the intended shape** — fog, a treeline or
+         terrain that closes the view before the boundary, so the edge is
+         never somewhere you want to walk to. Costs nothing.
+
+      Worth deciding which is actually wanted before building either. The
+      pond is at radius ~51 and the outer ring past it is already bare (grass
+      fades by 44, terrain flattens past 52), so option 1 also needs content
+      to justify itself.
+
+
 - [x] **The hidden watery oasis is built.** Spring, stream and pond in the
       far corner, with nothing pointing at it.
 
@@ -135,6 +187,25 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       each pull. Same rigs as the sit item below (`group.userData` arm/leg
       pivots), and the two are worth doing together since both are "pose her
       by hand rather than run the walk cycle".
+
+      **Re-raised 2026-07-31.** Group this with the hammock-entry item below
+      and the sit poses — all three are the same job (drive the limbs
+      directly instead of running a cycle) and doing them together means
+      building the posing helper once.
+
+- [ ] **Getting into the hammock should show her climbing in, then go
+      first-person.** Currently `enterHammockLounge` teleports her from
+      standing beside it to lying in it in a single frame, and the camera cuts
+      to the lying view at the same instant. Wants two beats: an actual
+      get-in animation — sit on the edge, swing the legs up, settle back —
+      and only *then* the camera easing into first person at her head looking
+      up at the sky.
+
+      The first-person-looking-up part already works (that half was built and
+      verified); what's missing is the transition into it. The camera move
+      wants to be a smooth ease from wherever the third-person camera was,
+      not a cut — the cut is most of why the current version reads as a
+      teleport.
 
 - [ ] **Sit, for both Miranda and Darla.** Asked for 2026-07-30 and not
       started. Wants a pose plus a way to trigger it — the other actions are

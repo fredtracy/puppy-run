@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { createPalm } from './palm.js';
 import {
   createSouthernPine,
   buildSouthernPineParts,
@@ -2441,6 +2442,200 @@ function createWater() {
 
 // Water is animated, so it needs the clock. Called from the frame loop
 // alongside the grass's own wind time.
+// ── the fall, and the rocks it comes over ──────────────────────────────
+//
+// The terrain can only drop so sharply — the lawn mesh is 0.6 m per quad,
+// so a true vertical face comes out as a staircase. The ravine gives a
+// steep ramp; these give it a cliff to be.
+//
+// Boulders rather than a cliff wall. A single face at this scale needs to
+// be modelled and lit properly to look like anything; a jumble of blocks
+// is what a real fall over a rock ledge looks like anyway, it hides the
+// terrain's stair-stepping behind irregular silhouettes, and each one is
+// a cheap deformed box.
+
+const ROCK_MAT = new THREE.MeshStandardMaterial({
+  color: 0x6a6560,
+  roughness: 0.92,
+  metalness: 0,
+  flatShading: true,
+});
+const ROCK_WET_MAT = new THREE.MeshStandardMaterial({
+  // Wet rock is darker and shinier, and the line between wet and dry is
+  // most of what tells you where the water has been.
+  color: 0x3d4442,
+  roughness: 0.32,
+  metalness: 0,
+  flatShading: true,
+});
+
+// One boulder: a box pushed around at the corners so no two are alike, and
+// flat-shaded so the facets catch light like broken stone.
+function makeBoulder(size, rand) {
+  const geo = new THREE.BoxGeometry(size, size * (0.6 + rand() * 0.5), size * (0.7 + rand() * 0.6), 2, 2, 2);
+  const pos = geo.attributes.position;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    // Push each vertex out along its own direction by a random amount.
+    // Doing it per-vertex rather than per-axis is what stops them all
+    // being the same lozenge at different scales.
+    const k = 1 + (rand() - 0.5) * 0.55;
+    v.multiplyScalar(k);
+    v.x += (rand() - 0.5) * size * 0.18;
+    v.y += (rand() - 0.5) * size * 0.18;
+    v.z += (rand() - 0.5) * size * 0.18;
+    pos.setXYZ(i, v.x, v.y, v.z);
+  }
+  geo.computeVertexNormals();
+  return geo;
+}
+
+function createFallRocks() {
+  const rand = mulberry32(0x9a11f5);
+  const group = new THREE.Group();
+  const dry = [];
+  const wet = [];
+
+  const lip = STREAM_PATH[FALL_FROM];
+  const foot = STREAM_PATH[FALL_TO];
+  const dx = foot[0] - lip[0];
+  const dz = foot[1] - lip[1];
+  const runLen = Math.hypot(dx, dz);
+  // Along the fall, and across it.
+  const ax = dx / runLen;
+  const az = dz / runLen;
+  const nx = -az;
+  const nz = ax;
+
+  // The face itself: boulders stacked down the drop, clustered on the
+  // centreline where the water runs and thinning outward. Placed by
+  // *sampling the terrain* rather than at fixed heights, so they sit on
+  // the ramp wherever the ravine actually put it.
+  const ROWS = 9;
+  for (let r = 0; r <= ROWS; r++) {
+    const t = r / ROWS;
+    // Slightly past the lip and the foot, so the rocks overshoot the
+    // terrain transition at both ends and hide where it starts and stops.
+    const along = -0.25 + t * 1.5;
+    const cx = lip[0] + dx * along;
+    const cz = lip[1] + dz * along;
+    const perRow = 3 + Math.floor(rand() * 3);
+    for (let i = 0; i < perRow; i++) {
+      // Across the fall: a spread that widens toward the bottom, the way
+      // debris piles out at the base of a real drop.
+      const spread = (1.1 + t * 2.6) * (rand() - 0.5) * 2;
+      const px = cx + nx * spread + (rand() - 0.5) * 0.4;
+      const pz = cz + nz * spread + (rand() - 0.5) * 0.4;
+      const size = 0.55 + rand() * 1.25;
+      const ground = terrainHeight(px, pz);
+      const geo = makeBoulder(size, rand);
+      const m = new THREE.Matrix4();
+      m.compose(
+        // Sunk by a third, so they read as embedded in the slope rather
+        // than resting on it.
+        new THREE.Vector3(px, ground - size * 0.3 + rand() * 0.25, pz),
+        new THREE.Quaternion().setFromEuler(
+          new THREE.Euler(
+            (rand() - 0.5) * 0.5,
+            rand() * Math.PI * 2,
+            (rand() - 0.5) * 0.5
+          )
+        ),
+        new THREE.Vector3(1, 1, 1)
+      );
+      geo.applyMatrix4(m);
+      // Within about a metre of the water's line it's wet.
+      (Math.abs(spread) < 1.1 ? wet : dry).push(geo);
+    }
+  }
+
+  // A scatter of boulders round the pond's edge below, so the fall's
+  // debris doesn't stop dead at the foot.
+  for (let i = 0; i < 14; i++) {
+    const a = rand() * Math.PI * 2;
+    const e = pondEdgeRadius(Math.cos(a), Math.sin(a));
+    const r = e * (1.05 + rand() * 0.45);
+    const px = POND.x + Math.cos(a) * r;
+    const pz = POND.z + Math.sin(a) * r;
+    const size = 0.4 + rand() * 0.9;
+    const geo = makeBoulder(size, rand);
+    const m = new THREE.Matrix4();
+    m.compose(
+      new THREE.Vector3(px, terrainHeight(px, pz) - size * 0.35, pz),
+      new THREE.Quaternion().setFromEuler(
+        new THREE.Euler((rand() - 0.5) * 0.4, rand() * Math.PI * 2, (rand() - 0.5) * 0.4)
+      ),
+      new THREE.Vector3(1, 1, 1)
+    );
+    geo.applyMatrix4(m);
+    dry.push(geo);
+  }
+
+  if (dry.length) group.add(mesh(mergeGeometries(dry), ROCK_MAT));
+  if (wet.length) group.add(mesh(mergeGeometries(wet), ROCK_WET_MAT));
+  return group;
+}
+
+// Coconut palms round the pond.
+//
+// Only here, and deliberately: palms in a Louisiana back yard would be
+// absurd, but this corner is meant to read as somewhere else entirely —
+// you follow a stream over a waterfall and arrive somewhere that doesn't
+// belong to the rest of the map. The palms are most of what says that.
+//
+// Placed on the bank ring rather than scattered through the glade, leaning
+// out over the water the way they do on a shoreline. Merged into three
+// meshes for the whole stand.
+const PALM_WOOD_MAT = new THREE.MeshStandardMaterial({
+  color: 0x8a7355, roughness: 0.95, flatShading: true,
+});
+const PALM_FROND_MAT = new THREE.MeshStandardMaterial({
+  color: 0x4f7a35, roughness: 0.82, side: THREE.DoubleSide, flatShading: true,
+});
+const PALM_NUT_MAT = new THREE.MeshStandardMaterial({
+  color: 0x6b5233, roughness: 0.9, flatShading: true,
+});
+
+function createPalms() {
+  const rand = mulberry32(0x50f11a);
+  const wood = [];
+  const frond = [];
+  const nut = [];
+
+  const COUNT = 9;
+  for (let i = 0; i < COUNT; i++) {
+    // Spread round the pond with jitter, skipping the arc the waterfall
+    // comes down — palms don't grow on a rockfall.
+    const a = (i / COUNT) * Math.PI * 2 + (rand() - 0.5) * 0.45;
+    const e = pondEdgeRadius(Math.cos(a), Math.sin(a));
+    const r = e * (1.2 + rand() * 0.55);
+    const px = POND.x + Math.cos(a) * r;
+    const pz = POND.z + Math.sin(a) * r;
+    // Keep them out of the fall's run.
+    if (distanceToStream(px, pz) < 2.2) continue;
+
+    const parts = createPalm(rand);
+    const m = new THREE.Matrix4();
+    m.compose(
+      new THREE.Vector3(px, terrainHeight(px, pz) - 0.1, pz),
+      new THREE.Quaternion().setFromAxisAngle(UP_AXIS, rand() * Math.PI * 2),
+      new THREE.Vector3(1, 1, 1)
+    );
+    wood.push(parts.wood.applyMatrix4(m));
+    frond.push(parts.frond.applyMatrix4(m));
+    nut.push(parts.nut.applyMatrix4(m));
+  }
+
+  const group = new THREE.Group();
+  if (wood.length) {
+    group.add(mesh(mergeGeometries(wood), PALM_WOOD_MAT));
+    group.add(mesh(mergeGeometries(frond), PALM_FROND_MAT));
+    group.add(mesh(mergeGeometries(nut), PALM_NUT_MAT));
+  }
+  return group;
+}
+
 export function setWaterTime(t) {
   WATER_UNIFORMS.uTime.value = t;
 }
@@ -4256,6 +4451,8 @@ export function createYard() {
   group.userData.dragonflies = dragonflies;
 
   group.add(createWater());
+  group.add(createFallRocks());
+  group.add(createPalms());
 
   const hammock = createHammock();
   hammock.position.set(HAMMOCK.x, terrainHeight(HAMMOCK.x, HAMMOCK.z), HAMMOCK.z);
