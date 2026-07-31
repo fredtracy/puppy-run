@@ -392,6 +392,14 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       **Measure before tuning.** Two fixes and four screenshots went into a
       hypothesis that one print statement disproved.
 
+- [ ] **Camera on the roof, second cause.** Verified in play 2026-07-31:
+      walking *over the ridge* fills the screen with shingles again. This is
+      not the earlier bug (that was click-to-move punching through the roof
+      to the lawn, fixed by `marchToRoof`); the player is on the far slope
+      and the ridge itself is between her and the camera. A floor clamp
+      cannot help — the camera is above the roof plane, just on the wrong
+      side of a hill. Wants the same cast-back-and-pull-in as the item below.
+
 - [ ] **Camera clips inside the house and shrubs.** Standing anywhere near the
       house puts the camera through a wall or into a bush, and you end up
       looking at the inside of brick. Wants the usual treatment: cast from the
