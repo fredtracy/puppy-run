@@ -1135,21 +1135,78 @@ const BAY_ROOF = {
   z1: -3.0,
 };
 
-// Where the front walk and its planter bed sweep round the front. The real
-// walk leaves the driveway at the entry, bows out into the lawn past the
-// arched windows and wraps the front corner — one arc, so one centre and
-// three radii describe the whole thing. Angles are degrees, measured so
-// that 90 points straight at the street.
-const WALK = { cx: (BAY.xMin + BAY.xMax) / 2, cz: -3.6, from: 58, to: 172 };
-const PLANTER_R = 4.9;
-// The mulch bed runs from the brick curb all the way back to whatever wall
-// it meets. The house isn't at a constant radius from the walk's centre, so
-// rather than trying to follow the wall the bed simply starts well inside
-// it and lets the excess bury itself in the brickwork — which is invisible,
-// and much simpler than tracing the footprint. The first version started at
-// 2.3 and left a strip of bare lawn between bed and wall on the deeper
-// stretches.
-const PLANTER_INNER_R = 2.0;
+// The planting bed's outer edge, as a polyline in world x/z.
+//
+// It was one arc — a single centre and three radii for the whole thing —
+// and that was wrong twice over. The real bed runs **straight** along the
+// front of the window bay and only starts curving once it's past the
+// windows, wrapping the corner where the wall steps back to the east end.
+// A pure arc bows out in front of the windows, where it should be dead
+// straight, and cuts the corner where it should swing wide.
+//
+// So: a straight run at the bay's bed line, a curve round the corner, and a
+// straight run at the east end's bed line. The curve is a quadratic Bézier
+// rather than a circular arc, because the two straights it joins are at
+// different depths and a circle can only meet both tangentially at one
+// specific radius — the Bézier just takes the corner as its control point
+// and is tangent to both by construction.
+// How deep the planting bed is against the front wall.
+//
+// The bed sits *between* the brick and the sidewalk — wall, bed, walk,
+// lawn — so the walk in front of the bay and the east end has to start
+// where the bed ends. It used to start at the brick with the bed drawn on
+// top of it, and a comment called that invisible. It isn't: the brick curb
+// ran straight across the concrete.
+//
+// Declared here rather than beside PERIMETER, which is its other consumer
+// and sits 270 lines further down. BAY_BED_Z below reads it at module load,
+// and a `const` read before its declaration is a temporal-dead-zone throw
+// that kills the module mid-load — which surfaces as a loading screen that
+// never finishes, with nothing in the console. Fourth time this session.
+const FRONT_BED_W = 1.3;
+
+const BAY_BED_Z = BAY_FRONT_Z - FRONT_BED_W;
+const EAST_BED_Z = EAST_FRONT_Z - FRONT_BED_W;
+// Where the straight run stops and the corner begins. Past the windows, as
+// the reference shows — the bay's east jamb is at BAY.xMin.
+const BED_CURVE_FROM_X = BAY.xMin + 0.55;
+const BED_CURVE_TO_X = BAY.xMin - 1.15;
+
+function frontBedOuterEdge() {
+  const pts = [];
+  // Straight along the bay, from the alcove end westward.
+  pts.push([BAY.xMax + WALK_W, BAY_BED_Z]);
+  pts.push([BED_CURVE_FROM_X, BAY_BED_Z]);
+  // Round the corner. Control point is the corner itself, so the curve
+  // leaves the first straight along it and arrives on the second along it.
+  const cx = BAY.xMin;
+  const cz = BAY_BED_Z;
+  const STEPS = 14;
+  for (let i = 1; i <= STEPS; i++) {
+    const t = i / STEPS;
+    const mt = 1 - t;
+    pts.push([
+      mt * mt * BED_CURVE_FROM_X + 2 * mt * t * cx + t * t * BED_CURVE_TO_X,
+      mt * mt * BAY_BED_Z + 2 * mt * t * cz + t * t * EAST_BED_Z,
+    ]);
+  }
+  // Straight along the east end, out to its far corner.
+  pts.push([EAST_END.xMin - WALK_W, EAST_BED_Z]);
+  return pts;
+}
+
+// The wall line the bed backs onto: bay front, the bay's east return, then
+// the east end's front. This is the bed's inner edge, and tracing it
+// properly is what lets the bed actually meet the brick instead of being
+// pushed inside it and hoping the overlap is hidden.
+function frontBedInnerEdge() {
+  return [
+    [BAY.xMax + WALK_W, BAY_FRONT_Z],
+    [BAY.xMin, BAY_FRONT_Z],
+    [BAY.xMin, EAST_FRONT_Z],
+    [EAST_END.xMin - WALK_W, EAST_FRONT_Z],
+  ];
+}
 
 const DRIVEWAY_END_Z = GARAGE_FRONT_Z - FT * 14;
 const APRON_X1 = HALF_W + FT * 9;
@@ -1373,10 +1430,20 @@ const MASSES = [
 // the +x wall get the wide version.
 const WALK_W = FT * 3;
 const PARK_W = FT * 9;
-const PERIMETER = MASSES.map((m) => ({
+
+// Which masses have a bed along their street face — the window bay and the
+// east end. The garage doesn't; that's where the driveway meets the slab.
+const BAY_MASS = 3;
+const EAST_MASS = 4;
+const HAS_FRONT_BED = new Set([BAY_MASS, EAST_MASS]);
+
+// The perimeter walk. Masses with a bed get no walk extension at the front
+// at all — their front strip is laid separately, outboard of the bed, in
+// buildFrontWalk.
+const PERIMETER = MASSES.map((m, i) => ({
   xMin: m.xMin - WALK_W,
   xMax: m.xMax + (m.xMax >= HALF_W - 0.01 ? PARK_W : WALK_W),
-  zMin: m.zMin - WALK_W,
+  zMin: m.zMin - (HAS_FRONT_BED.has(i) ? 0 : WALK_W),
   zMax: m.zMax + WALK_W,
 }));
 
@@ -1450,29 +1517,6 @@ export function isHousePaved(x, z) {
   return HOUSE_SOLIDS.some((b) => inBox(x, z, b)) || FLATWORK.some((b) => inBox(x, z, b));
 }
 
-// A flat annular ribbon lying in the ground plane — the curved front walk
-// and its mulch bed. RingGeometry is built in the XY plane, so laying it
-// flat maps its local +y onto world -z; every angle here therefore sweeps
-// *toward* the street as it grows, which is what the walk does.
-function arcSlab(rIn, rOut, fromDeg, toDeg, y, material) {
-  const geo = new THREE.RingGeometry(
-    rIn, rOut, 56, 1,
-    (fromDeg * Math.PI) / 180,
-    ((toDeg - fromDeg) * Math.PI) / 180
-  );
-  // RingGeometry's UVs are a unit square stretched over the whole sector,
-  // which would smear the concrete grain along the curve; regenerating them
-  // from vertex positions keeps the texture at true scale.
-  const pos = geo.attributes.position;
-  const uv = geo.attributes.uv;
-  for (let i = 0; i < pos.count; i++) {
-    uv.setXY(i, pos.getX(i) / CONCRETE_TILE, pos.getY(i) / CONCRETE_TILE);
-  }
-  uv.needsUpdate = true;
-  const m = mesh(geo, material);
-  m.rotation.x = -Math.PI / 2;
-  return place(m, WALK.cx, y, WALK.cz);
-}
 
 // Bakes the finished house down to one mesh per material. Building it out
 // of ~450 little boxes is the right way to *author* it — every brick pier,
@@ -2114,22 +2158,78 @@ export function createHouse() {
     concreteBox(GARAGE_W + WALK_W * 2, SLAB, driveLen),
     GARAGE_CX, SLAB / 2, GARAGE_FRONT_Z - driveLen / 2
   ));
-  // The mulch bed and its brick edging, which sit on top of the perimeter
-  // walk at the front — the walk is held off the bay by the bed's width on
-  // the real house, and laying the bed over the concrete is invisible and
-  // far simpler than notching the ring around it.
-  group.add(arcSlab(PLANTER_INNER_R, PLANTER_R, WALK.from - 8, WALK.to + 7, 0.07, MULCH_MAT));
-  const curbSegs = 44;
-  const curbFrom = ((WALK.from - 8) * Math.PI) / 180;
-  const curbTo = ((WALK.to + 7) * Math.PI) / 180;
-  for (let i = 0; i < curbSegs; i++) {
-    const a0 = curbFrom + ((curbTo - curbFrom) * i) / curbSegs;
-    const a1 = curbFrom + ((curbTo - curbFrom) * (i + 1)) / curbSegs;
-    const mid = (a0 + a1) / 2;
-    const r = PLANTER_R + 0.05;
-    const curb = brickBox(r * (a1 - a0) + 0.03, 0.3, 0.16);
-    curb.rotation.y = Math.PI / 2 + mid;
-    group.add(place(curb, WALK.cx + Math.cos(mid) * r, 0.15, WALK.cz - Math.sin(mid) * r));
+  // The planting bed, and the walk that runs *outside* it.
+  //
+  // Order from the brick outward is wall, bed, walk, lawn — which is what
+  // the photos show and what the old version got wrong by laying the bed
+  // straight over the concrete.
+  const bedOuter = frontBedOuterEdge();
+  const bedInner = frontBedInnerEdge();
+
+  // The bed itself: a filled polygon between the two edges. Built in XY and
+  // laid flat, the same convention arcSlab uses — local +y maps to world
+  // -z, hence the sign flip on every z below.
+  {
+    const shape = new THREE.Shape();
+    shape.moveTo(bedOuter[0][0], -bedOuter[0][1]);
+    for (let i = 1; i < bedOuter.length; i++) shape.lineTo(bedOuter[i][0], -bedOuter[i][1]);
+    for (let i = bedInner.length - 1; i >= 0; i--) shape.lineTo(bedInner[i][0], -bedInner[i][1]);
+    shape.closePath();
+    const geo = new THREE.ShapeGeometry(shape);
+    const m = mesh(geo, MULCH_MAT);
+    m.rotation.x = -Math.PI / 2;
+    group.add(place(m, 0, 0.07, 0));
+  }
+
+  // The brick curb along the bed's outer edge. One box per segment of the
+  // polyline, turned to face along it — which is why the edge is generated
+  // as points rather than as an arc: a curve described by a centre and a
+  // radius can only be walked with trigonometry, where a polyline can be
+  // walked by anything that needs to follow it, curb included.
+  for (let i = 0; i < bedOuter.length - 1; i++) {
+    const [x0, z0] = bedOuter[i];
+    const [x1, z1] = bedOuter[i + 1];
+    const dx = x1 - x0;
+    const dz = z1 - z0;
+    const len = Math.hypot(dx, dz);
+    if (len < 1e-4) continue;
+    const curb = brickBox(len + 0.06, 0.3, 0.16);
+    curb.rotation.y = -Math.atan2(dz, dx);
+    group.add(place(curb, (x0 + x1) / 2, 0.15, (z0 + z1) / 2));
+  }
+
+  // The front walk, laid outboard of the bed rather than under it. Follows
+  // the same polyline offset away from the house, so it stays parallel to
+  // the bed's edge the whole way round instead of being a separate shape
+  // that has to be kept in step by hand.
+  {
+    const shape = new THREE.Shape();
+    const outward = (i) => {
+      // Perpendicular to the local run, pointing away from the house
+      // (toward the street, i.e. -z).
+      const a = bedOuter[Math.max(0, i - 1)];
+      const b = bedOuter[Math.min(bedOuter.length - 1, i + 1)];
+      const dx = b[0] - a[0];
+      const dz = b[1] - a[1];
+      const len = Math.hypot(dx, dz) || 1;
+      return [-dz / len, dx / len];
+    };
+    shape.moveTo(bedOuter[0][0], -bedOuter[0][1]);
+    for (let i = 1; i < bedOuter.length; i++) shape.lineTo(bedOuter[i][0], -bedOuter[i][1]);
+    for (let i = bedOuter.length - 1; i >= 0; i--) {
+      const [nx, nz] = outward(i);
+      shape.lineTo(bedOuter[i][0] + nx * WALK_W, -(bedOuter[i][1] + nz * WALK_W));
+    }
+    shape.closePath();
+    const geo = new THREE.ShapeGeometry(shape);
+    const pos = geo.attributes.position;
+    const uv = geo.attributes.uv;
+    for (let i = 0; i < pos.count; i++) {
+      uv.setXY(i, pos.getX(i) / CONCRETE_TILE, pos.getY(i) / CONCRETE_TILE);
+    }
+    const m = mesh(geo, CONCRETE_MAT);
+    m.rotation.x = -Math.PI / 2;
+    group.add(place(m, 0, SLAB, 0));
   }
   // Entry stoop, joining the walk to the recessed front door, and running
   // the whole depth of the alcove as the real one does.
