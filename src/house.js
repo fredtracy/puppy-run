@@ -1299,6 +1299,8 @@ const APRON_X1 = HALF_W + FT * 9;
 // pattern is always the same: a constant gets used by something declared
 // earlier than the block it was written in. If you add another, put it
 // above its first *use*, not next to its most obvious relative.
+// How generously the concrete turns every corner. See where it's used.
+const WALK_CORNER_R = 2.4;
 const WALK_W = FT * 3;
 const PARK_W = FT * 9;
 
@@ -2302,8 +2304,17 @@ export function createHouse() {
   // The walk that rings the entire building — one slab per mass, each grown
   // by the walk's width, which unions into a continuous ring and wraps every
   // projection without anyone having to trace an offset outline.
-  PERIMETER.forEach((b) => group.add(roundedSlab(b, WALK_W)));
-  group.add(roundedSlab(BACK_WALK, PARK_W * 0.55));
+  // Radius measured off the satellite view rather than assumed. The house
+  // is ~15 m across and spans ~300 px there, so the sweeping corners on the
+  // real concrete are 2.5-3 m — not the 0.91 m walk width I first used,
+  // which produced something that still read as a square corner with a
+  // bevel knocked off it. At this radius the ring genuinely flows.
+  //
+  // roundedSlab caps the radius at half the short side, so the narrow slabs
+  // degrade to stadium ends instead of folding through themselves — which
+  // is what lets one number be handed to every slab regardless of size.
+  PERIMETER.forEach((b) => group.add(roundedSlab(b, WALK_CORNER_R)));
+  group.add(roundedSlab(BACK_WALK, WALK_CORNER_R));
 
   const driveLen = GARAGE_FRONT_Z - DRIVEWAY_END_Z;
   group.add(place(
