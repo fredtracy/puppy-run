@@ -1225,6 +1225,26 @@ const LADDER_FOOT_Z = HALF_D + 1.02;
 const LADDER_TOP_Z = LADDER_FOOT_Z - Math.sin(LADDER_LEAN) * LADDER_LENGTH;
 const LADDER_TOP_Y = Math.cos(LADDER_LEAN) * LADDER_LENGTH;
 
+// The chimney, in world coordinates, so main.js can stop her walking
+// through it up on the roof.
+//
+// Deliberately not in HOUSE_SOLIDS. That list is the building's footprint
+// and is checked only at ground level — `clampToWalkable` skips it entirely
+// while `onRoof`, because up there you're above the walls and treating them
+// as solid would make the whole roof unreachable. The chimney is the one
+// piece of the house that is still solid when you're standing on top of it,
+// so it needs its own test rather than an entry in that list.
+//
+// The stack is 0.74 x 0.64 with a slightly wider cap; the half-extents here
+// take the cap and add a little, since a chimney you can clip the corner of
+// reads worse than one you stop a few centimetres short of.
+export const HOUSE_CHIMNEY = {
+  x: -3.4,
+  z: HOUSE_Z - 2.3,
+  halfX: 0.52,
+  halfZ: 0.47,
+};
+
 export const HOUSE_LADDER = {
   x: LADDER_X,
   halfWidth: LADDER_HALF_W,
@@ -1954,11 +1974,23 @@ export function createHouse() {
   });
 
   // Flush dome ceiling lights, one per bay.
+  //
+  // These now throw real light after dark like the front fixtures do. They
+  // were the only lamps on the house whose glass lit up but which cast
+  // nothing — so the covered patio, the one part of the back that people
+  // actually stand under, stayed pitch black with two glowing beads stuck
+  // to its ceiling.
+  //
+  // Hung a little below the dome itself rather than at it: a point light
+  // level with the ceiling puts half its sphere inside the soffit, where
+  // it lights nothing and still costs the same.
   [-1.2, 1.77].forEach((lx) => {
+    const lz = PORCH_BACK_Z + PORCH.depth * 0.45;
     group.add(place(
       trinket(new THREE.SphereGeometry(0.15, 12, 8), LAMP_GLASS_MAT),
-      lx, WALL_H - 0.12, PORCH_BACK_Z + PORCH.depth * 0.45
+      lx, WALL_H - 0.12, lz
     ));
+    lampSpots.push([lx, WALL_H - 0.32, lz]);
   });
 
   // Two windows in each brick wing flanking the patio, as in the reference.

@@ -126,12 +126,11 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       rather than by object count. Cutting `renderer.setPixelRatio` in half
       is the fastest single test of "is this fill-bound at all".
 
-- [ ] **The chimney needs collision, and so does the hammock.** The chimney one
-      is new with the roof being walkable — you can walk straight through it
-      up there. It's a box, so it wants the same treatment as the house
-      masses, except `HOUSE_SOLIDS` is checked only at ground level and is
-      skipped entirely while `onRoof` (see `clampToWalkable`), so this needs
-      its own roof-level test rather than being added to that list.
+- [ ] **The hammock needs collision.** (The chimney half of this is done —
+      `HOUSE_CHIMNEY` + `pushOutOfChimney`, axis-separated so she slides along
+      it rather than sticking; verified with 28,800 simulated steps from 720
+      approach angles, zero breaches.) The hammock is still walk-through, and
+      it pairs with replacing its two trees with a stand below.
 
 - [ ] **Replace the hammock's two trees with a hammock stand.** They were
       ordinary yard trees the hammock happened to be slung between; a proper
@@ -220,8 +219,12 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       brightness downstream, and a dimmed-but-coloured emissive would hover
       around its threshold and flicker into bloom as exposure moves.
       Verified: zero emissive meshes in the scene by day.
-- [ ] **Back patio lights** should glow at night like the front ones now do
-      (see `lampSpots` in `house.js` — the patio fixtures aren't in that list).
+- [x] **Back patio lights glow at night.** The two flush dome fixtures on
+      the covered patio are in `lampSpots` now. They were the only lamps whose
+      glass lit up but which cast nothing, so the one part of the back people
+      stand under stayed pitch black with two glowing beads on its ceiling.
+      Hung 0.2 m below the dome — a point light level with the ceiling puts
+      half its sphere inside the soffit.
 - [ ] **Roof bar** — dark bar on the roof above the arched windows. Confirmed to
       be `SOLDIER_MAT` geometry (magenta-tint test). Ruled out: roof vents,
       chimney (stucco), backface culling through the roof void, the core
@@ -348,15 +351,19 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       Worth pairing with a debug-panel readout of measured FPS so the
       trimming is visible rather than mysterious.
 
-- [ ] **Darla can still walk into the fire pit when called.** The collision
-      lives in `clampToWalkable`, which only the *player's* movement goes
-      through — her AI paths (`updateDarlaFetch`, `updateDarlaCheese`,
-      `updateDarlaLeash`, the bite chase) set `darla.position` directly and
-      skip it. Miranda's AI walk got a `pushOutOfFirePit` call for exactly this
-      reason; Darla's didn't. Either give each of her AI paths the same
-      treatment or find the one place they all funnel through. Careful not to
-      apply it while she's airborne or already inside, the same exemptions the
-      player gets.
+- [x] **Darla no longer walks into the fire pit when called.** One
+      push-out after her three commanded paths run, rather than three inside
+      them — a fourth path added later gets it for free. Same two exemptions
+      the player gets (airborne, already inside).
+
+      Note the original filing was wrong about the bite chase: that only sets
+      `moveTarget`, which does go through `clampToWalkable`, so it was never
+      affected. Only fetch/cheese/leash write position directly.
+
+      **Not runtime-verified** — driving her AI needs the game loop, which
+      needs rAF, which is paused while the browser pane is hidden. It is a
+      direct mirror of the `pushOutOfFirePit` call Miranda's walk already
+      had.
 
 ## Done
 

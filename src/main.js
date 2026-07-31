@@ -34,6 +34,7 @@ import {
   HOUSE_SOLIDS,
   HOUSE_BACK_WALK_Z,
   HOUSE_LADDER,
+  HOUSE_CHIMNEY,
   HOUSE_Z as HOUSE_ORIGIN_Z,
   houseRoofHeight,
   setHouseWindowsLit,
@@ -3940,6 +3941,32 @@ function groundHeightAt(x, z) {
   return terrainHeight(x, z);
 }
 
+// Slides her along the chimney rather than stopping her dead at it — the
+// same axis-separated approach the house walls use, and for the same
+// reason: walking into a corner should let you keep moving along the face
+// you're pressed against instead of sticking.
+//
+// Takes the previous position because that's what says which face she came
+// in through. Whichever axis she had already cleared before this step is
+// the one that gets pushed back.
+function pushOutOfChimney(prevX, prevZ, x, z) {
+  const c = HOUSE_CHIMNEY;
+  const insideX = Math.abs(x - c.x) < c.halfX;
+  const insideZ = Math.abs(z - c.z) < c.halfZ;
+  if (!insideX || !insideZ) return { x, z };
+
+  const wasOutsideX = Math.abs(prevX - c.x) >= c.halfX;
+  const wasOutsideZ = Math.abs(prevZ - c.z) >= c.halfZ;
+  // Coming in through a face: undo only that axis. Coming in diagonally
+  // through the corner (or starting inside, which shouldn't happen but
+  // would otherwise trap her), take the shallower of the two pushes.
+  const outX = c.x + Math.sign(x - c.x || 1) * c.halfX;
+  const outZ = c.z + Math.sign(z - c.z || 1) * c.halfZ;
+  if (wasOutsideX && !wasOutsideZ) return { x: outX, z };
+  if (wasOutsideZ && !wasOutsideX) return { x, z: outZ };
+  return Math.abs(outX - x) < Math.abs(outZ - z) ? { x: outX, z } : { x, z: outZ };
+}
+
 function pushOutOfFirePit(x, z) {
   const dx = x - FIRE_PIT.x;
   const dz = z - FIRE_PIT.z;
@@ -3971,7 +3998,13 @@ function clampToWalkable(prevX, prevZ, x, z) {
   // blocking you — otherwise the whole roof is unreachable ground sitting
   // inside a solid box. Walking off the edge is handled by beginFallOffRoof
   // rather than by a wall.
-  if (onRoof) return clampToWorldRadius(x, z);
+  //
+  // The chimney is the exception: it's the one part of the house that is
+  // still solid when you're standing on top of the rest of it.
+  if (onRoof) {
+    const past = pushOutOfChimney(prevX, prevZ, x, z);
+    return clampToWorldRadius(past.x, past.z);
+  }
   const pushed = pushOutOfHouse(prevX, prevZ, x, z);
   // The pit stops you *walking* in, but you're allowed to jump in if you want
   // to. Two exemptions make that work: airborne, so a jump can carry you over
@@ -5105,6 +5138,34 @@ function animate() {
     const fetching = updateDarlaFetch(delta);
     const eatingCheese = updateDarlaCheese(delta);
     const onLeash = updateDarlaLeash(delta);
+
+    // The fire pit is solid for her too.
+    //
+    // Her three commanded paths above each write darla.position directly
+    // and so bypass clampToWalkable, which is where the pit's push-out
+    // lives for the player — so a ball thrown across the fire sent her
+    // trotting straight through it. (The bite chase is fine: it only sets
+    // moveTarget, which does go through the clamp.)
+    //
+    // One call here rather than three inside those functions, and placed
+    // before the y write below so her height is sampled at the corrected
+    // position. A fourth commanded path added later gets this for free,
+    // which is the whole reason it's here and not in each of them.
+    //
+    // Same two exemptions the player gets: airborne, so a jump can carry
+    // her over the rim rather than hitting an invisible wall mid-flight;
+    // and already inside, so having landed in there she can walk out under
+    // her own steam instead of being spat back. `darlaOwnsJump` is
+    // recomputed below for the walk cycle — the jump globals only describe
+    // *her* jump in multiplayer, and in single-player this block runs on
+    // Miranda's client where they describe Miranda.
+    const darlaAirborne = isMultiplayer && playerKind === 'darla' && isJumping;
+    if (!darlaAirborne && !insideFirePit(darla.position.x, darla.position.z)) {
+      const clear = pushOutOfFirePit(darla.position.x, darla.position.z);
+      darla.position.x = clear.x;
+      darla.position.z = clear.z;
+    }
+
     const commandedMoving = fetching || eatingCheese || onLeash;
     const darlaCommandActive = darlaFetchState !== 'idle' || darlaCheeseState !== 'idle' || darlaLeashed;
     // In multiplayer this runs on Darla's own client, which is *also*
