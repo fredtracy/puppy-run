@@ -1899,61 +1899,130 @@ export function terrainHeight(x, z) {
 // itself a channel, the grass and trees and brush stay out of the water,
 // and the brush band opens a gap where the stream crosses it.
 
-const POND = { x: 29, z: 35.5, radius: 4.0 };
-// The water surface, and how far out the dig feathers back into the hill.
-//
-// Two radii rather than one, and that separation is the whole trick. The
-// pond sits on a slope that falls about 0.15 m per metre, so a circle of
-// any size has a rim a metre and a bit out of level — the first attempt
-// feathered the dig by radius alone and left the uphill bank standing
-// *inside* the water disc, so the surface vanished into the hillside on
-// one side and floated over open ground on the other.
-//
-// Instead the bed is cut to a shape of its own out to POND_DISC — a dish,
-// guaranteed below the water everywhere — and then between POND_DISC and
-// POND_CARVE the target rises back to meet whatever the hill was doing.
-// The dig is driven by the shape the pond needs, and the hillside only
-// decides where the dig stops.
-// Three radii, not two, and the third is what actually holds the water in.
+// The pond, out near the corner of the world, and irregular rather than a
+// disc. `radius` is the mean; the real edge wobbles around it (see
+// pondEdgeRadius).
+const POND = { x: 34, z: 38, radius: 5.6 };
+// Mean radii. Everything that used to be a single circle is now a *scale*
+// applied to the wobbling edge, so the dish, the rim and the feather all
+// keep the same irregular outline instead of a lumpy pond inside a round
+// hole.
 //
 // POND_DISC is the water surface. POND_BED is where the dish's wall comes
-// back up to its rim — deliberately *wider*, so the water's edge is a
+// back up to its rim — deliberately wider, so the water's edge is a
 // comfortable 12 cm underwater rather than sitting exactly on the lip. Cut
 // the dish to end at the disc instead and the rim is at water level all
 // the way round, which measured as the pond standing 5 cm proud of its own
 // bank: water with nothing holding it.
-const POND_DISC = 3.4;
-const POND_BED = 3.9;
-const POND_CARVE = 7.0;
+const POND_DISC = 1.0;
+const POND_BED = 1.16;
+const POND_CARVE = 2.0;
 // How far down the bed goes below the water at the middle of the pond.
-const POND_DEPTH = 0.85;
-// The stream's head sits just *outside* the brush band, so it isn't
-// visible from the lawn — the point is to find it, not to be shown it.
+const POND_DEPTH = 1.15;
+
+// The pond's outline: mean radius modulated by two harmonics of the
+// bearing. Real ponds are lobed — a couple of broad bays and a headland or
+// two — which is three or four cycles round the compass, not the fine
+// crinkle that a high-frequency noise would give. Two harmonics at 3 and 5
+// cycles, out of phase, produce exactly that and cost nothing to evaluate
+// (this runs per grass blade via terrainHeight).
+function pondEdgeRadius(dx, dz) {
+  const a = Math.atan2(dz, dx);
+  return POND.radius * (1 + 0.19 * Math.sin(a * 3 + 0.7) + 0.11 * Math.sin(a * 5 - 1.9));
+}
+
+// The stream, from the spring behind the tree line all the way to the
+// pond — now with a waterfall partway down.
+//
+// `fall` marks the two points the drop happens between. The ground between
+// them is cut into a ravine (see ravineDrop) and the visible cliff is rock
+// geometry standing on it, because the lawn mesh is 0.6 m per quad and a
+// terrain cliff at that resolution is a staircase, not a cliff.
 const STREAM_PATH = [
   [18.5, 21.5],
   [21, 25],
-  [24, 28.5],
-  [26.5, 32],
+  [23.5, 28],
+  [25.5, 30.5],
+  // Lip of the fall.
+  [27.2, 32.4],
+  // Foot of the fall — a short run in plan for a long drop in height,
+  // which is what makes it a fall rather than a rapid.
+  [28.6, 33.8],
+  [30.5, 35.4],
+  [32.4, 36.8],
   // Stops at the pond's edge rather than its middle. Run to the centre and
   // the ribbon dives the full depth of the dish and lies on the bottom,
   // visible through the water; ending just inside the surface reads as the
-  // stream running in. The channel still connects — the pond's own dig is
-  // deeper than the stream's everywhere they overlap.
-  [26.8, 32.6],
+  // stream running in.
+  [33.2, 37.2],
 ];
+// Which STREAM_PATH indices bracket the fall.
+const FALL_FROM = 4;
+const FALL_TO = 5;
 const STREAM_HALF = 0.6;
 const STREAM_DEPTH = 0.26;
 // The opening in the canopy over the pond. Trees are kept out of the inner
 // part of it and the ground is let back into full daylight (see
 // canopyShade) — a pond under a closed canopy is a dark puddle, and the
 // whole point of this one is that it's the pretty thing at the end.
-const GLADE_RADIUS = 7.5;
+const GLADE_RADIUS = 9.5;
 
 // Everything water-related lives inside this box. terrainHeight runs for
 // every blade of grass in the world — several million times a load — so
 // the very first thing waterCarveAt does is reject the ~99% of the map
 // that is nowhere near the pond, before any real work.
-const WATER_BOUNDS = { x0: 16, x1: 34.5, z0: 19, z1: 41 };
+const WATER_BOUNDS = { x0: 15, x1: 45, z0: 18, z1: 48 };
+
+// How deep the ravine below the fall is cut, how quickly it opens at the
+// lip, and how far the valley spreads either side of the water.
+//
+// 4.4 m is a real drop — the yard sits at 2.4 and the corner of the map is
+// already down near 0.2, so this puts the pond well below sea level of the
+// lawn and makes the fall something you look *down* into.
+const RAVINE_DEPTH = 4.4;
+// Fraction of the post-lip run over which the drop happens. Small, because
+// this is a waterfall; but not zero, because the lawn mesh is 0.6 m per
+// quad and a true step would be a staircase.
+const RAVINE_LIP = 0.12;
+const RAVINE_REACH = 7.0;
+
+// The shaped valley: natural ground with the ravine cut out of it, but
+// before the pond digs its basin.
+//
+// This is the surface the pond is built against, and keeping it separate
+// from groundBeforeWater is what stops the two digs fighting. Both this
+// and the pond need to know "what is the ground here" and they need
+// different answers — the ravine asks the hillside, the pond asks the
+// ravine.
+function groundWithRavine(x, z) {
+  return groundBeforeWater(x, z) - ravineDrop(x, z);
+}
+
+// Where along the stream a point lies, 0 at the spring and 1 at the pond,
+// or null if it's not near the stream at all. Used by the ravine, which
+// has to know which side of the fall's lip a point is on.
+function streamProgress(x, z) {
+  let best = Infinity;
+  let bestAt = null;
+  const segs = STREAM_PATH.length - 1;
+  for (let i = 0; i < segs; i++) {
+    const [ax, az] = STREAM_PATH[i];
+    const [bx, bz] = STREAM_PATH[i + 1];
+    const vx = bx - ax;
+    const vz = bz - az;
+    const len2 = vx * vx + vz * vz;
+    const t = Math.min(1, Math.max(0, ((x - ax) * vx + (z - az) * vz) / len2));
+    const d = Math.hypot(x - (ax + vx * t), z - (az + vz * t));
+    if (d < best) {
+      best = d;
+      // Segment index plus position within it, normalised over the path.
+      bestAt = (i + t) / segs;
+    }
+  }
+  // Beyond this the ravine has feathered out anyway, so save the callers
+  // the arithmetic.
+  return best > RAVINE_REACH * 1.5 ? null : bestAt;
+}
 
 // Distance from a point to the stream's centreline, as a polyline.
 function distanceToStream(x, z) {
@@ -1991,11 +2060,16 @@ function distanceToStream(x, z) {
 const POND_RIM_DROP = 0.08;
 const POND_WATER_Y = (() => {
   let min = Infinity;
-  for (let a = 0; a < 96; a++) {
-    const ang = (a / 96) * Math.PI * 2;
+  for (let a = 0; a < 128; a++) {
+    const ang = (a / 128) * Math.PI * 2;
+    // Walks the *irregular* rim, not a circle — the bays reach further out
+    // and downhill than a mean-radius circle does, so sampling a circle
+    // would miss the genuinely lowest point and the pond would run out
+    // through whichever lobe pokes furthest down the slope.
+    const r = pondEdgeRadius(Math.cos(ang), Math.sin(ang)) * POND_BED;
     min = Math.min(
       min,
-      groundBeforeWater(POND.x + Math.cos(ang) * POND_BED, POND.z + Math.sin(ang) * POND_BED)
+      groundWithRavine(POND.x + Math.cos(ang) * r, POND.z + Math.sin(ang) * r)
     );
   }
   return min - POND_RIM_DROP;
@@ -2007,9 +2081,21 @@ function waterCarveAt(x, z) {
 
   let carve = 0;
 
-  const pd = Math.hypot(x - POND.x, z - POND.z);
+  // Distance to the pond expressed as a *fraction of the local edge
+  // radius*, so every threshold below is a scale on the pond's real
+  // wobbling outline rather than a circle laid over it. Without this the
+  // dish would be round inside a lumpy hole.
+  const dx = x - POND.x;
+  const dz = z - POND.z;
+  const edge = pondEdgeRadius(dx, dz);
+  const pd = Math.hypot(dx, dz) / edge;
   if (pd < POND_CARVE) {
-    const ground = groundBeforeWater(x, z);
+    // The valley floor, not the original hillside. The ravine has already
+    // taken 4.4 m out of this corner, and the pond has to be dug into
+    // *that* — measuring against the pre-ravine ground put the water
+    // surface four metres above its own bed, with the rim below the water
+    // all the way round.
+    const ground = groundWithRavine(x, z);
     // The rim, which stands just *above* the water — that's what contains
     // it. Equal to the lowest natural ground on the rim ring by
     // construction (see POND_WATER_Y), so the downhill side needs no dig
@@ -2030,7 +2116,10 @@ function waterCarveAt(x, z) {
     // Only ever digs. Where the hill is already lower than the dish wants
     // — the downhill side — it's left alone, which is what leaves the pond
     // sitting in the top of the hollow with the ground falling away below.
-    carve = Math.max(carve, ground - target);
+    // Composed, not maxed: the ravine lowers the ground and the pond digs
+    // into the result, so the total is one on top of the other. Taking the
+    // larger of the two would let whichever is deeper erase the other.
+    carve = Math.max(carve, ravineDrop(x, z) + Math.max(0, ground - target));
   }
 
   const sd = distanceToStream(x, z);
@@ -2039,7 +2128,37 @@ function waterCarveAt(x, z) {
     carve = Math.max(carve, STREAM_DEPTH * (1 - t * t));
   }
 
+  carve = Math.max(carve, ravineDrop(x, z));
+
   return Math.max(0, carve);
+}
+
+// The ravine below the waterfall.
+//
+// Everything downstream of the fall's lip is cut down by RAVINE_DEPTH, and
+// the transition from "not cut" to "cut" happens over RAVINE_LIP metres of
+// run — about two lawn quads. That is as close to vertical as this terrain
+// can get: the lawn mesh is 0.6 m per quad, so anything sharper comes out
+// as a staircase rather than a cliff. The visible drop is rock geometry
+// standing on this ramp (see createFallRocks); the terrain only has to get
+// out of its way and be walkable.
+//
+// Falls off with distance from the stream so it stays a valley rather than
+// lowering the whole corner of the map, and feathers back to nothing at
+// RAVINE_REACH so it meets the hillside without a wall.
+function ravineDrop(x, z) {
+  const along = streamProgress(x, z);
+  if (along === null) return 0;
+  const lipAt = FALL_FROM / (STREAM_PATH.length - 1);
+  if (along < lipAt) return 0;
+
+  // How far past the lip, in the same 0..1 units the path uses.
+  const past = (along - lipAt) / (1 - lipAt);
+  const depth = RAVINE_DEPTH * smootherstep(Math.min(1, past / RAVINE_LIP));
+
+  const sd = distanceToStream(x, z);
+  const across = 1 - smootherstep(Math.min(1, sd / RAVINE_REACH));
+  return depth * across;
 }
 
 // Signed distance to the waterline: negative in the water, positive on the
@@ -2049,7 +2168,11 @@ function waterCarveAt(x, z) {
 function waterEdgeBand(x, z) {
   if (x < WATER_BOUNDS.x0 - 2 || x > WATER_BOUNDS.x1 + 2) return null;
   if (z < WATER_BOUNDS.z0 - 2 || z > WATER_BOUNDS.z1 + 2) return null;
-  const pond = Math.hypot(x - POND.x, z - POND.z) - POND_DISC;
+  // Signed against the *irregular* waterline, so the reed band follows the
+  // bays and headlands instead of a circle drawn through them.
+  const dx = x - POND.x;
+  const dz = z - POND.z;
+  const pond = Math.hypot(dx, dz) - pondEdgeRadius(dx, dz) * POND_DISC;
   const stream = distanceToStream(x, z) - STREAM_HALF;
   return Math.min(pond, stream);
 }
@@ -2060,7 +2183,9 @@ function waterEdgeBand(x, z) {
 function nearWater(x, z, margin) {
   if (x < WATER_BOUNDS.x0 - margin || x > WATER_BOUNDS.x1 + margin) return false;
   if (z < WATER_BOUNDS.z0 - margin || z > WATER_BOUNDS.z1 + margin) return false;
-  if (Math.hypot(x - POND.x, z - POND.z) < POND_BED + margin) return true;
+  const dx = x - POND.x;
+  const dz = z - POND.z;
+  if (Math.hypot(dx, dz) < pondEdgeRadius(dx, dz) * POND_BED + margin) return true;
   return distanceToStream(x, z) < STREAM_HALF + margin;
 }
 
@@ -2225,24 +2350,34 @@ const WATER_MAT = new THREE.ShaderMaterial({
 function createWater() {
   const group = new THREE.Group();
 
-  // The pond: one flat disc, because water is level. Slightly inside the
-  // carved radius so the bank rises through its edge rather than the two
-  // meeting exactly and z-fighting.
-  const discGeo = new THREE.CircleGeometry(POND_DISC, 48);
-  // Depth per vertex, from the disc's own geometry: 1 at the centre falling
-  // to 0 at the rim. The shader can't derive this — it has no idea where
-  // the bank is — so it's baked in here where the shape is known. Flow is
+  // The pond surface: flat, because water is level, but built as a fan on
+  // the pond's own irregular outline rather than a CircleGeometry. A round
+  // surface inside a lobed basin shows the bed through the bays and buries
+  // its own edge under the headlands.
+  //
+  // Depth is baked per vertex — 1 at the centre falling to 0 at the rim.
+  // The shader can't derive it; it has no idea where the bank is. Flow is
   // zero: a pond doesn't go anywhere, it just breathes.
-  {
-    const pos = discGeo.attributes.position;
-    const info = new Float32Array(pos.count * 2);
-    for (let i = 0; i < pos.count; i++) {
-      const d = Math.hypot(pos.getX(i), pos.getY(i)) / POND_DISC;
-      info[i * 2] = 0;
-      info[i * 2 + 1] = 1 - d;
+  const SEGMENTS = 72;
+  const discGeo = (() => {
+    const pos = [0, 0, 0];
+    const info = [0, 1];
+    const idx = [];
+    for (let i = 0; i < SEGMENTS; i++) {
+      const a = (i / SEGMENTS) * Math.PI * 2;
+      const c = Math.cos(a);
+      const s = Math.sin(a);
+      const r = pondEdgeRadius(c, s) * POND_DISC;
+      pos.push(c * r, s * r, 0);
+      info.push(0, 0);
+      idx.push(0, 1 + i, 1 + ((i + 1) % SEGMENTS));
     }
-    discGeo.setAttribute('waterInfo', new THREE.BufferAttribute(info, 2));
-  }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('waterInfo', new THREE.Float32BufferAttribute(info, 2));
+    g.setIndex(idx);
+    return g;
+  })();
   const disc = mesh(discGeo, WATER_MAT);
   disc.rotation.x = -Math.PI / 2;
   disc.position.set(POND.x, POND_WATER_Y, POND.z);

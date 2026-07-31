@@ -4076,7 +4076,17 @@ function pushOutOfFirePit(x, z) {
 // above) — pulled in a bit short of the actual generation radius, so she
 // always stays comfortably inside real trees/fog rather than able to walk
 // out to the literal edge of what got generated and see it stop.
-const MOVEMENT_RADIUS = WORLD_RADIUS - 5;
+// Right out to the edge of what's generated, less a metre so you can't
+// quite stand on the boundary and look at nothing.
+//
+// It used to hold you 5 m short, which was the right call when the far
+// corner was empty hillside — but the pond is out there now, at a radius
+// of about 51, and the old clamp stopped you 1 m before reaching it. The
+// cost of opening it up is that the outer ring genuinely is bare: grass
+// has faded out by 44 and the terrain flattens to zero past
+// TERRAIN_RADIUS. Walkable, as asked, but there is nothing to find between
+// the pond and the edge.
+const MOVEMENT_RADIUS = WORLD_RADIUS - 1;
 
 function clampToWorldRadius(x, z) {
   const dist = Math.hypot(x, z);
