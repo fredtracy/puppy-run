@@ -126,11 +126,20 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       rather than by object count. Cutting `renderer.setPixelRatio` in half
       is the fastest single test of "is this fill-bound at all".
 
-- [ ] **The hammock needs collision.** (The chimney half of this is done —
-      `HOUSE_CHIMNEY` + `pushOutOfChimney`, axis-separated so she slides along
-      it rather than sticking; verified with 28,800 simulated steps from 720
-      approach angles, zero breaches.) The hammock is still walk-through, and
-      it pairs with replacing its two trees with a stand below.
+- [x] **Chimney and hammock both have collision.** Chimney:
+      `HOUSE_CHIMNEY` + `pushOutOfChimney`, deliberately outside
+      `HOUSE_SOLIDS` since that list is skipped while `onRoof`. Hammock:
+      `HAMMOCK` + `pushOutOfHammock`, an *oriented* box — it's 3.4 m long and
+      turned 0.4 rad, so a world-axis box would either miss the ends or be far
+      too big. Both axis-separated so she slides rather than sticking.
+      Verified by simulation: 28,800 and 36,000 steps from 720 approach
+      angles, zero breaches each.
+
+      The hammock one needed an exemption that isn't obvious: it's skipped
+      while `mirandaLoungeTarget` or `mirandaLounging`. Clicking the hammock
+      walks her to its *centre*, which is exactly the point the collision
+      pushes her off — without the exemption she'd be shoved away before
+      arriving and could never get in at all.
 
 - [ ] **Replace the hammock's two trees with a hammock stand.** They were
       ordinary yard trees the hammock happened to be slung between; a proper
@@ -249,9 +258,15 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       turn on `vertexColors`, rather than needing a second texture.
 
 
-- [ ] **Comment out the dialogue options** — clunky and not being used. Keep
-      the existing speech bubbles that appear above characters' heads; clicking
-      on Darla should just run those directly, with no options menu in between.
+- [x] **Dialogue options menu removed.** Clicking Darla plays the next
+      exchange straight away. `DIALOGUE_TREE` is kept as the source and
+      flattened depth-first rather than being rewritten by hand, because the
+      order it encodes is the joke — "Hi Bubby", "Who's a good girl?", "Yes
+      you are!", with the bark getting longer each time — so repeated clicks
+      escalate the way picking the obvious answer used to, then loop.
+      `openDialogueMenu`, `dialogueStarted` and the now-dead `onReplyShown`
+      callback are gone; `#dialogue-menu` is left unused in index.html so
+      putting it back is small.
 
 - [ ] **Concrete tiles visibly.** The texture repeat is obvious on the
       driveway/walk/patio slabs — reads as tiling rather than as a poured

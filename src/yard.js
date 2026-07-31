@@ -475,6 +475,26 @@ const PIT_COURSE_HEIGHT = 0.115;
 // Matches firePit's own placement in createYard() below — kept separate so
 // grass (createChunkGrass) can skip it without needing the actual fire pit
 // object to exist yet.
+// Where the hammock hangs, and how big a footprint it blocks.
+//
+// Hoisted out of createYard so main.js's collision reads the same numbers
+// the geometry is built from. It's an *oriented* box rather than an
+// axis-aligned one — the thing is 3.4 m long, 0.75 m wide and turned 0.4
+// radians, so a box lined up with the world axes would either be far too
+// big or miss the ends entirely.
+//
+// Half-extents are the fabric plus a little: `halfLength` covers the span
+// between the two trees, `halfWidth` the fabric's width. Generous across
+// rather than tight, since brushing past the side of a hammock and
+// clipping through it looks worse than stopping slightly short.
+export const HAMMOCK = {
+  x: 6,
+  z: 9,
+  rotation: 0.4,
+  halfLength: 1.6,
+  halfWidth: 0.5,
+};
+
 export const FIRE_PIT = {
   // Sits well out from the house, toward the tree line rather than tucked up
   // against the back wall. It was 6.5 m off the wall after the house moved
@@ -3532,8 +3552,8 @@ export function createYard() {
   group.userData.dragonflies = dragonflies;
 
   const hammock = createHammock();
-  hammock.position.set(6, terrainHeight(6, 9), 9);
-  hammock.rotation.y = 0.4;
+  hammock.position.set(HAMMOCK.x, terrainHeight(HAMMOCK.x, HAMMOCK.z), HAMMOCK.z);
+  hammock.rotation.y = HAMMOCK.rotation;
   group.add(hammock);
   group.userData.hammock = hammock;
 

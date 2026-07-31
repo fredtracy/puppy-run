@@ -19,6 +19,7 @@ import {
   setGrassDensity,
   CHUNK_SIZE,
   FIRE_PIT,
+  HAMMOCK,
   terrainHeight,
   updateGrassAngularSize,
   setGrassFog,
@@ -3352,58 +3353,48 @@ const DIALOGUE_TREE = [
   },
 ];
 
-const dialogueMenuEl = document.getElementById('dialogue-menu');
-// True once any exchange has actually happened this conversation — just
-// changes the cancel button's wording (see openDialogueMenu below), reset
-// whenever Darla's clicked fresh (see the pointerup handler).
-let dialogueStarted = false;
+// The options menu is gone, on the owner's call — it was clunky and nobody
+// used it. Clicking Darla now just plays the next exchange straight away.
+//
+// The tree above is kept as the source of the lines rather than being
+// flattened by hand, because the *order* it encodes is the whole joke:
+// "Hi Bubby" then "Who's a good girl?" then "Yes you are!", with the bark
+// getting longer each time. Walking it depth-first preserves that, so
+// repeated clicks escalate the way the branching version did when you
+// picked the obvious answer each time — and then loop back to the start.
+//
+// The #dialogue-menu element is left in index.html, unused. It costs
+// nothing and makes putting the menu back a smaller job than it would be
+// from scratch.
+const DIALOGUE_LINES = (function flatten(nodes, out = []) {
+  for (const node of nodes) {
+    out.push({ question: node.question, response: node.response, end: node.end });
+    if (node.followUps) flatten(node.followUps, out);
+  }
+  return out;
+})(DIALOGUE_TREE);
 
-function openDialogueMenu(options) {
-  dialogueMenuEl.innerHTML = '';
-  options.forEach((node) => {
-    const btn = document.createElement('button');
-    btn.textContent = node.question;
-    btn.addEventListener('click', () => {
-      dialogueMenuEl.classList.remove('visible');
-      talkToDarla(node);
-    });
-    dialogueMenuEl.appendChild(btn);
-  });
-  const cancel = document.createElement('button');
-  cancel.className = 'cancel';
-  cancel.textContent = dialogueStarted ? 'End conversation' : 'Never mind';
-  cancel.addEventListener('click', () => dialogueMenuEl.classList.remove('visible'));
-  dialogueMenuEl.appendChild(cancel);
-  dialogueMenuEl.classList.add('visible');
-}
+let dialogueIndex = 0;
 
-// The actual two-stage bubble playback (question, then — after a beat —
-// bark + reply), shared between the local interactive flow below and the
-// non-interactive replay a networked peer runs for the same exchange (see
-// applyRemoteFx) — `onReplyShown` is where the local-only "reopen the menu"
-// follow-up hooks in, since a peer just watching the conversation play out
-// has no menu to reopen.
-function playDialogueBubbles(node, onReplyShown) {
+// The two-stage bubble playback: question, then — after a beat — bark and
+// reply. Shared between the local click and the replay a networked peer
+// runs for the same exchange (see applyRemoteFx), which is why it takes a
+// plain {question, response} rather than reaching for the tree itself.
+//
+// It used to take an `onReplyShown` callback, which existed solely to
+// reopen the options menu once the reply had landed. The menu is gone, and
+// so is the callback.
+function playDialogueBubbles(node) {
   showSpeechBubble(mom, node.question);
   window.setTimeout(() => {
     playBarkSound();
     showSpeechBubble(darla, node.response);
-    if (onReplyShown) onReplyShown();
   }, 1700);
 }
 
-// A node with no follow-ups falls back to the full top-level topic list
-// (so casual conversations never run out of things to say on their own),
-// UNLESS it's marked `end: true` — that's how a specific scripted
-// exchange gets a definite, written ending instead of looping back.
 function talkToDarla(node) {
-  dialogueStarted = true;
   sendFx('dialogue', { question: node.question, response: node.response });
-  playDialogueBubbles(node, () => {
-    if (node.end) return;
-    const next = node.followUps && node.followUps.length > 0 ? node.followUps : DIALOGUE_TREE;
-    window.setTimeout(() => openDialogueMenu(next), 1700);
-  });
+  playDialogueBubbles(node);
 }
 
 function hitsHammock(clientX, clientY) {
@@ -3663,15 +3654,6 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   pointerDownPos = null;
   if (dragDist > 6) return; // was an orbit-camera drag, not a click
 
-  // Clicking anywhere else on the scene while the dialogue menu is open
-  // just dismisses it, same as the cancel button — without also acting on
-  // the click itself (moving, throwing, etc.), which is why this returns
-  // immediately rather than falling through to the rest of the handler.
-  if (dialogueMenuEl.classList.contains('visible')) {
-    dialogueMenuEl.classList.remove('visible');
-    return;
-  }
-
   if (playerKind === 'darla' && hitsMom(e.clientX, e.clientY)) {
     talkToMiranda();
     return;
@@ -3701,7 +3683,6 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   }
 
   if (playerKind === 'miranda' && hitsDarla(e.clientX, e.clientY)) {
-    dialogueStarted = false;
     faceEachOther();
     // faceEachOther only touches the local mom/darla objects — in
     // multiplayer Darla is remote here, so her own client's copy of
@@ -3711,7 +3692,8 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     // did, which is why it looked like a one-frame flash back to her old
     // direction instead of sticking.
     sendFx('faceMiranda');
-    openDialogueMenu(DIALOGUE_TREE);
+    talkToDarla(DIALOGUE_LINES[dialogueIndex % DIALOGUE_LINES.length]);
+    dialogueIndex++;
     return;
   }
 
@@ -3967,6 +3949,48 @@ function pushOutOfChimney(prevX, prevZ, x, z) {
   return Math.abs(outX - x) < Math.abs(outZ - z) ? { x: outX, z } : { x, z: outZ };
 }
 
+// The hammock, as an oriented box: rotate the point into the hammock's own
+// frame, do the ordinary axis-separated push there, rotate the result back.
+//
+// Exempt while she's on her way into it or already lying in it. Without
+// that the collision defeats the interaction entirely — clicking the
+// hammock walks her to its centre, which is exactly the point this pushes
+// her away from, so she'd be shoved off before ever arriving and the
+// arrival test would never fire.
+const _hamCos = Math.cos(-HAMMOCK.rotation);
+const _hamSin = Math.sin(-HAMMOCK.rotation);
+function pushOutOfHammock(prevX, prevZ, x, z) {
+  if (mirandaLounging || mirandaLoungeTarget) return { x, z };
+
+  const toLocal = (wx, wz) => {
+    const dx = wx - HAMMOCK.x;
+    const dz = wz - HAMMOCK.z;
+    return { x: dx * _hamCos - dz * _hamSin, z: dx * _hamSin + dz * _hamCos };
+  };
+  const p = toLocal(x, z);
+  if (Math.abs(p.x) >= HAMMOCK.halfLength || Math.abs(p.z) >= HAMMOCK.halfWidth) {
+    return { x, z };
+  }
+
+  const prev = toLocal(prevX, prevZ);
+  const wasOutX = Math.abs(prev.x) >= HAMMOCK.halfLength;
+  const wasOutZ = Math.abs(prev.z) >= HAMMOCK.halfWidth;
+  const outX = Math.sign(p.x || 1) * HAMMOCK.halfLength;
+  const outZ = Math.sign(p.z || 1) * HAMMOCK.halfWidth;
+  let local;
+  if (wasOutX && !wasOutZ) local = { x: outX, z: p.z };
+  else if (wasOutZ && !wasOutX) local = { x: p.x, z: outZ };
+  else local = Math.abs(outX - p.x) < Math.abs(outZ - p.z)
+    ? { x: outX, z: p.z }
+    : { x: p.x, z: outZ };
+
+  // Back to world. Inverse of the rotation above, so the signs flip.
+  return {
+    x: HAMMOCK.x + local.x * _hamCos + local.z * _hamSin,
+    z: HAMMOCK.z - local.x * _hamSin + local.z * _hamCos,
+  };
+}
+
 function pushOutOfFirePit(x, z) {
   const dx = x - FIRE_PIT.x;
   const dz = z - FIRE_PIT.z;
@@ -4013,7 +4037,8 @@ function clampToWalkable(prevX, prevZ, x, z) {
   // under your own steam rather than being spat straight out again.
   const exempt = isJumping || insideFirePit(prevX, prevZ);
   const clear = exempt ? pushed : pushOutOfFirePit(pushed.x, pushed.z);
-  return clampToWorldRadius(clear.x, clear.z);
+  const past = isJumping ? clear : pushOutOfHammock(prevX, prevZ, clear.x, clear.z);
+  return clampToWorldRadius(past.x, past.z);
 }
 
 // Used for picking a click-to-move destination — a stateless best-guess
