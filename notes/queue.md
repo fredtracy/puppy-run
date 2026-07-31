@@ -15,31 +15,34 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       changes.
 
 
-- [ ] **Calling Darla still walks her through the fire pit.** Reported
-      2026-07-31, after the 2026-07-30 fix that claimed to close it. That fix
-      was committed **unverified** (the pane was hidden, so her AI couldn't be
-      driven) and it does not work.
+- [x] **Calling Darla no longer walks her through the fire pit.** Fixed and
+      verified in play 2026-07-31.
 
-      **Diagnosed, not yet fixed.** Calling her sets `darlaFetchState =
-      'returning'`, so she goes through `updateDarlaFetch` — which *is* one of
-      the three paths the push-out was added after, so the wiring is right.
-      The bug is the exemption: the push-out is skipped when
-      `insideFirePit(darla.position)` is true, and she can **tunnel into that
-      state in a single frame**. `FIRE_PIT_INSIDE` is only 0.08 smaller than
-      `FIRE_PIT_CLEARANCE`, and at her run speed one frame at 60fps carries
-      her about 0.083 m — so she steps from just outside the blocked radius to
-      inside the "already in, leave her alone" radius in one move, is exempted
-      from then on, and strolls through the fire.
+      The push-out was wired to the right places all along — calling her sets
+      `darlaFetchState = 'returning'`, which runs through `updateDarlaFetch`,
+      one of the three paths it sits after. The bug was the *exemption*
+      copied over from the player: skip the push-out when
+      `insideFirePit(...)` is true, so someone who jumped in can walk out.
 
-      This is the same hysteresis gap that's written up in the Done section
-      for the *player*, where 0.08 was chosen to stop a boundary point
-      re-measuring as inside. It is big enough for that and far too small to
-      survive a moving character.
+      That exemption cannot survive a moving character. `FIRE_PIT_INSIDE` is
+      0.08 m tighter than `FIRE_PIT_CLEARANCE`, and one frame at her run
+      speed covers 0.083 m — so a single step carried her from outside the
+      blocked radius to inside the exempt one, after which she was excused
+      for good and strolled through the fire. The gap was sized to stop a
+      *stationary* boundary point re-measuring as inside, which it does
+      correctly; it was never big enough to survive motion.
 
-      **Fix:** drop the already-inside exemption for her commanded paths
-      entirely. It exists so a player who jumped in can walk out — Darla
-      never legitimately starts inside during fetch/cheese/leash, so she
-      should be pushed out unconditionally. Keep the airborne exemption.
+      Dropped for her commanded paths, since she never legitimately starts
+      inside during fetch, cheese or leash. Airborne stays — a jump does need
+      to carry her over the rim.
+
+      Measured: 7,010 frames with her called across the pit, closest approach
+      to the centre 1.000 m, which is `FIRE_PIT_CLEARANCE` exactly. She
+      skirts the rim and arrives on the far side.
+
+      **Note for any future two-radius test in this codebase:** the hysteresis
+      gap has to exceed one frame of movement, not one float epsilon. This is
+      the second bug caused by that same 0.08.
 
 - [ ] **"Everywhere walkable" isn't, and the reason is that the map has no
       corners.** Reported 2026-07-31: can't reach the corner of the map.

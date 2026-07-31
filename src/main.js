@@ -5271,8 +5271,23 @@ function animate() {
     // recomputed below for the walk cycle — the jump globals only describe
     // *her* jump in multiplayer, and in single-player this block runs on
     // Miranda's client where they describe Miranda.
+    // No "already inside, so leave her alone" exemption here, and that
+    // omission is the fix rather than an oversight.
+    //
+    // The player gets that exemption so someone who jumped into the pit can
+    // walk back out. It was copied here and it does not survive contact
+    // with a moving dog: `FIRE_PIT_INSIDE` is only 0.08 m tighter than
+    // `FIRE_PIT_CLEARANCE`, and one frame at her run speed covers 0.083 m —
+    // so a single step carries her from outside the blocked radius to
+    // inside the exempt one, at which point she is excused for good and
+    // strolls through the fire. That is exactly what "calling Darla still
+    // walks her through the fire pit" was.
+    //
+    // She never legitimately starts inside during fetch, cheese or leash,
+    // so there is nothing for the exemption to protect. Airborne stays,
+    // because a jump genuinely does need to carry her over the rim.
     const darlaAirborne = isMultiplayer && playerKind === 'darla' && isJumping;
-    if (!darlaAirborne && !insideFirePit(darla.position.x, darla.position.z)) {
+    if (!darlaAirborne) {
       const clear = pushOutOfFirePit(darla.position.x, darla.position.z);
       darla.position.x = clear.x;
       darla.position.z = clear.z;
