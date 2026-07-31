@@ -1337,9 +1337,14 @@ function buildRoofLadder() {
   return group;
 }
 
-// Three piers, two bays — a wide one holding the back door and the French
-// doors, a narrow one holding a window, as in the reference shot.
-const PIER_X = [PORCH.xMin + 0.26, 0.75, PORCH.xMax - 0.26];
+// Three piers, two bays of roughly equal width.
+//
+// The middle pier was at 0.75, which made the east bay noticeably wider
+// than the west one. Measuring it off the straight-on reference shot puts
+// it at about 52% of the recess — near enough dead centre — so the two
+// bays are close to equal, and the pier lands between the patio doors and
+// the window rather than off to one side of both.
+const PIER_X = [PORCH.xMin + 0.26, 0.1, PORCH.xMax - 0.26];
 const PIER_Z = HALF_D - 0.26;
 const PIER_HALF = 0.26;
 
@@ -1861,9 +1866,17 @@ export function createHouse() {
   addOnWall(group, buildFrontDoor(), {
     x: doorX, y: 1.09, z: -HALF_D - 0.06, facing: 'nz', proud: 0.02,
   });
-  // House-number plaque on the siding beside the door.
+  // The transom over the door — four panes, two by two, wider than the door
+  // itself. Missing entirely before, and it's the first thing you see in
+  // the close-up of the real entry: the alcove is tall enough that without
+  // it there's a blank metre of siding above the door.
+  addOnWall(group, buildWindowUnit(1.16, 0.34, 2, 2, false), {
+    x: doorX, y: 2.44, z: -HALF_D - 0.06, facing: 'nz', proud: 0.02,
+  });
+  // House numbers, between the transom and the door head, as they are on
+  // the real one.
   group.add(place(
-    mesh(new THREE.BoxGeometry(0.38, 0.14, 0.03), DARK_METAL_MAT), doorX, 2.3, -HALF_D - 0.08
+    mesh(new THREE.BoxGeometry(0.38, 0.14, 0.03), DARK_METAL_MAT), doorX, 2.21, -HALF_D - 0.08
   ));
   // Pendant hanging from the alcove ceiling, and a coach lantern on the
   // garage's brick return facing back into the alcove — both are in the
@@ -1978,20 +1991,25 @@ export function createHouse() {
     porchCx, WALL_H / 2, PORCH_BACK_Z + 0.03
   ));
 
-  // French doors centred in the near bay, a solid door beside them, and a
-  // window in the far bay, matching the reference shot's composition.
-  addOnWall(group, buildFrenchDoorPair(1.72, 2.06), {
-    x: -0.45, y: 1.09, z: PORCH_BACK_Z + 0.06, facing: 'pz', proud: 0.03,
-  });
-  const patioDoor = new THREE.Group();
-  patioDoor.add(place(mesh(new THREE.BoxGeometry(0.86, 2.02, 0.06), DOOR_MAT), 0, 0, -0.03));
-  patioDoor.add(place(trimBox(1.04, 0.1, 0.12), 0, 1.06, -0.01));
-  [-1, 1].forEach((s) => patioDoor.add(place(trimBox(0.09, 2.12, 0.12), s * 0.475, 0, -0.01)));
-  addOnWall(group, patioDoor, {
-    x: -2.0, y: 1.06, z: PORCH_BACK_Z + 0.06, facing: 'pz', proud: 0.03,
+  // Two sets of patio doors side by side in the east bay, and a window in
+  // the west bay.
+  //
+  // Corrected against the reference photos: this was one French pair plus a
+  // *solid* door beside it. Both openings are glazed in reality — the back
+  // of the house has two matching sets of patio doors next to each other,
+  // which is the thing you notice about it — and the solid door was the
+  // single biggest wrong note on this elevation.
+  //
+  // They sit toward the east end of the recess rather than centred in it,
+  // with the middle pier landing just west of them and the window beyond
+  // that, which is the composition in the straight-on shot.
+  [-2.05, -0.55].forEach((x) => {
+    addOnWall(group, buildFrenchDoorPair(1.44, 2.06), {
+      x, y: 1.09, z: PORCH_BACK_Z + 0.06, facing: 'pz', proud: 0.03,
+    });
   });
   addOnWall(group, buildWindowUnit(0.86, 1.0, 2, 2), {
-    x: 1.77, y: 1.72, z: PORCH_BACK_Z + 0.06, facing: 'pz',
+    x: 1.7, y: 1.72, z: PORCH_BACK_Z + 0.06, facing: 'pz',
   });
 
   // Flush dome ceiling lights, one per bay.

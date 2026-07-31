@@ -2042,7 +2042,15 @@ function toggleDayNight() {
 }
 
 dayNightButton.addEventListener('click', toggleDayNight);
-applyDayNight(true);
+
+// `?night` — start after dark.
+//
+// Small, and it closes a real hole: `?at=` and `?eye=` make a *position*
+// reproducible but not the time of day, so every night check meant loading
+// and then hunting for the toggle. A night shot could not be written down
+// and handed to someone, which for a game whose whole second half is the
+// dark is a strange thing to be missing.
+applyDayNight(!new URLSearchParams(window.location.search).has('night'));
 
 // The renderer's own `antialias: true` only ever applies to the default
 // framebuffer. Everything here is drawn into the composer's render targets

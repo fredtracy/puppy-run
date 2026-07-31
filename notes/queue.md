@@ -7,6 +7,14 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
 
 ## Open
 
+- [ ] **Every window should be lit at night, not just some.** `LIT_WINDOW_SHARE`
+      in house.js is 0.55 — chosen so the house didn't read as an office block
+      with every room blazing. The owner wants them all lit (2026-07-31), so
+      set it to 1 and drop the two-material split if nothing else needs it.
+      Keep `setHouseLampsLit`/`setHouseWindowsLit` as they are; only the share
+      changes.
+
+
 - [ ] **Calling Darla still walks her through the fire pit.** Reported
       2026-07-31, after the 2026-07-30 fix that claimed to close it. That fix
       was committed **unverified** (the pane was hidden, so her AI couldn't be
@@ -253,9 +261,25 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
 - [ ] **Dragonflies** — blue and green, flying around at night.
 - [ ] **Hammock** — when a character gets in, camera goes first-person and looks
       straight up at the sky.
-- [ ] **Front flower bed** — it runs straight for a while and *then* curves
-      around the corner, with the sidewalk following it. Currently it cuts
-      across the sidewalk. See the front-of-house photos.
+- [ ] **Front flower bed — two separate faults, both confirmed against the
+      photos 2026-07-31.**
+
+      1. **It lies on top of the sidewalk.** The bed is drawn as an annulus
+         laid over the perimeter walk, and the code comment cheerfully admits
+         it: "laying the bed over the concrete is invisible and far simpler
+         than notching the ring around it". It is not invisible. In the
+         photos the order from the wall outward is wall → mulch bed with
+         brick curb → sidewalk → lawn, so the walk has to start where the bed
+         ends, not under it.
+      2. **It is a pure arc, and shouldn't be.** `WALK`/`PLANTER_R` describe
+         one circle. The real bed runs **straight** along the front past the
+         arched windows and only curves once it's past them, wrapping the
+         corner. So it wants a straight segment plus an arc, not one radius.
+
+      Fixing (2) alone is a contained change to the bed geometry. Fixing (1)
+      means reworking how `PERIMETER` derives the walk from `MASSES` — the
+      front-facing edges need to be pushed out by the bed's width — and that
+      derivation feeds the whole ring, so it needs care.
 - [ ] **Discuss using subagents** to work queue items in parallel — which items
       actually parallelise (they mostly touch different files, but several
       share `yard.js`), and whether the visual-iteration loop survives being
