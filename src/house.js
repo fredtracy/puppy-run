@@ -1574,8 +1574,29 @@ export function createHouse() {
   const soldierY = WALL_H - BRICK_UNIT_W / 2 - 0.02;
   const soldierBand = (w, d, x, z) =>
     place(meterBox(w, BRICK_UNIT_W, d, SOLDIER_MAT), x, soldierY, z);
-  group.add(soldierBand(W + 0.06, 0.03, 0, HALF_D + 0.015));
-  group.add(soldierBand(W + 0.06, 0.03, 0, -HALF_D - 0.015));
+  // The core's own front and back faces, and only where they are actually
+  // exposed walls.
+  //
+  // Both of these used to run the full 15.3 m width, and that is very
+  // probably the "dark bar on the roof above the arched windows" that has
+  // been on the queue for weeks (a magenta-tint test had already pinned it
+  // to SOLDIER_MAT geometry without saying which band).
+  //
+  // On the street side the front elevation is entirely made of things
+  // standing *in front of* the core — east end, bay, garage — which tile
+  // the full width between them. The single exception is the entry alcove,
+  // which is a recess rather than a projection, so the core's face there is
+  // the back of the entry. Everything else was 14.1 m of brick band sealed
+  // inside the building, and geometry buried inside a wall is exactly what
+  // shows through the first seam it finds.
+  //
+  // On the garden side the porch is a notch with no wall at all, so the
+  // band was spanning 6.1 m of open air above the patio.
+  group.add(soldierBand(ALCOVE.xMax - ALCOVE.xMin + 0.06, 0.03,
+    (ALCOVE.xMin + ALCOVE.xMax) / 2, -HALF_D - 0.015));
+  [[-HALF_W, PORCH.xMin], [PORCH.xMax, HALF_W]].forEach(([x0, x1]) => {
+    group.add(soldierBand(x1 - x0 + 0.06, 0.03, (x0 + x1) / 2, HALF_D + 0.015));
+  });
   group.add(soldierBand(0.03, D + 0.06, -HALF_W - 0.015, 0));
   group.add(soldierBand(0.03, D + 0.06, HALF_W + 0.015, 0));
   group.add(soldierBand(GARAGE_W + 0.06, 0.03, GARAGE_CX, GARAGE_FRONT_Z - 0.015));

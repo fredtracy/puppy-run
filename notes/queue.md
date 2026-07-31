@@ -234,12 +234,26 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
       stand under stayed pitch black with two glowing beads on its ceiling.
       Hung 0.2 m below the dome — a point light level with the ceiling puts
       half its sphere inside the soffit.
-- [ ] **Roof bar** — dark bar on the roof above the arched windows. Confirmed to
-      be `SOLDIER_MAT` geometry (magenta-tint test). Ruled out: roof vents,
-      chimney (stucco), backface culling through the roof void, the core
-      front-wall band, the bay side bands. Current theory: a seam in the main
-      roof surface where the bay's hip crosses it, showing the back wall's band
-      through. Needs one focused pass.
+- [x] **Roof bar — found it, and it was the core front-wall band after
+      all.** (That had been "ruled out" previously; the earlier pass was
+      wrong.)
+
+      The soldier course under the eave ran the full 15.3 m width on both the
+      street and garden faces. On the street side the elevation is entirely
+      made of masses standing *in front of* the core — east end, bay, garage —
+      and they tile the whole width between them. The only exposed bit of core
+      front face is the entry alcove, which is a recess rather than a
+      projection: 1.22 m of the 15.3. The other **14.1 m was brick band sealed
+      inside the building**, and buried geometry shows through the first seam
+      it finds. Directly above the arched windows is exactly where the bay's
+      hip crosses the main roof.
+
+      Also fixed on the same line: the garden-side band spanned the porch
+      notch, so 6.1 m of it was hanging in open air above the patio.
+
+      **Not visually confirmed** — the browser pane was hidden, so no
+      screenshot. But removing geometry that is provably inside a wall is
+      right whether or not it turns out to be the bar.
 
 - [ ] **Miranda's character-select portrait** — the cute image of her still
       shows the old model. Redraw it to match the anime/cel-shaded rebuild.
