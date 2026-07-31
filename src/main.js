@@ -1135,6 +1135,90 @@ function updateIdleGlows(elapsed) {
   }
 }
 
+// ── the cursor ─────────────────────────────────────────────────────────
+//
+// A paw print, because it's a game about a dog.
+//
+// Two states, not one. The pointer already changes over anything you can
+// click (Miranda, Darla, the hammock, a poop), and that hover feedback is
+// worth more than the novelty — so rather than replace it with a single
+// paw that ignores it, there's a resting paw and a lit one. Losing the
+// hover cue to gain a cute cursor would be a bad trade.
+//
+// Drawn to a canvas and handed over as a data URI, the same way the
+// favicon and every texture in this project are made. 32 px because
+// browsers quietly refuse cursors much above that on some platforms, and a
+// refused cursor falls back to the system arrow with no warning.
+function makePawCursor(active) {
+  const S = 32;
+  const c = document.createElement('canvas');
+  c.width = S;
+  c.height = S;
+  const ctx = c.getContext('2d');
+
+  // A dark outline under everything, so the paw stays visible against both
+  // the lawn and the night sky. A cursor that vanishes over half the scene
+  // is worse than no cursor.
+  const draw = (fill, stroke, grow) => {
+    ctx.fillStyle = fill;
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 2;
+    // Main pad — a rounded triangle-ish blob, widest at the bottom.
+    ctx.beginPath();
+    ctx.ellipse(16, 21.5, 6.6 + grow, 5.7 + grow, 0, 0, Math.PI * 2);
+    ctx.fill();
+    if (stroke) ctx.stroke();
+    // Four toes, fanned. The outer two are smaller and set lower, which is
+    // what makes it read as a paw rather than a flower.
+    // Spacing matters more than size here. The first pass had the inner two
+    // toes at x=13 and x=19 with rx=3.1, which overlap outright — before the
+    // outline pass grows them further — so the four toes fused into one bar
+    // and the whole thing read as a bear head. These are spread until the
+    // *fills* clear each other; the dark pass underneath still merges, which
+    // is what a real print's shadow does anyway.
+    [
+      [6.4, 13.2, 2.6, 3.1, -0.4],
+      [12.6, 8.6, 2.7, 3.3, -0.14],
+      [19.4, 8.6, 2.7, 3.3, 0.14],
+      [25.6, 13.2, 2.6, 3.1, 0.4],
+    ].forEach(([x, y, rx, ry, rot]) => {
+      ctx.beginPath();
+      ctx.ellipse(x, y, rx + grow, ry + grow, rot, 0, Math.PI * 2);
+      ctx.fill();
+      if (stroke) ctx.stroke();
+    });
+  };
+
+  // Outline pass first, then the fill on top of it.
+  draw('rgba(30,22,18,0.9)', null, 1.3);
+  draw(active ? '#ffd24a' : '#fdf3ea', null, 0);
+
+  // Hotspot in the middle of the main pad — that's where the paw looks like
+  // it is touching, and a hotspot anywhere else makes clicking feel offset.
+  return `url(${c.toDataURL('image/png')}) 16 21, auto`;
+}
+
+const CURSOR_PAW = makePawCursor(false);
+const CURSOR_PAW_ACTIVE = makePawCursor(true);
+renderer.domElement.style.cursor = CURSOR_PAW;
+
+// The paw covers the HUD too, not just the canvas. Leaving the buttons on
+// the system hand would mean the cursor changed species halfway up the
+// screen — so the same two states apply there: lit paw over anything
+// clickable, resting paw everywhere else. Done as an injected rule rather
+// than by editing each button's CSS, since the data URI only exists at
+// runtime and this way it also covers buttons added later.
+//
+// !important, and not out of laziness: the existing rules in index.html are
+// hung off ids and classes (#mp-corner-button, #mp-menu button,
+// .character-card), so a plain `button` selector loses the specificity
+// contest against every one of them and the paw would silently not apply.
+const cursorStyle = document.createElement('style');
+cursorStyle.textContent =
+  `body { cursor: ${CURSOR_PAW}; }\n` +
+  `button, [role="button"], .character-card { cursor: ${CURSOR_PAW_ACTIVE} !important; }`;
+document.head.appendChild(cursorStyle);
+
 const momGlow = createHoverGlow(1.1, 1.9, 0.75);
 mom.add(momGlow);
 let momHovered = false;
@@ -1142,7 +1226,7 @@ function setMomHover(hovered) {
   if (hovered === momHovered) return;
   momHovered = hovered;
   momGlow.visible = hovered;
-  renderer.domElement.style.cursor = hovered ? 'pointer' : '';
+  renderer.domElement.style.cursor = hovered ? CURSOR_PAW_ACTIVE : CURSOR_PAW;
 }
 
 // Same hover-highlight idiom, mirrored for Darla so Miranda can click on
@@ -1154,7 +1238,7 @@ function setDarlaHover(hovered) {
   if (hovered === darlaHovered) return;
   darlaHovered = hovered;
   darlaHoverGlow.visible = hovered;
-  renderer.domElement.style.cursor = hovered ? 'pointer' : '';
+  renderer.domElement.style.cursor = hovered ? CURSOR_PAW_ACTIVE : CURSOR_PAW;
 }
 
 // Character-select portraits — simple hand-drawn 2D faces using each
@@ -3793,7 +3877,7 @@ function setHammockHover(hovered) {
   if (hovered === hammockHovered) return;
   hammockHovered = hovered;
   hammockGlow.userData.hovered = hovered;
-  renderer.domElement.style.cursor = hovered ? 'pointer' : '';
+  renderer.domElement.style.cursor = hovered ? CURSOR_PAW_ACTIVE : CURSOR_PAW;
 }
 
 // The ladder is tall and thin, so its glow is too — a square one centred on
@@ -3812,7 +3896,7 @@ function setPoopHover(poop) {
   if (hoveredPoop) hoveredPoop.userData.hoverGlow.visible = false;
   hoveredPoop = poop;
   if (hoveredPoop) hoveredPoop.userData.hoverGlow.visible = true;
-  renderer.domElement.style.cursor = hoveredPoop ? 'pointer' : '';
+  renderer.domElement.style.cursor = hoveredPoop ? CURSOR_PAW_ACTIVE : CURSOR_PAW;
 }
 
 // Hover highlight only makes sense with a mouse (no persistent "hover" on
