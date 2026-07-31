@@ -982,22 +982,69 @@ function buildFrontDoor() {
     g.add(place(trimBox(0.1, h + 0.1, 0.14), (s * (w + 0.1)) / 2, 0, -0.02));
   });
 
-  const oval = trinket(new THREE.CircleGeometry(0.17, 22), GLASS_MAT);
-  oval.scale.set(1, 1.9, 1);
-  g.add(place(oval, 0, 0.18, 0.006));
-  const ovalTrim = trinket(new THREE.RingGeometry(0.17, 0.2, 22), TRIM_MAT);
-  ovalTrim.scale.set(1, 1.9, 1);
-  g.add(place(ovalTrim, 0, 0.18, 0.008));
+  // The light: a tall oval, and *tall* is the whole character of it. The
+  // first version was a 0.34 x 0.65 ellipse sitting in the middle of the
+  // door, which at any distance read as a porthole. On the real door the
+  // glass runs from knee height to just under the top rail — about 1.2 m of
+  // a 2.06 m door, well over half its height — and it's that proportion,
+  // not the shape, that makes it read as a front door rather than a hatch.
+  const ovalW = 0.27;
+  const ovalH = 0.60;
+  const oval = trinket(new THREE.CircleGeometry(1, 28), GLASS_MAT);
+  oval.scale.set(ovalW, ovalH, 1);
+  g.add(place(oval, 0, 0.16, 0.006));
+  // Two rings: a wide bevel round the glass and a thin bead inside it,
+  // which is what the moulded surround on the real one does.
+  const ovalTrim = trinket(new THREE.RingGeometry(1, 1.13, 28), TRIM_MAT);
+  ovalTrim.scale.set(ovalW, ovalH, 1);
+  g.add(place(ovalTrim, 0, 0.16, 0.008));
+  const ovalBead = trinket(new THREE.RingGeometry(0.93, 0.97, 28), TRIM_MAT);
+  ovalBead.scale.set(ovalW, ovalH, 1);
+  g.add(place(ovalBead, 0, 0.16, 0.009));
+
+  // The leaded pattern inside the glass — a long vertical came with a
+  // diamond at its foot, which is the figure in the close-up. Thin brass
+  // strips rather than a texture, so it catches light like the real
+  // leading does.
+  const cameMat = new THREE.MeshStandardMaterial({
+    color: 0xc0a468, roughness: 0.45, metalness: 0.6,
+  });
+  const came = (wid, hei, x, y, rot) => {
+    const bar = trinket(new THREE.PlaneGeometry(wid, hei), cameMat);
+    bar.rotation.z = rot;
+    g.add(place(bar, x, y, 0.0105));
+  };
+  came(0.008, ovalH * 1.15, 0, 0.16, 0);
+  // The diamond: four short bars meeting at their ends, low in the glass.
+  const dY = 0.16 - ovalH * 0.55;
+  const dS = 0.085;
+  [[-1, 1], [1, 1], [-1, -1], [1, -1]].forEach(([sx, sy]) => {
+    came(0.008, dS * 1.5, (sx * dS) / 2, dY + (sy * dS) / 2, (sx * sy * Math.PI) / 4);
+  });
+
   const wreath = trinket(
     new THREE.TorusGeometry(0.17, 0.045, 6, 16),
     new THREE.MeshStandardMaterial({ color: 0x27301f, roughness: 0.98, envMapIntensity: MATTE_ENV })
   );
-  g.add(place(wreath, 0, 0.22, 0.04));
-  const knob = trinket(
-    new THREE.SphereGeometry(0.035, 8, 6),
-    new THREE.MeshStandardMaterial({ color: 0xb08d4a, roughness: 0.35, metalness: 0.7 })
-  );
-  g.add(place(knob, w / 2 - 0.13, -0.1, 0.03));
+  g.add(place(wreath, 0, 0.28, 0.04));
+
+  const brass = new THREE.MeshStandardMaterial({
+    color: 0xb08d4a, roughness: 0.35, metalness: 0.7,
+  });
+  const knob = trinket(new THREE.SphereGeometry(0.035, 8, 6), brass);
+  g.add(place(knob, w / 2 - 0.13, -0.16, 0.03));
+  // Deadbolt above the knob — a keypad one on the real door, so it's a
+  // small raised plate rather than a cylinder.
+  g.add(place(
+    trinket(new THREE.BoxGeometry(0.07, 0.11, 0.02), brass),
+    w / 2 - 0.13, 0.02, 0.025
+  ));
+  // Brass threshold strip at the foot, which is surprisingly visible in
+  // the close-up and reads as the door being a real assembly.
+  g.add(place(
+    trinket(new THREE.BoxGeometry(w, 0.045, 0.05), brass),
+    0, -h / 2 + 0.02, 0.01
+  ));
   return g;
 }
 
@@ -1239,7 +1286,23 @@ function frontBedInnerEdge() {
 
 const DRIVEWAY_END_Z = GARAGE_FRONT_Z - FT * 14;
 const APRON_X1 = HALF_W + FT * 9;
-const BACK_WALK_Z1 = HALF_D + FT * 3;
+// The back walk is as wide as the parking run on the garage side, not the
+// 3 ft strip the rest of the perimeter gets. It's the width of a patio in
+// the photos — people stand on it — and at 3 ft it read as a path.
+// Walk widths. Declared up here rather than beside PERIMETER, which is
+// their main consumer 200 lines below, because BACK_WALK_Z1 immediately
+// under this reads PARK_W at module load — and a `const` read before its
+// declaration is a temporal-dead-zone throw that kills the module and
+// shows up only as a loading screen that never finishes.
+//
+// That is the fifth time this file has done this to me in one session. The
+// pattern is always the same: a constant gets used by something declared
+// earlier than the block it was written in. If you add another, put it
+// above its first *use*, not next to its most obvious relative.
+const WALK_W = FT * 3;
+const PARK_W = FT * 9;
+
+const BACK_WALK_Z1 = HALF_D + PARK_W;
 
 // There is no back patio, despite the assessor's sketch labelling 457 sq ft
 // of "Patio" back here. That figure is the sidewalk: the sketch measures the
@@ -1457,8 +1520,6 @@ const MASSES = [
 // three times as wide because that's where the cars park — the AC
 // condenser and the bins stand on it too. Only masses whose outer face is
 // the +x wall get the wide version.
-const WALK_W = FT * 3;
-const PARK_W = FT * 9;
 
 // Which masses have a bed along their street face — the window bay and the
 // east end. The garage doesn't; that's where the driveway meets the slab.
@@ -1916,7 +1977,10 @@ export function createHouse() {
     { x: bayWinCx, w: 1.16, h: 1.66, rise: 0.34 },
     { x: bayWinCx - 1.45, w: 1.1, h: 1.5, rise: 0.28 },
   ].forEach(({ x, w, h, rise }) => {
-    const y = 0.72 + h / 2;
+    // Sill at 0.52, down from 0.72. They were riding high enough that the
+    // brick below them read as a knee wall — in the photos the sill sits
+    // just above the projecting course, not a course-and-a-half above it.
+    const y = 0.52 + h / 2;
     addOnWall(group, buildArchedWindowUnit(w, h, rise, 2, 4), {
       x, y, z: BAY_FRONT_Z, facing: 'nz',
     });
@@ -1998,7 +2062,12 @@ export function createHouse() {
   [-1, 1].forEach((s) => {
     serviceDoor.add(place(trimBox(0.09, 2.12, 0.12), s * 0.485, 0, -0.01));
   });
-  const serviceZ = GARAGE_FRONT_Z + 2.0;
+  // The service door on the garage's outer wall.
+  //
+  // Moved back from GARAGE_FRONT_Z + 2.0. At two metres it sat almost at
+  // the front corner, where the photos put it well down the wall toward
+  // the back yard.
+  const serviceZ = GARAGE_FRONT_Z + 4.3;
   addOnWall(group, serviceDoor, {
     x: GARAGE.xMax, y: 1.06, z: serviceZ, facing: 'px', proud: 0.03,
   });
@@ -2021,13 +2090,16 @@ export function createHouse() {
   const ac = new THREE.Group();
   ac.add(place(mesh(new THREE.BoxGeometry(0.78, 0.86, 0.78), AC_MAT), 0, 0.43, 0));
   ac.add(place(mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.04, 16), DARK_METAL_MAT), 0, 0.88, 0));
-  group.add(place(ac, HALF_W + 0.62, 0.06, serviceZ + 3.2));
+  // The condenser goes on the *street* side of the door and the bins on
+  // the back-yard side — the order along the wall is condenser, door,
+  // bins. It was the other way round.
+  group.add(place(ac, HALF_W + 0.62, 0.06, serviceZ - 2.6));
 
-  [-0.5, 0.34].forEach((dz) => {
+  [1.05, 1.78].forEach((dz) => {
     const bin = new THREE.Group();
     bin.add(place(mesh(new THREE.BoxGeometry(0.6, 0.95, 0.7), BIN_MAT), 0, 0.48, 0));
     bin.add(place(mesh(new THREE.BoxGeometry(0.64, 0.06, 0.74), BIN_MAT), 0.02, 0.98, 0));
-    group.add(place(bin, HALF_W + 0.45, 0.06, serviceZ - 1.1 + dz));
+    group.add(place(bin, HALF_W + 0.45, 0.06, serviceZ + dz));
   });
 
   // ── back of the house: the covered patio ─────────────────────────────
@@ -2104,25 +2176,25 @@ export function createHouse() {
   });
 
   // Two windows in each brick wing flanking the patio, as in the reference.
+  // Two windows in each brick wing flanking the patio.
+  //
+  // Respaced against the straight-on shot. They were bunched toward the
+  // middle — both pairs sat close to the patio with a wide blank stretch
+  // out at each corner. In the photo they're spread across their wing, the
+  // inner one close to the pier and the outer one close to the corner.
   [
-    { x: -5.55, w: 0.92 },
-    { x: -4.3, w: 0.92 },
-    { x: 3.3, w: 0.92 },
-    { x: 5.4, w: 0.92 },
+    { x: -6.25, w: 0.92 },
+    { x: -3.8, w: 0.92 },
+    { x: 3.85, w: 0.92 },
+    { x: 6.3, w: 0.92 },
   ].forEach(({ x, w }) => {
     addOnWall(group, buildWindowUnit(w, 1.24, 2, 3), { x, y: 1.66, z: HALF_D, facing: 'pz' });
     addWindowSurround(group, { x, y: 1.66, z: HALF_D, w, h: 1.24, facing: 'pz' });
   });
 
-  // Hose reel on the back wall, on its bracket, plus a floodlight tucked up
-  // under the eave.
-  const hoseMat = new THREE.MeshStandardMaterial({
-    color: 0x24331f, roughness: 0.95, envMapIntensity: MATTE_ENV,
-  });
-  const hose = mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.18, 14), hoseMat);
-  hose.rotation.x = Math.PI / 2;
-  group.add(place(hose, 6.0, 1.2, HALF_D + 0.16));
-  group.add(place(mesh(new THREE.BoxGeometry(0.12, 0.3, 0.12), DARK_METAL_MAT), 6.0, 1.28, HALF_D + 0.06));
+  // No hose reel on the back wall. There was one — a dark disc that read as
+  // a hole punched in the brick from any distance — and the owner asked for
+  // it gone. Just the floodlight under the eave now.
   group.add(place(
     mesh(new THREE.BoxGeometry(0.22, 0.1, 0.12), DARK_METAL_MAT),
     4.6, ROOF_Y - SOFFIT_DROP - 0.06, HALF_D + 0.25
