@@ -2657,57 +2657,6 @@ export function setWaterLight(skyTint, lightDir, sunColor) {
 // ditch long before the lawn mesh did.
 const LAWN_SIZE = 120;
 const LAWN_SEGMENTS = 200;
-// Where the visible ground stops. A little outside WORLD_RADIUS (55) so
-// the rim sits beyond anything the player can walk to — the movement clamp
-// holds them at 54, and standing at the clamp looking at the edge of the
-// world a metre away would be worse than not seeing it at all.
-const LAWN_EDGE = 58;
-
-// The same regular grid a PlaneGeometry gives, minus every quad whose
-// centre falls outside `edge`.
-//
-// Written out by hand rather than displacing a PlaneGeometry because the
-// point is to *drop* geometry, and PlaneGeometry has no way to. Vertices
-// are shared through a lookup keyed on grid position, so the disc costs the
-// same per-quad as the square did and simply covers less area — about 65%
-// of it, which is a real saving on a mesh this size.
-function buildDiscGrid(size, segments, edge) {
-  const step = size / segments;
-  const half = size / 2;
-  const index = new Int32Array((segments + 1) * (segments + 1)).fill(-1);
-  const positions = [];
-  const indices = [];
-
-  const vertexAt = (ix, iz) => {
-    const key = iz * (segments + 1) + ix;
-    if (index[key] !== -1) return index[key];
-    const id = positions.length / 3;
-    // Local x/y; the mesh is rotated flat by the caller, so local y becomes
-    // world -z and local z becomes world height.
-    positions.push(-half + ix * step, half - iz * step, 0);
-    index[key] = id;
-    return id;
-  };
-
-  for (let iz = 0; iz < segments; iz++) {
-    for (let ix = 0; ix < segments; ix++) {
-      // Quad centre, in world x/z.
-      const cx = -half + (ix + 0.5) * step;
-      const cz = -(half - (iz + 0.5) * step);
-      if (Math.hypot(cx, cz) > edge) continue;
-      const a = vertexAt(ix, iz);
-      const b = vertexAt(ix + 1, iz);
-      const c = vertexAt(ix, iz + 1);
-      const d = vertexAt(ix + 1, iz + 1);
-      indices.push(a, c, b, b, c, d);
-    }
-  }
-
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geo.setIndex(indices);
-  return geo;
-}
 
 // How much light reaches the ground at a point, 1 in the open and near
 // nothing under the wood.
@@ -2753,24 +2702,7 @@ function createLawn() {
   // pattern to go with them the way a real photo does; a flat roughness
   // suits the painterly look better anyway.
   const map = createPaintedGrassTexture();
-  // A disc, not a square — and this is why the world "looked square".
-  //
-  // Everything else about the world is radial: terrainHeight is a dome
-  // falling to zero at TERRAIN_RADIUS, generation is a disc of
-  // WORLD_RADIUS, movement clamps to a circle. The one thing that wasn't
-  // was the ground you actually see, which was a 120 x 120 PlaneGeometry —
-  // so past the point where the dome flattens out you were looking at a
-  // square slab of level ground with square corners, which is exactly what
-  // it reads as.
-  //
-  // Built by walking the same regular grid and keeping only the quads whose
-  // centre falls inside the radius, rather than by switching to a radial
-  // ring mesh. A ring mesh gives a perfectly smooth rim but piles all its
-  // resolution into the middle and starves the rim — and the middle is the
-  // yard, which needs no more detail than it already has. This keeps the
-  // 0.6 m grid everywhere and pays for it with a rim that's stepped at
-  // 0.6 m, which the fog and the tree line cover.
-  const geo = buildDiscGrid(LAWN_SIZE, LAWN_SEGMENTS, LAWN_EDGE);
+  const geo = new THREE.PlaneGeometry(LAWN_SIZE, LAWN_SIZE, LAWN_SEGMENTS, LAWN_SEGMENTS);
 
   // The mesh gets rotated flat below (rotation.x = -PI/2), which maps local
   // (x, y, z) to world (x, z, -y). So world height is the local z axis, and
