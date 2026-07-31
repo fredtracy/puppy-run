@@ -14,6 +14,39 @@ a human. Those stay in the untested list until someone actually plays them.
 
 ## Judgement calls that could have gone the other way
 
+- **Sit is committed but has never been run.** Session ended before I could
+  look at either pose in the browser. The build passes and the logic is
+  straightforward, but every *number* in it is a guess made from reading rig
+  coordinates, not from seeing it: `DARLA_SIT` and `MIRANDA_SIT` in
+  `src/main.js` set the lean, the leg angles and how far the body drops.
+  Miranda's 0.55 m drop in particular was derived from her hip pivot sitting
+  at 0.63 — if her backside is buried in the lawn or hovering above it, that
+  constant is the one to move. Darla's front legs carry `+0.34` purely to
+  cancel the body's `-0.34` lean and stay vertical; those two want changing
+  together or she'll lean on bent legs.
+
+- **Sit is bound to C, and the icon is a chair.** Nobody asked for either.
+  WASD owns the movement letters and S is already "back", so the mnemonic key
+  wasn't available; C is at least the conventional crouch key. The button is
+  a sixth slot at `bottom: 390px`, above both existing stacks, and is the only
+  action button that shows for *both* characters — every other one is
+  Darla-only or Miranda-only.
+
+- **Both characters' rotation order changed to YXZ.** Needed so the sit lean
+  is applied after yaw and means "lean back" rather than "rotate about the
+  world X axis". It also changes two things nobody asked me to touch:
+  Miranda's bend-to-pick-up-a-poop and her swim tilt both used `rotation.x`
+  under the old order, so they were tipping her sideways whenever she wasn't
+  facing along Z. This makes them correct, but it is a visible change to
+  existing animations and worth a look.
+
+- **The paw cursor covers the HUD buttons too, with `!important`.** The
+  alternative was leaving the system hand on the buttons, which would have
+  meant the cursor changed species halfway up the screen. The `!important` is
+  load-bearing rather than lazy — the existing rules hang off
+  `#mp-corner-button`, `#mp-menu button` and `.character-card`, all of which
+  outrank a bare `button` selector.
+
 - **The pond exists and nobody has looked at it.** Built overnight with the
   browser pane hidden, so every check is arithmetic — rim level, bed
   submerged, stream monotonic downhill, nothing growing in the water. What

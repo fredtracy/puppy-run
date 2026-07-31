@@ -282,13 +282,28 @@
         align-items: center;
         justify-content: center;
       }
+      /* Sitting is the one skill both of them have, so it sits above both
+         stacks in the sixth slot and is excluded from the mode swap below
+         rather than being declared twice. */
+      #sit-button {
+        bottom: 390px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      /* Lit while she's actually sat down, so the button reads as a toggle —
+         walking cancels the sit, and without this the button would still be
+         claiming she was sitting. */
+      #sit-button.active {
+        background: rgba(255, 210, 74, 0.55);
+      }
       /* Fetch, cheese, calling Darla over, the leash, and the psychedelic
          trip are all Miranda-only: everyone else's skills hide when she's
          playing, and only these show up for her. */
       .miranda-mode
         .action-button:not(#ball-button):not(#cheese-button):not(#call-button):not(#leash-button):not(
           #psychedelic-button
-        ) {
+        ):not(#sit-button) {
         display: none;
       }
       .miranda-mode #ball-button {
@@ -844,6 +859,7 @@
     <button id="call-button" class="action-button">&#128227;</button>
     <button id="leash-button" class="action-button">&#129454;</button>
     <button id="psychedelic-button" class="action-button">&#127812;</button>
+    <button id="sit-button" class="action-button" aria-label="Sit">&#129681;</button>
     <div id="speech-bubble"></div>
     <div id="dialogue-menu"></div>
     <script type="module" src="/src/main.js"></script>

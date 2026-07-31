@@ -3016,6 +3016,12 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     spawnPoop();
   }
+  // C for sit — WASD owns the obvious letters and S is already "back", so
+  // the mnemonic key is taken. C is at least the usual crouch key.
+  if (e.code === 'KeyC' && !e.repeat) {
+    e.preventDefault();
+    toggleSit();
+  }
 });
 window.addEventListener('keyup', (e) => {
   if (e.code === 'Space' || e.code === 'Backspace') jumpHeld = false;
@@ -3072,6 +3078,14 @@ poopButton.addEventListener('pointerdown', (e) => {
 document.getElementById('dress-button').addEventListener('pointerdown', (e) => {
   e.preventDefault();
   darla.userData.dress.visible = !darla.userData.dress.visible;
+});
+
+// The only skill both characters share, so unlike the rest of the stack it
+// isn't hidden in either mode.
+const sitButton = document.getElementById('sit-button');
+sitButton.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  toggleSit();
 });
 
 document.getElementById('bark-button').addEventListener('pointerdown', (e) => {
@@ -4867,6 +4881,88 @@ function updateMirandaWalkCycle(isMoving) {
   return 0;
 }
 
+// ── sitting ─────────────────────────────────────────────────────────────
+//
+// Poses rather than a cycle: both characters have a single sit pose that the
+// rig blends into, so this is a set of target angles plus a blend weight
+// rather than anything driven by `elapsed`.
+//
+// It runs *after* the walk cycle each frame and lerps from whatever that
+// left behind toward the targets. That ordering is deliberate — it means the
+// blend handles the transition for free (sit down mid-stride and the legs
+// swing from wherever they were), and it means no state has to be restored
+// on standing up, because the walk cycle overwrites every channel it owns
+// the moment the weight reaches zero.
+//
+// Sign convention, which is not guessable from the rig: rotating a leg pivot
+// about +X swings the foot *backward*, since the leg hangs below its pivot.
+// So forward is negative. Darla's jump pose already relies on this (front
+// legs -0.5, back legs +0.4 — tucked and trailing).
+const SIT_BLEND_RATE = 5;
+let sitting = false;
+let sitBlend = 0;
+
+// Both characters get YXZ rotation order so pitch is applied *after* yaw and
+// therefore means "lean back" in their own frame rather than "rotate about
+// the world X axis". Under the default XYZ, X is the outermost rotation, so
+// a pitch tips a character sideways whenever they aren't facing along Z —
+// which also quietly affects Miranda's existing bend and swim tilt, and
+// makes them correct rather than breaking them.
+darla.rotation.order = 'YXZ';
+mom.rotation.order = 'YXZ';
+
+// Darla is a dog sit: haunches folded under and dropped, chest lifted, front
+// legs straight. The front legs get the pitch subtracted back out so they
+// stay vertical in world space while the body leans off them.
+const DARLA_SIT = { pitch: -0.34, front: 0.34, back: -1.2, drop: -0.05 };
+// Miranda sits on the ground with her legs out in front and her arms propped
+// behind her. Her hip pivot is at 0.63, so the drop is most of a leg length.
+const MIRANDA_SIT = { pitch: -0.14, legs: -1.45, arms: 0.5, drop: -0.55 };
+
+// Applies the pose at the given weight and returns the height offset to add.
+// Split out from the local state so the same function can pose a networked
+// peer from a blend value that arrived over the wire.
+function applySitPose(char, kind, b) {
+  const lerp = (from, to) => from + (to - from) * b;
+  if (kind === 'darla') {
+    const legs = char.userData.legs;
+    char.rotation.x = lerp(char.rotation.x, DARLA_SIT.pitch);
+    legs.legFR.rotation.x = lerp(legs.legFR.rotation.x, DARLA_SIT.front);
+    legs.legFL.rotation.x = lerp(legs.legFL.rotation.x, DARLA_SIT.front);
+    legs.legBR.rotation.x = lerp(legs.legBR.rotation.x, DARLA_SIT.back);
+    legs.legBL.rotation.x = lerp(legs.legBL.rotation.x, DARLA_SIT.back);
+    return DARLA_SIT.drop * b;
+  }
+  const legs = char.userData.legs;
+  const arms = char.userData.arms;
+  char.rotation.x = lerp(char.rotation.x, MIRANDA_SIT.pitch);
+  legs.legL.rotation.x = lerp(legs.legL.rotation.x, MIRANDA_SIT.legs);
+  legs.legR.rotation.x = lerp(legs.legR.rotation.x, MIRANDA_SIT.legs);
+  arms.armL.rotation.x = lerp(arms.armL.rotation.x, MIRANDA_SIT.arms);
+  arms.armR.rotation.x = lerp(arms.armR.rotation.x, MIRANDA_SIT.arms);
+  return MIRANDA_SIT.drop * b;
+}
+
+// Everything here owns the character's position or pose outright for its
+// duration, so sitting on top of any of them would be two animations
+// fighting over the same channels.
+function canSit() {
+  return !isJumping && !flightActive && !climbing && !mirandaLounging;
+}
+
+// Single entry point so the button's lit state can't drift out of sync with
+// the flag — sitting is cleared from several places (walking off it, jumping,
+// climbing) and not just from the button itself.
+function setSitting(v) {
+  if (sitting === v) return;
+  sitting = v;
+  sitButton?.classList.toggle('active', sitting);
+}
+
+function toggleSit() {
+  setSitting(sitting ? false : canSit());
+}
+
 // Jump — a normal gravity arc triggered by space bar or the on-screen
 // button. Holding it doesn't change the height or duration at all — it
 // only switches her legs into the reindeer-kick animation for however long
@@ -5126,6 +5222,10 @@ function applyRemoteState(msg) {
       mom.userData.arms.armL.rotation.z = 0;
       mom.userData.arms.armR.rotation.z = 0;
       updateMirandaWalkCycle(msg.moving);
+      // After the walk cycle and after the rotation.x reset above, matching
+      // the order the local player uses — otherwise that reset would flatten
+      // the lean straight back out.
+      if (msg.sit > 0.001) applySitPose(mom, 'miranda', msg.sit);
     }
     // Mirrors Miranda's own ball/cheese physics so updateDarlaFetch/
     // updateDarlaCheese (running locally on this — Darla's — client once
@@ -5144,6 +5244,8 @@ function applyRemoteState(msg) {
     darla.position.set(msg.x, msg.y, msg.z);
     darla.rotation.y = msg.ry;
     updateWalkCycle(msg.moving, msg.jumping, msg.jumping && msg.jumpHeld);
+    if (msg.sit > 0.001) applySitPose(darla, 'darla', msg.sit);
+    else darla.rotation.x = 0;
     if (typeof msg.dress === 'boolean') darla.userData.dress.visible = msg.dress;
     if (msg.poops) reconcileRemotePoops(msg.poops);
     // Same head-dip math as updateDarlaCheese's own local animation,
@@ -5207,6 +5309,11 @@ function sendNetworkState(isMoving) {
     moving: isMoving,
     jumping: isJumping,
     jumpHeld,
+    // The blend, not the boolean: the y drop is already baked into the
+    // position above, so a peer that only knew "sitting" would snap the pose
+    // on while the height eased, and the character would sink through the
+    // pose instead of into it.
+    sit: sitBlend,
   };
   if (playerKind === 'darla') {
     msg.dress = darla.userData.dress.visible;
@@ -5313,6 +5420,20 @@ function animate() {
             ? updateWalkCycle(localIsMoving, isJumping, isJumping && jumpHeld)
             : updateMirandaWalkCycle(localIsMoving);
         player.position.y = baseY + (airY ?? ground);
+        // Walking cancels the sit rather than blocking movement — standing
+        // up by pressing a direction is what every game does, and having
+        // the button be the only way out would feel like a trap.
+        if (sitting && (localIsMoving || !canSit())) setSitting(false);
+        sitBlend += ((sitting ? 1 : 0) - sitBlend) * Math.min(1, delta * SIT_BLEND_RATE);
+        if (sitBlend > 0.001) {
+          player.position.y += applySitPose(player, playerKind, sitBlend);
+        } else {
+          // The blend approaches zero asymptotically and never reaches it, so
+          // the lean needs clearing outright once it's below the threshold —
+          // nothing else in either character's animation writes rotation.x
+          // while they're the one being played.
+          player.rotation.x = 0;
+        }
       }
     }
   }
