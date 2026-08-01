@@ -1358,7 +1358,12 @@ const APRON_X1 = HALF_W + FT * 9;
 // above its first *use*, not next to its most obvious relative.
 // How generously the concrete turns every corner. See where it's used.
 const WALK_CORNER_R = 2.4;
-const WALK_W = FT * 3;
+// The walk that rings the house. Was 3 ft, which is a service path — too
+// mean for the run down the side that you actually walk to get to the back,
+// and it made the wide back run land as a step rather than a flare. Carried
+// up by the same 1.55x the front walk got, so front, sides and back now
+// read as one piece of concrete that changes width rather than three.
+const WALK_W = FT * 4.65;
 // The front walk is wider than the 3 ft strip that rings the rest of the
 // house. It's the approach to the front door and the piece you stand on,
 // and at WALK_W it read as a service path squeezed between the bed and the
@@ -1371,7 +1376,11 @@ const WALK_W = FT * 3;
 // temporal-dead-zone ReferenceError and shows up only as a loading screen
 // that never finishes. The functions around it get away with it because they
 // read WALK_W when called; a const does not.
-const FRONT_WALK_W = WALK_W * 1.55;
+// Now the same as the rest of the ring. It was 1.55x while the ring was
+// still 3 ft; widening the ring to match is what the owner asked for, so
+// keeping a multiplier here would just put the front back out of step.
+// Left as its own name so the two can diverge again without hunting.
+const FRONT_WALK_W = WALK_W;
 const PARK_W = FT * 9;
 
 const BACK_WALK_Z1 = HALF_D + PARK_W;
