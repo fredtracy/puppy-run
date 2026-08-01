@@ -21,6 +21,8 @@ import {
   FIRE_PIT,
   HAMMOCK,
   terrainHeight,
+  pushOutOfTrees,
+  treeColliderCount,
   updateGrassAngularSize,
   setGrassFog,
   setGrassLight,
@@ -336,6 +338,12 @@ if (DEBUG_MODE) {
     renderer,
     scene,
     camera,
+    // Tree collision, for measuring it. Has to come from the live module —
+    // a fresh `await import('./yard.js')` in devtools builds a *second*
+    // module instance whose collider grid was never populated by world
+    // generation, so it would answer instantly and mean nothing.
+    pushOutOfTrees,
+    treeColliderCount,
     // No `composer` property here, deliberately. It's a `const` declared
     // about 1,300 lines further down, so naming it in this object literal
     // reads it at construction time and throws a temporal-dead-zone
@@ -4410,7 +4418,11 @@ function clampToWalkable(prevX, prevZ, x, z) {
   const exempt = isJumping || insideFirePit(prevX, prevZ);
   const clear = exempt ? pushed : pushOutOfFirePit(pushed.x, pushed.z);
   const past = isJumping ? clear : pushOutOfHammock(prevX, prevZ, clear.x, clear.z);
-  return clampToWorldRadius(past.x, past.z);
+  // Trunks. Exempt while airborne for the same reason the fire pit is —
+  // being stopped in mid-jump by something at ground level reads as an
+  // invisible wall — and because a jump arcing past a tree shouldn't care.
+  const trees = isJumping ? past : pushOutOfTrees(past.x, past.z);
+  return clampToWorldRadius(trees.x, trees.z);
 }
 
 // Used for picking a click-to-move destination — a stateless best-guess
@@ -4423,7 +4435,10 @@ function clampTargetPoint(x, z) {
   if (onRoof) return clampToWorldRadius(x, z);
   const outside = nearestPointOutsideHouse(x, z);
   const clear = pushOutOfFirePit(outside.x, outside.z);
-  return clampToWorldRadius(clear.x, clear.z);
+  // So clicking on a trunk walks you to the near side of it rather than
+  // setting a destination inside it that she can never actually reach.
+  const trees = pushOutOfTrees(clear.x, clear.z);
+  return clampToWorldRadius(trees.x, trees.z);
 }
 
 const cameraForward = new THREE.Vector3();
@@ -4758,6 +4773,9 @@ function updateMom(delta) {
     // The repulsion above only steers her; it can still be overpowered by a
     // poop sitting right against the stones. This is the hard stop, and it's
     // the same one the player gets.
+    const momTrees = pushOutOfTrees(mom.position.x, mom.position.z);
+    mom.position.x = momTrees.x;
+    mom.position.z = momTrees.z;
     const momClear = pushOutOfFirePit(mom.position.x, mom.position.z);
     mom.position.x = momClear.x;
     mom.position.z = momClear.z;
@@ -5694,6 +5712,9 @@ function animate() {
     const darlaAirborne = isMultiplayer && playerKind === 'darla' && isJumping;
     if (!darlaAirborne) {
       const clear = pushOutOfFirePit(darla.position.x, darla.position.z);
+      const cleared = pushOutOfTrees(clear.x, clear.z);
+      clear.x = cleared.x;
+      clear.z = cleared.z;
       darla.position.x = clear.x;
       darla.position.z = clear.z;
     }

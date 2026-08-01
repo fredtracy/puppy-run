@@ -326,6 +326,95 @@ const FOLIAGE_TINTS = [0x8fae74, 0x7f9e66, 0xa2bb84, 0x6f8f5c, 0x93a86e, 0x86a56
 
 const UP_AXIS = new THREE.Vector3(0, 1, 0);
 
+// ── tree collision ──────────────────────────────────────────────────────
+//
+// Trunks are circles, so collision is a distance test — no raycasting, and
+// deliberately so. The trees bake down to a handful of merged meshes of tens
+// of thousands of triangles each, and three tests those linearly, so a
+// Raycaster here would cost most where there are most trees. Same reasoning
+// as the camera cast-back in main.js, which tests boxes rather than the
+// house's real geometry.
+//
+// Bucketed into a uniform grid because there are a few thousand trunks and
+// only the ones within a couple of metres can possibly matter. A lookup
+// touches the nine cells around a point and tests whatever is in them —
+// usually a handful, occasionally a couple of dozen in thick woods. Against
+// a grass field pushing millions of vertices a frame, that does not register.
+//
+// Stored flat (x, z, r, x, z, r, …) per cell rather than as objects: a few
+// thousand little {x,z,r} allocations is the kind of thing that shows up as
+// GC sawtooth later, and there is no reason to pay it.
+const TREE_CELL = 4;
+const treeGrid = new Map();
+// Integer cell key rather than a `${cx},${cz}` string. A lookup touches nine
+// cells, so a string key means nine string allocations per call, per frame,
+// per mover — which measured as most of the cost of the whole test and is
+// pure garbage for the collector to sweep. The offset keeps it positive for
+// negative coordinates; 4096 cells at 4 m each is a 16 km world, against a
+// real one of 55 m.
+const cellKey = (cx, cz) => (cx + 4096) * 8192 + (cz + 4096);
+
+function addTreeCollider(x, z, r) {
+  const key = cellKey(Math.floor(x / TREE_CELL), Math.floor(z / TREE_CELL));
+  let cell = treeGrid.get(key);
+  if (!cell) {
+    cell = [];
+    treeGrid.set(key, cell);
+  }
+  cell.push(x, z, r);
+}
+
+// Nearest legal position outside every trunk near (x, z).
+//
+// Push-out rather than a blocking test, matching pushOutOfFirePit: it slides
+// along a trunk instead of stopping dead against it, which both feels better
+// and matters for the AI — Miranda walking to a poop behind a tree gets
+// deflected round it rather than wedging on it.
+// How many trunks are in the collider grid, and the worst-case cell. Debug
+// only — the answer to "does this cost anything" is entirely about how many
+// trunks a single lookup has to test, not how many exist.
+export function treeColliderCount() {
+  let total = 0;
+  let worst = 0;
+  for (const cell of treeGrid.values()) {
+    total += cell.length / 3;
+    worst = Math.max(worst, cell.length / 3);
+  }
+  return { trunks: total, cells: treeGrid.size, worstCell: worst };
+}
+
+export function pushOutOfTrees(x, z, bodyRadius = 0.22) {
+  const cx = Math.floor(x / TREE_CELL);
+  const cz = Math.floor(z / TREE_CELL);
+  let outX = x;
+  let outZ = z;
+  for (let i = -1; i <= 1; i++) {
+    for (let j = -1; j <= 1; j++) {
+      const cell = treeGrid.get(cellKey(cx + i, cz + j));
+      if (!cell) continue;
+      for (let k = 0; k < cell.length; k += 3) {
+        const tx = cell[k];
+        const tz = cell[k + 1];
+        const r = cell[k + 2] + bodyRadius;
+        const dx = outX - tx;
+        const dz = outZ - tz;
+        const d2 = dx * dx + dz * dz;
+        if (d2 >= r * r) continue;
+        // Dead centre has no direction to push along — only reachable by
+        // spawning exactly on a trunk with ?at=, but it would divide by zero.
+        if (d2 < 1e-8) {
+          outX = tx + r;
+          continue;
+        }
+        const d = Math.sqrt(d2);
+        outX = tx + (dx / d) * r;
+        outZ = tz + (dz / d) * r;
+      }
+    }
+  }
+  return { x: outX, z: outZ };
+}
+
 // Collapses one kind's worth of stamped trees into two objects: every
 // trunk, limb and twig in the chunk as a single merged mesh, and every
 // foliage cluster as a single InstancedMesh.
@@ -919,6 +1008,15 @@ export function createTreeChunk(cx, cz) {
       quat.setFromAxisAngle(UP_AXIS, rand() * Math.PI * 2);
       scl.set(s * (0.88 + rand() * 0.26), s, s * (0.88 + rand() * 0.26));
       stamp.compose(pos, quat, scl);
+
+      // Nominal trunk radius rather than the real one, which the templates
+      // don't report — buildBroadleafParts grows a tree and then rescales it
+      // to the height asked for, so the finished girth isn't known at stamp
+      // time. These are eyeballed against the models and then padded a
+      // little, because collision wants to stop you slightly before the bark
+      // rather than exactly at it: touching a trunk and stopping reads as
+      // solid, clipping a few centimetres in before stopping reads as broken.
+      addTreeCollider(x, z, (kind === 'pine' ? 0.34 : 0.3) * scl.x);
 
       wood[kind].push(template.wood.clone().applyMatrix4(stamp));
 
@@ -4698,6 +4796,10 @@ export function createYard() {
     const pine = createSouthernPine(pineRand, shape);
     pine.position.set(x, terrainHeight(x, z), z);
     group.add(pine);
+    // The only trees in the game modelled at full detail, and the thickest
+    // trunks on the property — their own trunkRadius is known here, so this
+    // one doesn't have to be guessed at.
+    addTreeCollider(x, z, shape.trunkRadius + 0.14);
   }
 
   // The six along the back. Built here rather than scattered by the forest
@@ -4739,6 +4841,9 @@ export function createYard() {
       pos.set(x, terrainHeight(x, z), z);
       quat.setFromAxisAngle(UP_AXIS, backRand() * Math.PI * 2);
       stamp.compose(pos, quat, scl);
+      // Slender trunks, so a tighter circle than the forest gets — but still
+      // padded, and still generous enough that you can't stand inside one.
+      addTreeCollider(x, z, 0.3);
       wood.push(parts.wood.clone().applyMatrix4(stamp));
       const tint = FOLIAGE_TINTS[Math.floor(backRand() * FOLIAGE_TINTS.length)];
       for (const tuft of parts.tufts) {
