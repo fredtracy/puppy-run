@@ -495,7 +495,6 @@ export const CONCRETE_MAT = new THREE.MeshStandardMaterial({
   roughness: 1,
   envMapIntensity: MATTE_ENV,
 });
-export const CONCRETE_UV_SCALE = 1 / CONCRETE_TILE;
 
 // Fascia, soffit, gutters, window frames, door casings — all the same
 // creamy off-white on the real house, and all matte. Anything glossier
@@ -2467,7 +2466,17 @@ export function createHouse() {
     const pos = geo.attributes.position;
     const uv = geo.attributes.uv;
     for (let i = 0; i < pos.count; i++) {
-      uv.setXY(i, pos.getX(i) / CONCRETE_TILE, pos.getZ(i) / CONCRETE_TILE);
+      // UVs in metres, which is the convention meterUvs sets for every
+      // other concrete surface in the house — the texture's own repeat of
+      // 1/CONCRETE_TILE is what turns metres into tiles.
+      //
+      // These used to divide by CONCRETE_TILE here as well, so the repeat
+      // applied twice and the walk tiled every 5.76 m instead of 2.4. That
+      // is the whole "weirdly circular / strange squares" fault: the
+      // concrete texture is built from soft radial stain blobs, so at 2.4x
+      // scale they come out as metre-wide circles, with the repeat boundary
+      // visible as a square around each one.
+      uv.setXY(i, pos.getX(i), pos.getZ(i));
     }
     group.add(place(mesh(geo, CONCRETE_MAT), 0, 0, 0));
   }
@@ -2537,7 +2546,7 @@ export function createHouse() {
     const pos = geo.attributes.position;
     const uv = geo.attributes.uv;
     for (let i = 0; i < pos.count; i++) {
-      uv.setXY(i, pos.getX(i) / CONCRETE_TILE, pos.getY(i) / CONCRETE_TILE);
+      uv.setXY(i, pos.getX(i), pos.getY(i));
     }
     const m = mesh(geo, CONCRETE_MAT);
     m.rotation.x = -Math.PI / 2;

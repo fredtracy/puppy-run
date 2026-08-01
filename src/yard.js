@@ -14,7 +14,6 @@ import {
   createHouse,
   isHousePaved,
   CONCRETE_MAT,
-  CONCRETE_UV_SCALE,
   HOUSE_Z,
   HOUSE_DRIVEWAY,
 } from './house.js';
@@ -1671,7 +1670,8 @@ function createDrivewayExtension() {
       // The same procedural concrete the house's own slabs use, mapped in
       // metres like they are — the two meet in plain sight at startZ, and
       // any difference in tint or grain size reads as a patch job.
-      uvs.push(x * CONCRETE_UV_SCALE, z * CONCRETE_UV_SCALE);
+      // Metres, matching the house's concrete — see the note there.
+      uvs.push(x, z);
     }
   }
   const stride = segsAcross + 1;
