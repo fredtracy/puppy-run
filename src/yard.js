@@ -4456,8 +4456,27 @@ function createChunkGrass(cx, cz, rand) {
       // grow up through it. Here the ground is shaded out and walked on and
       // nothing grows: bare is the whole point, and leaving turf in would
       // put a green haze over the one place that has to read as earth.
+      // ...but only across the back of the yard, which is the only place it
+      // exists in real life. The first version ran the apron round the whole
+      // perimeter, and it shouldn't: the litter comes off the six back trees
+      // (photos 4, 5 and 6), where they stand far enough into the open that
+      // their leaf fall lands on ground nobody mows. Down the sides and
+      // across the front the mown lawn goes straight into the brush with
+      // nothing between — photo 3 is the clearest on that. The only litter
+      // that belongs elsewhere is the straw circle under each front pine,
+      // which is a separate thing and comes from the duff field above.
+      //
+      // Same span as the brush setback, so the litter, the gap behind the
+      // trees and the trees themselves all start and stop together instead
+      // of ending on three different lines.
+      const backness = Math.min(1, Math.max(0, (z - 6) / 4));
+      const backSpan = Math.min(
+        1,
+        Math.max(0, Math.min(x - (BACK_GAP_FROM - 4), BACK_GAP_TO + 4 - x) / 4)
+      );
       const apron = edgeDist > -1.6 && edgeDist < 3.4
         ? Math.min(1, Math.min(edgeDist + 1.6, 3.4 - edgeDist) / 1.1)
+          * backness * backSpan
         : 0;
       if (apron > 0) {
         entries.NEEDLE.push([x, z, vigour]);
