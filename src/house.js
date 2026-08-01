@@ -2462,11 +2462,11 @@ export function createHouse() {
   // They sit toward the east end of the recess rather than centred in it,
   // with the middle pier landing just west of them and the window beyond
   // that, which is the composition in the straight-on shot.
-  [-2.05, -0.55].forEach((x) => {
-    addOnWall(group, buildFrenchDoorPair(1.44, 2.06), {
-      x, y: 1.09, z: PORCH_BACK_Z + 0.06, facing: 'pz', proud: 0.03,
-    });
-  });
+  // The two patio door sets are gone at the owner's request. Sat almost
+  // flush on the siding, they read as door shapes printed on the wall
+  // rather than as openings — the glazing had no depth behind it, so the
+  // panels below the glass came out as pale rectangles stuck to the boards.
+  // Better absent than wrong; the wall is plain siding under the porch now.
   addOnWall(group, buildWindowUnit(0.86, 1.0, 2, 2), {
     x: 1.7, y: 1.72, z: PORCH_BACK_Z + 0.06, facing: 'pz',
   });
@@ -2543,14 +2543,6 @@ export function createHouse() {
     }
     prev = { x, y };
   }
-
-  // A couple of patio chairs, in the open now that the screens are gone.
-  [-2.5, 1.75].forEach((fx) => {
-    const chair = new THREE.Group();
-    chair.add(place(mesh(new THREE.BoxGeometry(0.68, 0.16, 0.66), FURNITURE_MAT), 0, 0.42, 0));
-    chair.add(place(mesh(new THREE.BoxGeometry(0.68, 0.62, 0.14), FURNITURE_MAT), 0, 0.72, -0.28));
-    group.add(place(chair, fx, 0.16, PORCH_BACK_Z + 0.95));
-  });
 
   // ── flatwork ─────────────────────────────────────────────────────────
   // Slabs are deliberately thin. At 0.1 the exposed side faces caught the
