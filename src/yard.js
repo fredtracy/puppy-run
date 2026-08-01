@@ -825,7 +825,7 @@ function createChunkBrush(cx, cz, rand) {
     for (let lz = 0; lz < CHUNK_SIZE; lz += BRUSH_SPACING) {
       const x = originX + lx + (rand() - 0.5) * BRUSH_SPACING * 0.8;
       const z = originZ + lz + (rand() - 0.5) * BRUSH_SPACING * 0.8;
-      const depth = woodsDepth(x, z) - brushEdge(x, z);
+      const depth = woodsDepth(x, z) - brushEdge(x, z) - backTreeSetback(x, z);
       if (depth < 0 || depth > BRUSH_DEPTH) continue;
       // The road punches straight through the wall rather than being
       // walled off at the property line — it's a county road that carries
@@ -3958,7 +3958,67 @@ export const FRONT_PINES = [
   { x: -18.2, z: -32.4, height: 4.9, spread: 0.33, trunkRadius: 0.31, crownBase: 0.45 },
 ];
 
-const PINE_DUFF = FRONT_PINES.map((p) => [p.x, p.z]);
+// The six trees along the back of the yard — the thing the owner asked to
+// pay particular attention to, and photos 4, 5 and 6 all show them.
+//
+// The arrangement is the whole point and it is not a regular row: three on
+// each side with a distinctly wider gap in the middle, which in photo 5 is
+// about three times the within-group spacing. The hammock hangs across that
+// gap in the photo, which is what makes it obvious it's a gap and not just
+// two trees missing.
+//
+// Slender single trunks running clear to roughly 2.5 m, then crowns that
+// spread and merge into a continuous roof — so `forkAt` is high for a
+// broadleaf (the trunk stays a trunk much longer than a forest tree's does)
+// and `spread` is wide, because these are open-grown with light on all
+// sides rather than drawn up narrow by neighbours.
+//
+// Centred on -1.5, which is the middle of the clearing's back edge, so the
+// gap lands behind the fire pit at -0.7 the way it does in the photo. z sits
+// just inside OPEN_Z_MAX so they stand *in* the litter apron at the boundary
+// rather than out on the mown grass or back inside the wall of brush.
+export const BACK_TREES = [
+  { x: -15.4, z: 15.2, height: 6.6, spread: 0.46, trunkRadius: 0.13, forkAt: 0.38 },
+  { x: -11.4, z: 14.6, height: 7.4, spread: 0.5, trunkRadius: 0.16, forkAt: 0.35 },
+  { x: -7.1, z: 15.1, height: 6.9, spread: 0.47, trunkRadius: 0.14, forkAt: 0.37 },
+  { x: 4.1, z: 14.9, height: 7.2, spread: 0.49, trunkRadius: 0.15, forkAt: 0.36 },
+  { x: 8.4, z: 15.3, height: 6.5, spread: 0.45, trunkRadius: 0.13, forkAt: 0.39 },
+  { x: 12.5, z: 14.7, height: 7.0, spread: 0.48, trunkRadius: 0.15, forkAt: 0.36 },
+];
+
+// The gap behind the six trees.
+//
+// "A shaded area right behind them then the woods start again" — and that
+// gap is what makes the six read as six trees rather than as the front row
+// of the wall. Standing them at the brush line put their trunks against
+// foliage at the same depth and they disappeared into it; in photo 5 they
+// are clearly in front, with their crowns silhouetted against a dark void.
+//
+// So the brush is held back across the span they occupy. Subtracting from
+// the depth the brush loop measures pushes where the band *starts* further
+// into the woods, which opens the strip without touching the tree line
+// itself. Tapered at both ends over 4 m so the wall closes back in gradually
+// rather than ending on two visible steps.
+const BACK_GAP_FROM = -18.5;
+const BACK_GAP_TO = 15.5;
+const BACK_GAP_DEPTH = 3.2;
+function backTreeSetback(x, z) {
+  if (z < 8 || x < BACK_GAP_FROM - 4 || x > BACK_GAP_TO + 4) return 0;
+  const t = Math.min(
+    1,
+    Math.min(x - (BACK_GAP_FROM - 4), BACK_GAP_TO + 4 - x) / 4
+  );
+  return BACK_GAP_DEPTH * Math.max(0, t);
+}
+
+// Everything that drops litter, with the radius it drops it over. The pines
+// throw a tight circle of straw; the back trees shed a broader, softer apron
+// of leaves that runs together into the one continuous band the photos show
+// along the whole back of the yard.
+const PINE_DUFF = [
+  ...FRONT_PINES.map((p) => [p.x, p.z, 3.4]),
+  ...BACK_TREES.map((t) => [t.x, t.z, 5.2]),
+];
 
 // How thick the pine litter is at a point, 0 (none) to 1 (bare needle mat
 // at the trunk). Pulled out of lawnVigour so the needles themselves can be
@@ -3967,12 +4027,12 @@ const PINE_DUFF = FRONT_PINES.map((p) => [p.x, p.z]);
 // healthy turf and bare dirt with nothing on it.
 function pineDuff(x, z) {
   let duff = 0;
-  for (const [px, pz] of PINE_DUFF) {
+  for (const [px, pz, radius] of PINE_DUFF) {
     const d = Math.hypot(x - px, z - pz);
     // The edge wobbles rather than ending on a clean circle — needle fall
     // drifts, and a perfect disc of litter around a trunk looks stamped.
     const wobble = 0.78 + valueNoise(x / 1.7 + 210.4, z / 1.7 - 33.8) * 0.5;
-    duff = Math.max(duff, Math.pow(Math.max(0, 1 - d / (3.4 * wobble)), 1.4));
+    duff = Math.max(duff, Math.pow(Math.max(0, 1 - d / (radius * wobble)), 1.4));
   }
   return duff;
 }
@@ -4589,6 +4649,40 @@ export function createYard() {
     const pine = createSouthernPine(pineRand, shape);
     pine.position.set(x, terrainHeight(x, z), z);
     group.add(pine);
+  }
+
+  // The six along the back. Built here rather than scattered by the forest
+  // chunks because their positions are the point — see BACK_TREES.
+  //
+  // Each gets its own shape from buildBroadleafParts rather than stamping a
+  // shared template: there are only six, they stand alone against the sky
+  // with nothing crowding them, and at that size two of them being visibly
+  // the same tree is exactly the sort of thing the eye picks up. The forest
+  // can stamp because no one ever sees two of its trees whole.
+  {
+    const backRand = mulberry32(20260731);
+    const templates = getTreeTemplates();
+    const wood = [];
+    const foliage = [];
+    const stamp = new THREE.Matrix4();
+    const tuftMatrix = new THREE.Matrix4();
+    const quat = new THREE.Quaternion();
+    const scl = new THREE.Vector3(1, 1, 1);
+    const pos = new THREE.Vector3();
+
+    for (const { x, z, ...shape } of BACK_TREES) {
+      const parts = buildBroadleafParts(backRand, { ...shape, density: 1.15 });
+      pos.set(x, terrainHeight(x, z), z);
+      quat.setFromAxisAngle(UP_AXIS, backRand() * Math.PI * 2);
+      stamp.compose(pos, quat, scl);
+      wood.push(parts.wood.clone().applyMatrix4(stamp));
+      const tint = FOLIAGE_TINTS[Math.floor(backRand() * FOLIAGE_TINTS.length)];
+      for (const tuft of parts.tufts) {
+        composeTuftMatrix(tuftMatrix, tuft).premultiply(stamp);
+        foliage.push({ matrix: tuftMatrix.clone(), tint });
+      }
+    }
+    addTreeMeshes(group, wood, foliage, templates.barkMat, templates.leaves);
   }
 
   // Across the road from the house, not the near shoulder — the far edge
