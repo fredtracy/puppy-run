@@ -584,6 +584,17 @@ const BLINDS_MAT = new THREE.MeshStandardMaterial({
   map: makeBlindsTexture(), color: 0xb9b9b9, roughness: 0.95, envMapIntensity: 0.2,
 });
 
+// The unlit room behind a piece of full-height glazing. Windows put blinds
+// there; a French door has nothing to hide behind, and you read straight
+// through it into the house — so this is what's on the other side.
+//
+// Not black. A pure black plane behind 62%-opaque glass reads as a hole cut
+// in the wall rather than as a dim room, and it kills the glass's own
+// reflection, which is most of what says "there is glass here" at a glance.
+const INTERIOR_MAT = new THREE.MeshStandardMaterial({
+  color: 0x181c1f, roughness: 0.98, envMapIntensity: 0.05,
+});
+
 // The blinds of a room that has its light on. Identical by day — see
 // setHouseWindowsLit, which is what actually turns it warm and emissive
 // after dark — so this costs one extra draw call and nothing else.
@@ -987,15 +998,86 @@ function addWindowSurround(parent, { x, y, z, w, h, facing, archRise = 0, sill =
   }
 }
 
+// The patio doors: a pair of full-glass French doors, three lites across and
+// five down per leaf, off the owner's photo of the real ones.
+//
+// A version of these was here before and was pulled out — they sat almost
+// flush on the siding and read as a door shape printed on it, because the
+// glazing had nothing behind it and the panels came out as pale rectangles
+// stuck to the boards. Two things are different here. The glass has
+// INTERIOR_MAT behind it instead of a window's blinds, so you read through
+// into an unlit room rather than onto a pale sheet. And the casing is built
+// standing *proud* of the leaves rather than flush with them, which puts a
+// real shadow down both jambs and across the head — the walls are solid
+// masses with no cut openings, so a casing that casts is the only way an
+// opening reads as set into anything.
+//
+// Same convention as buildWindowUnit: origin at the centre of the opening,
+// +z out of the wall, so addOnWall places it like any other unit.
 function buildFrenchDoorPair(w, h) {
   const g = new THREE.Group();
-  const leafW = w / 2 - 0.02;
+  const fw = 0.06;
+  // The astragal between the leaves takes the gap, so each leaf is a little
+  // under half the opening.
+  const leafW = w / 2 - 0.025;
+
+  // The room behind, set back far enough that the muntins read as standing
+  // in front of it rather than lying on it.
+  g.add(place(trinket(new THREE.PlaneGeometry(w, h), INTERIOR_MAT), 0, 0, -0.075));
+
   [-1, 1].forEach((side) => {
-    const leaf = buildWindowUnit(leafW, h, 2, 5, false);
-    leaf.position.x = (side * w) / 4;
-    g.add(leaf);
+    const cx = (side * w) / 4;
+    g.add(place(trimBox(leafW, fw, WIN_DEPTH), cx, h / 2 - fw / 2, -WIN_DEPTH / 2));
+    g.add(place(trimBox(leafW, fw, WIN_DEPTH), cx, -h / 2 + fw / 2, -WIN_DEPTH / 2));
+    g.add(place(trimBox(fw, h, WIN_DEPTH), cx - leafW / 2 + fw / 2, 0, -WIN_DEPTH / 2));
+    g.add(place(trimBox(fw, h, WIN_DEPTH), cx + leafW / 2 - fw / 2, 0, -WIN_DEPTH / 2));
+
+    const gw = leafW - fw * 2;
+    const gh = h - fw * 2;
+    g.add(place(trinket(new THREE.PlaneGeometry(gw, gh), GLASS_MAT), cx, 0, -0.05));
+    for (let i = 1; i < 3; i++) {
+      g.add(place(
+        trinket(new THREE.BoxGeometry(0.028, gh, 0.018), TRIM_MAT),
+        cx - gw / 2 + (gw * i) / 3, 0, -0.034
+      ));
+    }
+    for (let i = 1; i < 5; i++) {
+      g.add(place(
+        trinket(new THREE.BoxGeometry(gw, 0.028, 0.018), TRIM_MAT),
+        cx, -gh / 2 + (gh * i) / 5, -0.034
+      ));
+    }
   });
-  g.add(place(trimBox(0.07, h + 0.14, WIN_DEPTH), 0, 0, -WIN_DEPTH / 2));
+
+  g.add(place(trimBox(0.05, h, WIN_DEPTH), 0, 0, -WIN_DEPTH / 2));
+
+  // The knob, on the outer stile of the right-hand leaf — that's the active
+  // one in the photo and the left is the fixed leaf. Derived from the leaf
+  // rather than measured in from the opening's edge, which had it sitting out
+  // on the glass.
+  //
+  // No deadbolt above it. The real door has one; at this size the two beads
+  // read as a pair of dots stuck on the door rather than as hardware, and the
+  // owner's call was to keep the knob alone.
+  const hx = w / 4 + leafW / 2 - fw / 2;
+  g.add(place(
+    trinket(new THREE.SphereGeometry(0.036, 10, 8), DARK_METAL_MAT), hx, -0.2, 0.025
+  ));
+
+  // Aluminium threshold, sitting on the slab.
+  g.add(place(
+    mesh(new THREE.BoxGeometry(w + 0.08, 0.035, 0.16), DARK_METAL_MAT),
+    0, -h / 2 - 0.017, 0.03
+  ));
+
+  // Flat casing, standing 5 cm in front of the leaves. This is the piece
+  // doing the work; without it the doors are a flat decal again.
+  const cw = 0.12;
+  const cd = 0.05;
+  g.add(place(trimBox(w + cw * 2 + 0.04, cw, cd), 0, h / 2 + cw / 2, cd / 2));
+  [-1, 1].forEach((side) => {
+    g.add(place(trimBox(cw, h + cw, cd), side * (w / 2 + cw / 2 + 0.02), cw / 2, cd / 2));
+  });
   return g;
 }
 
@@ -1170,14 +1252,38 @@ const PITCH = 0.5; // 6:12, matching the main roof in the photos
 // The recess runs all the way to the west corner, not as a notch centred in
 // the back wall.
 //
-// Corrected against the assessor sketch and the straight-on back photo. The
-// left-hand section — the one with the two windows, where the dog run is —
-// is *recessed*, on the same line as the porch, and the patio slab runs
-// straight across in front of the whole thing. The old version put a brick
-// block flush with the back wall out there, which is what made the back
-// read as a symmetrical notch when it is nothing of the sort.
-const PORCH = { xMin: -HALF_W, xMax: FT * 10, depth: FT * 11 };
+// The back elevation is three sections, on the owner's call: a quarter of
+// the width in brick at each end, each carrying two windows, and the
+// covered patio filling the middle half between them. The recess used to
+// run all the way out to the west corner, which left the west pair of
+// windows floating in the opening with no wall behind them and made the
+// patio read as two thirds of the back rather than half of it.
+const PORCH = { xMin: -W * 0.25, xMax: W * 0.25, depth: FT * 11 };
 const PORCH_BACK_Z = HALF_D - PORCH.depth;
+// The front edge of the patio slab: the back wall line, so it runs dead in
+// line with the brick wing beside it instead of past it. It used to reach
+// out to the eave, which left the slab's cut end standing 42 cm proud of
+// that brick where the two met.
+const PATIO_SLAB_Z = HALF_D;
+
+// The west brick wing is stepped back from the back wall line — a shallower
+// recess than the patio's deep notch, but not by much now. Started at a
+// tenth of the house's depth on the owner's "maybe 10%", doubled at their
+// request, then brought back out a fifth of the way — so it has been walked
+// to 16% by eye rather than derived. Everything on that wing — its windows,
+// its soldier course, the corner downspout, the ceiling over the step, the
+// slab under it — hangs off WEST_WING_Z.
+//
+// The floor of the recess is sidewalk, at the same height as the walk that
+// rings the rest of the house — not the patio slab carried across, which it
+// was for a pass. It's laid as an explicit box in WALK_BOXES; see the note
+// there for why the generic per-mass expansion can't reach it.
+//
+// The main roof is unaffected: it already runs to HALF_D + EAVE across the
+// full width, so the step is covered by what's up there rather than needing
+// a roof of its own. That's the same trick the patio notch uses.
+const WEST_WING_RECESS = D * 0.16;
+const WEST_WING_Z = HALF_D - WEST_WING_RECESS;
 
 // The street elevation, divided exactly as the assessor's sketch has it:
 // 20 ft of garage, 4 ft of entry, 17 ft of window bay, 9 ft of east end.
@@ -1492,9 +1598,14 @@ export const HOUSE_BACK_WALK_Z = HOUSE_Z + HALF_D + 0.7;
 // It used to stand at -5.6, which was fine while the back wall ran flush
 // the whole way across — but recessing the west section put it in front of
 // a wall that is now set back, so it leaned on nothing and reached an eave
-// that wasn't above it. This section is the one piece of the back wall
-// still flush with HALF_D, which is what a ladder needs to lean on.
-const LADDER_X = 5.1;
+// that wasn't above it. Both brick wings are flush with HALF_D, which is
+// what a ladder needs to lean on; it stands on the east one.
+//
+// Dead centre of that wing, which is also the gap between its two windows
+// (they sit at ±1.15 off the same point). Was 5.1, from when the wing was
+// wider — with the wing cut back to 25% of the width that landed on top of
+// the inner window.
+const LADDER_X = (PORCH.xMax + HALF_W) / 2;
 const LADDER_HALF_W = 0.21;
 // It leans rather than being bolted flat to the brick, and that isn't
 // styling — the eave overhangs the wall by EAVE (0.44 m), so a ladder
@@ -1635,20 +1746,32 @@ function buildRoofLadder() {
 // it at about 52% of the recess — near enough dead centre — so the two
 // bays are close to equal, and the pier lands between the patio doors and
 // the window rather than off to one side of both.
-const PIER_Z = HALF_D - 0.26;
-const PIER_HALF = 0.26;
-// Two columns, spaced along the run rather than jammed into its corners.
-// PIER_Z already puts their outer face flush with the patio's front edge,
-// which is where they stand in the photo — it was only the x that was
-// wrong, and pushing them out to the recess ends made them read as part of
-// the wall instead of as free-standing columns.
+// 0.44 square. It came from the eave depth back when a pier had to fit
+// between the slab's front edge and the gutter; the slab has since moved in
+// under the roof and that constraint is gone, but the size looked right and
+// stayed. It's a plain number now, not a derivation.
+const PIER_HALF = 0.22;
+// Two centimetres proud of the slab's front edge, which is what makes the
+// pier read as standing in the edge of the patio rather than as a post
+// planted next to it.
+//
+// Not flush: a pier face exactly coplanar with the slab's riser is what made
+// the two look like they were fighting over the same spot. 2 cm reads as
+// level from anywhere, and it puts the slab's front face 2 cm inside solid
+// brick where it crosses a pier, where it is never seen.
+const PIER_FRONT_Z = PATIO_SLAB_Z + 0.02;
+const PIER_Z = PIER_FRONT_Z - PIER_HALF;
+// Two columns, both placed on the owner's call rather than by a rule: the
+// west one hard in the corner with its outer face flush against the brick
+// wing, the east one dead centre of the recess. That leaves two unequal
+// bays and no pier at the east end, which is deliberate — each was pointed
+// at in a screenshot and moved on its own.
 //
 // Below PIER_HALF on purpose: these are consts read at module load, so the
 // list has to come after the number it is built from.
-const PIER_SPAN = PORCH.xMax - PORCH.xMin;
 const PIER_X = [
-  PORCH.xMin + PIER_SPAN / 3,
-  PORCH.xMin + (PIER_SPAN * 2) / 3,
+  PORCH.xMin + PIER_HALF,
+  (PORCH.xMin + PORCH.xMax) / 2,
 ];
 
 // The building's masses, in the house's own coordinates. Everything else
@@ -1658,6 +1781,7 @@ const PIER_X = [
 const MASSES = [
   { xMin: -HALF_W, xMax: HALF_W, zMin: -HALF_D, zMax: PORCH_BACK_Z },
   { xMin: PORCH.xMax, xMax: HALF_W, zMin: PORCH_BACK_Z, zMax: HALF_D },
+  { xMin: -HALF_W, xMax: PORCH.xMin, zMin: PORCH_BACK_Z, zMax: WEST_WING_Z },
   { xMin: BAY.xMin, xMax: BAY.xMax, zMin: BAY_FRONT_Z, zMax: -HALF_D },
   { xMin: EAST_END.xMin, xMax: EAST_END.xMax, zMin: EAST_FRONT_Z, zMax: -HALF_D },
   { xMin: GARAGE.xMin, xMax: GARAGE.xMax, zMin: GARAGE_FRONT_Z, zMax: -HALF_D },
@@ -1676,8 +1800,10 @@ const MASSES = [
 
 // Which masses have a bed along their street face — the window bay and the
 // east end. The garage doesn't; that's where the driveway meets the slab.
-const BAY_MASS = 3;
-const EAST_MASS = 4;
+// Indices into MASSES — they shifted by one when the west brick wing was
+// added to the list, and they have to be kept in step with it.
+const BAY_MASS = 4;
+const EAST_MASS = 5;
 const HAS_FRONT_BED = new Set([BAY_MASS, EAST_MASS]);
 
 // The perimeter walk. Masses with a bed get no walk extension at the front
@@ -1873,6 +1999,25 @@ const WALK_BOXES = [
   {
     xMin: ALCOVE.xMin, xMax: ALCOVE.xMax, zMin: GARAGE_FRONT_Z, zMax: -HALF_D,
   },
+  // The west wing's recess. It's sidewalk, not patio, so it joins the union
+  // and comes out as one surface with the back walk rather than as a slab
+  // laid on top of it.
+  //
+  // It has to be here and can't fall out of the per-mass expansion: that
+  // only reaches WALK_W (1.42 m) past a wall, which is short of the back
+  // wall line at this recess depth. The shortfall left a 10 cm notch in the
+  // outline, and the fillet rounded both of its corners — that was the
+  // rounded corner sitting in the middle of an otherwise straight run.
+  //
+  // Runs WALK_W past the wing's inner edge rather than stopping on it, so
+  // the notch doesn't just move sideways. That overlap is under the raised
+  // patio slab and never seen.
+  {
+    xMin: -HALF_W - WALK_W,
+    xMax: PORCH.xMin + WALK_W,
+    zMin: WEST_WING_Z,
+    zMax: HALF_D,
+  },
 ];
 
 // Local coordinates, for the mesh; and the same loop shifted into world
@@ -2010,10 +2155,20 @@ export function createHouse() {
     brickBox(wingPlusW, WALL_H, PORCH.depth),
     PORCH.xMax + wingPlusW / 2, WALL_H / 2, PORCH_BACK_Z + PORCH.depth / 2
   ));
+  // The west wing is short of the back wall line by WEST_WING_RECESS, so it
+  // gets its own depth rather than the porch's.
   const wingMinusW = PORCH.xMin + HALF_W;
+  const wingMinusD = WEST_WING_Z - PORCH_BACK_Z;
   group.add(place(
-    brickBox(wingMinusW, WALL_H, PORCH.depth),
-    -HALF_W + wingMinusW / 2, WALL_H / 2, PORCH_BACK_Z + PORCH.depth / 2
+    brickBox(wingMinusW, WALL_H, wingMinusD),
+    -HALF_W + wingMinusW / 2, WALL_H / 2, PORCH_BACK_Z + wingMinusD / 2
+  ));
+  // Ceiling over the step it leaves. The main roof carries straight on over
+  // the recess, so without this you see the underside of the roof box from
+  // the yard — the same reason the patio notch has one.
+  group.add(place(
+    mesh(new THREE.BoxGeometry(wingMinusW, 0.06, WEST_WING_RECESS), RECESS_CEILING_MAT),
+    -HALF_W + wingMinusW / 2, WALL_H - 0.03, WEST_WING_Z + WEST_WING_RECESS / 2
   ));
 
   const bayW = BAY.xMax - BAY.xMin;
@@ -2043,8 +2198,27 @@ export function createHouse() {
     (ALCOVE.xMin + ALCOVE.xMax) / 2, WALL_H / 2, -HALF_D - 0.03
   ));
 
-  // Slab edge showing below the brick, as it does all the way round.
-  group.add(place(concreteBox(W + 0.08, 0.1, D + 0.08), 0, 0.05, 0));
+  // Slab edge showing below the brick, as it does all the way round: a 4 cm
+  // reveal at the foot of every wall.
+  //
+  // Laid per mass rather than as one W x D box over the whole footprint. The
+  // single box was right only while every back wall was on the same line —
+  // once the west wing stepped back, its 4 cm reveal became a 1.5 m shelf of
+  // concrete standing 10 cm proud of the walk right across the recess, which
+  // is the lip that showed there. The patio notch had the same shelf all
+  // along; it just never showed, being under the raised porch slab.
+  //
+  // Only the three masses that make up the back. The front projections are
+  // deliberately left as they were — the bay and the east end have never had
+  // a reveal of their own, and giving them one here would change an
+  // elevation nobody asked about.
+  const SLAB_EDGE = 0.04;
+  MASSES.slice(0, 3).forEach((m) => {
+    group.add(place(
+      concreteBox(m.xMax - m.xMin + SLAB_EDGE * 2, 0.1, m.zMax - m.zMin + SLAB_EDGE * 2),
+      (m.xMin + m.xMax) / 2, 0.05, (m.zMin + m.zMax) / 2
+    ));
+  });
   group.add(place(
     concreteBox(GARAGE_W + 0.08, 0.1, GARAGE.proj),
     GARAGE_CX, 0.05, -HALF_D - GARAGE.proj / 2
@@ -2074,10 +2248,19 @@ export function createHouse() {
   // band was spanning 6.1 m of open air above the patio.
   group.add(soldierBand(ALCOVE.xMax - ALCOVE.xMin + 0.06, 0.03,
     (ALCOVE.xMin + ALCOVE.xMax) / 2, -HALF_D - 0.015));
-  [[-HALF_W, PORCH.xMin], [PORCH.xMax, HALF_W]].forEach(([x0, x1]) => {
-    group.add(soldierBand(x1 - x0 + 0.06, 0.03, (x0 + x1) / 2, HALF_D + 0.015));
+  // Each wing's band sits on that wing's own face — the west one is stepped
+  // back with the wall it belongs to.
+  [
+    [-HALF_W, PORCH.xMin, WEST_WING_Z],
+    [PORCH.xMax, HALF_W, HALF_D],
+  ].forEach(([x0, x1, wallZ]) => {
+    group.add(soldierBand(x1 - x0 + 0.06, 0.03, (x0 + x1) / 2, wallZ + 0.015));
   });
-  group.add(soldierBand(0.03, D + 0.06, -HALF_W - 0.015, 0));
+  // The -x side band stops at the west wing's back face rather than running
+  // the full depth, which would leave 0.9 m of brick course hanging past the
+  // corner in mid-air.
+  const westSideD = WEST_WING_Z + HALF_D + 0.03;
+  group.add(soldierBand(0.03, westSideD, -HALF_W - 0.015, WEST_WING_Z - westSideD / 2));
   group.add(soldierBand(0.03, D + 0.06, HALF_W + 0.015, 0));
   group.add(soldierBand(GARAGE_W + 0.06, 0.03, GARAGE_CX, GARAGE_FRONT_Z - 0.015));
   group.add(soldierBand(0.03, GARAGE.proj, GARAGE.xMax + 0.015, -HALF_D - GARAGE.proj / 2));
@@ -2256,7 +2439,9 @@ export function createHouse() {
   // ── downspouts ───────────────────────────────────────────────────────
   const spoutDrop = ROOF_Y - 0.12;
   group.add(place(buildDownspout(spoutDrop, 'nx'), -HALF_W - 0.06, spoutDrop, ROOF_Z0 + 0.6));
-  group.add(place(buildDownspout(spoutDrop, 'nx'), -HALF_W - 0.06, spoutDrop, HALF_D - 0.4));
+  // Back corner of the -x wall, which is the west wing's corner and so is
+  // stepped back with it — it was hanging off the end of the wall.
+  group.add(place(buildDownspout(spoutDrop, 'nx'), -HALF_W - 0.06, spoutDrop, WEST_WING_Z - 0.4));
   group.add(place(buildDownspout(spoutDrop, 'px'), HALF_W + 0.06, spoutDrop, HALF_D - 0.4));
   group.add(place(buildDownspout(spoutDrop, 'px'), HALF_W + 0.06, spoutDrop, -1.2));
   group.add(place(buildDownspout(spoutDrop, 'nx'), GARAGE.xMin - 0.06, spoutDrop, GARAGE_FRONT_Z + 0.5));
@@ -2379,10 +2564,15 @@ export function createHouse() {
   lampSpots.push([doorX, pendantY - 0.55, pendantZ]);
 
   // ── east elevation (-x) ──────────────────────────────────────────────
+  // The back one is centred in whatever wall is left between its neighbour
+  // and the wing's corner, rather than sitting at a fixed 3.3. The recess
+  // took the last 1.9 m of this wall and 3.3 is well inside that, so it
+  // would have been left standing in open air past the corner. Holding it a
+  // fixed distance off the corner instead put it 25 cm from its neighbour.
   [
     { z: -2.9, w: 1.5, cols: 3 },
     { z: 0.3, w: 0.86, cols: 2 },
-    { z: 3.3, w: 0.86, cols: 2 },
+    { z: (0.3 + 0.43 + WEST_WING_Z) / 2, w: 0.86, cols: 2 },
   ].forEach(({ z, w, cols }) => {
     addOnWall(group, buildWindowUnit(w, 1.24, cols, 3), { x: -HALF_W, y: 1.66, z, facing: 'nx' });
     addWindowSurround(group, { x: -HALF_W, y: 1.66, z, w, h: 1.24, facing: 'nx' });
@@ -2455,10 +2645,17 @@ export function createHouse() {
   // the slab grows: it sits on the ground and rises, so the ceiling and the
   // eave above it are untouched and the covered height simply reduces by
   // the extra step.
+  const porchSlabD = PATIO_SLAB_Z - PORCH_BACK_Z;
   group.add(place(
-    concreteBox(porchW, 0.32, PORCH.depth + 0.3),
-    porchCx, 0.16, PORCH_BACK_Z + (PORCH.depth + 0.3) / 2
+    concreteBox(porchW, 0.32, porchSlabD),
+    porchCx, 0.16, PORCH_BACK_Z + porchSlabD / 2
   ));
+  // The west wing's recess is *not* part of this slab. It was, for a pass —
+  // raised to patio level so the covered floor read as one pour — and the
+  // owner's call is that it's sidewalk: same height as the walk that rings
+  // the rest of the house, and part of the same surface. It's laid by
+  // WALK_BOXES rather than here, so the union rounds and masks it along with
+  // everything else instead of it being a separate slab sitting on top.
   // Porch ceiling — the house's own soffit, shaded (see RECESS_CEILING_MAT).
   group.add(place(
     mesh(new THREE.BoxGeometry(porchW, 0.06, PORCH.depth), RECESS_CEILING_MAT),
@@ -2480,26 +2677,43 @@ export function createHouse() {
     mesh(new THREE.BoxGeometry(porchW, WALL_H, 0.06), SIDING_MAT),
     porchCx, WALL_H / 2, PORCH_BACK_Z + 0.03
   ));
+  // The west wing's return — the face it turns into the patio where it steps
+  // back — is sided too, on the owner's call. It's an inside face of the
+  // recess like the back wall is, not an outside face of the house, and it
+  // came out brick only because the wing is built as one solid block.
+  //
+  // Nothing here for the east wing's matching return, which is still brick.
+  {
+    const returnD = WEST_WING_Z - PORCH_BACK_Z;
+    group.add(place(
+      mesh(new THREE.BoxGeometry(0.06, WALL_H, returnD), SIDING_MAT),
+      PORCH.xMin + 0.03, WALL_H / 2, PORCH_BACK_Z + returnD / 2
+    ));
+  }
 
-  // Two sets of patio doors side by side in the east bay, and a window in
-  // the west bay.
+  // The patio doors, back in after a spell with the wall left plain — see
+  // buildFrenchDoorPair for what was wrong with the old ones and what's
+  // different about these.
   //
-  // Corrected against the reference photos: this was one French pair plus a
-  // *solid* door beside it. Both openings are glazed in reality — the back
-  // of the house has two matching sets of patio doors next to each other,
-  // which is the thing you notice about it — and the solid door was the
-  // single biggest wrong note on this elevation.
+  // One pair, in the west bay, where the owner marked them. The old version
+  // had two matching pairs side by side toward the east end; the photo of
+  // the real thing is a single pair.
   //
-  // They sit toward the east end of the recess rather than centred in it,
-  // with the middle pier landing just west of them and the window beyond
-  // that, which is the composition in the straight-on shot.
-  // The two patio door sets are gone at the owner's request. Sat almost
-  // flush on the siding, they read as door shapes printed on the wall
-  // rather than as openings — the glazing had no depth behind it, so the
-  // panels below the glass came out as pale rectangles stuck to the boards.
-  // Better absent than wrong; the wall is plain siding under the porch now.
+  // The sill sits on the patio slab rather than at y = 0 — the slab is
+  // 32 cm of concrete and the wall behind it starts underneath, so a door
+  // measured from the ground would have its bottom third buried in the
+  // floor.
+  const DOOR_H = 2.03;
+  addOnWall(group, buildFrenchDoorPair(1.72, DOOR_H), {
+    x: -1.5, y: 0.32 + DOOR_H / 2, z: PORCH_BACK_Z + 0.06, facing: 'pz',
+  });
+
+  // Centred in the east bay rather than at a fixed 1.7. The recess is
+  // narrower now and the east pier moved in with it, so the old x put the
+  // pier across the window's inner edge when you look at the back
+  // straight on.
   addOnWall(group, buildWindowUnit(0.86, 1.0, 2, 2), {
-    x: 1.7, y: 1.72, z: PORCH_BACK_Z + 0.06, facing: 'pz',
+    x: porchCx + porchW / 3, y: 1.72, z: PORCH_BACK_Z + 0.06, facing: 'pz',
   });
 
   // Flush dome ceiling lights, one per bay.
@@ -2513,7 +2727,25 @@ export function createHouse() {
   // Hung a little below the dome itself rather than at it: a point light
   // level with the ceiling puts half its sphere inside the soffit, where
   // it lights nothing and still costs the same.
-  [-1.2, 1.77].forEach((lx) => {
+  // Centred in whatever bays the piers happen to leave, worked out from
+  // PIER_X rather than written down. The piers have been moved three times
+  // and a fixed pair of x's drifted onto one of them every time; the bays
+  // are also unequal now, so there's no single offset that centres both.
+  //
+  // Gaps under 0.6 m are skipped: the west pier sits hard in the corner and
+  // leaves a zero-width one beside it that isn't a bay.
+  const bayEdges = [
+    PORCH.xMin,
+    ...PIER_X.flatMap((px) => [px - PIER_HALF, px + PIER_HALF]),
+    PORCH.xMax,
+  ];
+  const bayCentres = [];
+  for (let i = 0; i < bayEdges.length; i += 2) {
+    if (bayEdges[i + 1] - bayEdges[i] > 0.6) {
+      bayCentres.push((bayEdges[i] + bayEdges[i + 1]) / 2);
+    }
+  }
+  bayCentres.forEach((lx) => {
     const lz = PORCH_BACK_Z + PORCH.depth * 0.45;
     group.add(place(
       trinket(new THREE.SphereGeometry(0.15, 12, 8), LAMP_GLASS_MAT),
@@ -2522,21 +2754,29 @@ export function createHouse() {
     lampSpots.push([lx, WALL_H - 0.32, lz]);
   });
 
-  // Two windows in each brick wing flanking the patio, as in the reference.
-  // Two windows in each brick wing flanking the patio.
+  // Two windows in each brick wing flanking the patio, spread across the
+  // wing rather than bunched toward the middle — the inner one near the
+  // patio, the outer one near the corner, as in the straight-on shot.
   //
-  // Respaced against the straight-on shot. They were bunched toward the
-  // middle — both pairs sat close to the patio with a wide blank stretch
-  // out at each corner. In the photo they're spread across their wing, the
-  // inner one close to the pier and the outer one close to the corner.
+  // Placed off each wing's own centre instead of at fixed x's. The wings
+  // are 25% of the width each now, and the old hard-coded pair sat at
+  // ±3.8, which is exactly where the inner corners moved to — the windows
+  // would have straddled the edge of the brick.
+  const WING_WIN_W = 0.92;
+  const WING_WIN_DX = 1.15;
   [
-    { x: -6.25, w: 0.92 },
-    { x: -3.8, w: 0.92 },
-    { x: 3.85, w: 0.92 },
-    { x: 6.3, w: 0.92 },
-  ].forEach(({ x, w }) => {
-    addOnWall(group, buildWindowUnit(w, 1.24, 2, 3), { x, y: 1.66, z: HALF_D, facing: 'pz' });
-    addWindowSurround(group, { x, y: 1.66, z: HALF_D, w, h: 1.24, facing: 'pz' });
+    [-HALF_W, PORCH.xMin, WEST_WING_Z],
+    [PORCH.xMax, HALF_W, HALF_D],
+  ].forEach(([x0, x1, wallZ]) => {
+    const cx = (x0 + x1) / 2;
+    [cx - WING_WIN_DX, cx + WING_WIN_DX].forEach((x) => {
+      addOnWall(group, buildWindowUnit(WING_WIN_W, 1.24, 2, 3), {
+        x, y: 1.66, z: wallZ, facing: 'pz',
+      });
+      addWindowSurround(group, {
+        x, y: 1.66, z: wallZ, w: WING_WIN_W, h: 1.24, facing: 'pz',
+      });
+    });
   });
 
   // No hose reel on the back wall. There was one — a dark disc that read as

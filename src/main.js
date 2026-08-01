@@ -4846,10 +4846,18 @@ function updateMovement(delta) {
     return true;
   }
 
-  const keyUp = pressedKeys.has('KeyW') || pressedKeys.has('ArrowUp') || bothMouseButtonsHeld;
-  const keyDown = pressedKeys.has('KeyS') || pressedKeys.has('ArrowDown');
-  const keyRight = pressedKeys.has('KeyD') || pressedKeys.has('ArrowRight');
-  const keyLeft = pressedKeys.has('KeyA') || pressedKeys.has('ArrowLeft');
+  // Free-fly owns WASD outright: the same keys steer the debug camera, so
+  // flying across the yard to look at something walked the character the
+  // same distance underneath you — and with the camera detached from her
+  // in this mode, you didn't find out until you switched back. Only the
+  // keys are taken away; click-to-move still works, and the panel's fixed
+  // camera gives her the keyboard back.
+  const driving = !debugFreeFly;
+  const keyUp = driving &&
+    (pressedKeys.has('KeyW') || pressedKeys.has('ArrowUp') || bothMouseButtonsHeld);
+  const keyDown = driving && (pressedKeys.has('KeyS') || pressedKeys.has('ArrowDown'));
+  const keyRight = driving && (pressedKeys.has('KeyD') || pressedKeys.has('ArrowRight'));
+  const keyLeft = driving && (pressedKeys.has('KeyA') || pressedKeys.has('ArrowLeft'));
   const keyboardActive = keyUp || keyDown || keyRight || keyLeft;
 
   // Frozen in the hammock until WASD wakes her back up (a click-elsewhere

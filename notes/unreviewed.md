@@ -14,6 +14,103 @@ a human. Those stay in the untested list until someone actually plays them.
 
 ## Judgement calls that could have gone the other way
 
+- **The back elevation's 25/50/25 split moved four things nobody named.** The
+  ask was the proportions; everything mounted on that wall had to follow or it
+  would have landed on a corner or a pier. The wing windows are now placed at
+  ±1.15 off each wing's own centre instead of fixed x's (the old inner pair sat
+  at ±3.8, which is exactly where the new inner corners are); the roof ladder
+  moved from 5.1 to the centre of the east wing, ~5.72, to stay in the gap
+  between that wing's two windows; the porch's back-wall window moved from 1.7
+  to the east bay's centre, ~2.54, to clear the pier; and the two ceiling
+  lights went from -1.2/1.77 to ±2.54, the middles of the outer bays. All four
+  are derived from `PORCH` now rather than hard-coded, so they'll follow if the
+  split changes again.
+- **The west wing's recess is 16% of the house's depth, 1.51 m.** Walked there
+  by eye over three passes — "maybe 10%", then doubled, then brought back out
+  a fifth — and 10% of *what* was a guess to begin with: depth, not width.
+  `WEST_WING_RECESS` in house.js is the one number; the wing's windows, its
+  soldier course, the corner downspout, the ceiling over the step, the slab
+  under it and the back window on the -x elevation all derive from
+  `WEST_WING_Z` and follow it.
+- **The brick's slab-edge reveal is laid per mass now, not as one box over
+  the whole footprint.** That single `W x D` box was only ever right while
+  every back wall sat on one line; with the west wing stepped back its 4 cm
+  reveal became a 1.5 m shelf standing 10 cm proud of the walk across the
+  recess. Restricted to the three masses that make up the back — the front
+  projections are left exactly as they were, since the bay and east end have
+  never had a reveal and adding one would change an elevation nobody asked
+  about. Worth deciding whether they *should* have one.
+- **The recess is floored with sidewalk, at walk height** — settled by the
+  owner after a pass at patio height. It leaves a 27 cm step where the
+  recess meets the patio, at the west pier, which nobody has walked. Laid as
+  an explicit box in `WALK_BOXES`, because the generic per-mass expansion
+  only reaches `WALK_W` (1.42 m) past a wall and the recess is deeper than
+  that — the shortfall left a 10 cm notch whose filleted corners were the
+  "rounded corner on the left". The box also overruns `WALK_W` past the
+  wing's inner edge so the notch doesn't just move sideways; that overlap
+  sits under the raised patio slab.
+- **The piers are 0.44 m square, down from 0.52.** Not asked for. Once the
+  slab had to stop short of them (they run to the ground, so a slab that
+  overlapped read as two solids in one place) the gap between the slab edge
+  and the eave was exactly `EAVE` wide — at 0.52 a pier either overlapped the
+  slab again or stuck out past the gutter. `PIER_HALF` is `EAVE / 2` now, so
+  it follows the eave rather than being its own number.
+- **The slab's front edge stops 2 cm inside the piers' front faces rather
+  than level with them.** The ask was for the two to be in line. Dead
+  coplanar is what produced the "sharing a spot" look the pass before, so
+  they're deliberately 2 cm apart — invisible at any normal distance, and the
+  slab edge is buried in solid brick where it crosses a pier. If a seam ever
+  shows at a grazing angle, that 0.02 is the number.
+- **`PIER_HALF` is a plain 0.22 again.** It was `EAVE / 2` for one pass, back
+  when a pier had to fit between the slab's edge and the gutter. The slab has
+  since moved in to the back wall line and that constraint is gone; the size
+  was kept because it looked right, not because it follows from anything.
+- **The two piers are at the west corner and dead centre**, which leaves two
+  unequal bays and no pier at the east end of the recess. Both positions were
+  pointed at in screenshots and moved one at a time, so the asymmetry is
+  chosen rather than derived — there's no rule left in `PIER_X` to appeal to
+  if it ever needs redoing.
+- **The patio's ceiling lights are worked out from `PIER_X` now**, one
+  centred in each bay, with sub-0.6 m gaps skipped so the zero-width one
+  beside the corner pier doesn't count. Not asked for — but the piers have
+  moved three times and the fixed pair of x's landed on one of them every
+  time.
+- **The west wing's return into the patio is sided, not brick.** Asked for.
+  Its opposite number — the east wing's return, on the far side of the
+  recess — is still brick, which nobody has ruled on.
+- **The patio doors are one pair, not two.** The old version had two matching
+  pairs side by side toward the east end, described in the code as the thing
+  you notice about the back of the house. The owner's photo of the real ones
+  shows a single pair, and they marked a single opening, so that's what went
+  in. If the second pair was real, it's the composition that changed.
+- **Their size and position are eye-picked**: 1.72 x 2.03 m, centred at
+  x = -1.5, which is roughly where the mark was on the screenshot. Nothing
+  was measured off the photo — there's no scale reference in it.
+- **`INTERIOR_MAT` is a new material** — one dark plane standing in for the
+  room behind the glass, and one more draw call. Windows use blinds for this;
+  a full-glass door has nothing to hide behind, and blinds were what made the
+  last attempt at these doors read as a pale decal.
+- **The doors don't light up at night.** Every other glazed opening on the
+  house can (`LIT_WINDOW_SHARE`), but the interior here is a flat dark plane
+  with no lit variant, so this is the one opening that's always a dark room.
+- **No dog door.** It's in the owner's photo, in the panel left of the doors,
+  and there's a dog door in the game's fiction — but it wasn't asked for and
+  it's a gameplay-shaped prop, not trim.
+- **The -x elevation's back window is now centred between its neighbour and
+  the corner** instead of sitting at a fixed 3.3. Holding its old 1.42 m
+  offset from the corner put it 25 cm from the next window along. It does
+  mean that wall's three windows are spaced differently than they were.
+- **The patio columns kept the "spaced at thirds" rule** when the recess was
+  halved in width, so they're now 2.5 m in from each end rather than the ~3.5 m
+  they were. That leaves three bays across the patio, not two, which is what
+  the code comments still describe.
+- **WASD is disabled for the character in free-fly debug only, not in all of
+  `?debug`.** The ask said "in debug mode"; free-fly is the mode where the keys
+  are already taken (they steer the camera), and the panel's fixed-camera
+  button exists to give ordinary play back with the counter up — locking her
+  out there too would break that. Click-to-move still works in free-fly; only
+  the keys are taken away.
+
 - **The ladder climb animation has never been seen.** Written with the
   Browser pane hidden, which pauses `requestAnimationFrame` — and the climb
   is a timed tween, so it does not run at all in that state. The build passes
@@ -442,6 +539,22 @@ was not.
   0.9% at 0.3 m, 0.7% at 0.8 m, 1.9% at 1.5 m and 26% at 2.0 m — the last is
   fine, since above 2 m you should be looking into trunks. Unknown: whether the
   greens, the bay-and-point edge and the dark interior read well.
+- **The back elevation's 25/50/25 rebuild.** The browser pane wasn't
+  displaying, so none of it has been seen: the new west brick wing, the
+  respaced windows, the moved ladder, or whether the patio still reads as the
+  middle half rather than a slot. The numbers all derive from `PORCH`, and the
+  arithmetic checks out (wings 3.81 m each, windows 0.3 m off every corner,
+  ladder clear of both by 0.4 m), but that's all it is.
+- **The west wing's recess.** The step itself, the ceiling panel over it, and
+  whether the shortened soldier course and moved downspout land cleanly on
+  the new corner. Verified from the built module (`HOUSE_SOLIDS` puts the
+  wing's back face at world z -3.01 against the back wall's -1.5) but only
+  looked at from across the yard at screenshot resolution.
+- **Whether anything can still get onto the patio slab.** It's a 32 cm step up
+  from the walk, unchanged, but the piers now sit in front of that step
+  rather than on the slab behind it, so the approach to it is different.
+  Never walked.
+- **WASD not driving the character in free-fly.**
 - Backspace jumping, and `P` spawning a poop.
 - Holding both mouse buttons to walk forward, including releasing one button
   and alt-tabbing away mid-chord.
