@@ -406,20 +406,50 @@ function makeConcreteTexture() {
   const rand = seeded(4242);
   // Broad tonal drift first — real slabs cure unevenly and stain, and
   // without it the driveway reads as a flat gray card.
+  //
+  // Every mark is stamped nine times, offset by a full canvas in each
+  // direction, so anything crossing an edge comes back on the opposite one.
+  // Without that the marks are simply clipped at the border, and since this
+  // texture is tiled across every slab in the game, each clipped stain
+  // becomes a hard seam repeating on a grid — which is exactly the
+  // checkerboard the concrete has been showing. Scaling the UVs correctly
+  // did not fix it and could not: the discontinuity is baked into the image,
+  // so all a scale change does is resize the squares.
+  const wrapped = (draw) => {
+    for (let ox = -1; ox <= 1; ox++) {
+      for (let oy = -1; oy <= 1; oy++) draw(ox * size, oy * size);
+    }
+  };
   for (let i = 0; i < 60; i++) {
     const cx = rand() * size;
     const cy = rand() * size;
-    const r = 20 + rand() * 70;
-    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    grad.addColorStop(0, `rgba(${rand() < 0.5 ? '90,88,82' : '206,202,192'},0.16)`);
-    grad.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, size, size);
+    // Smaller than before. At up to 70 on a 256 canvas a single stain
+    // covered a quarter of the tile, which at 2.4 m per tile is a metre-wide
+    // disc — it read as a circular patch rather than as uneven curing.
+    const r = 14 + rand() * 34;
+    // Halved again in strength below. The driveway photo is a near-uniform
+    // pale grey pour — the staining on real concrete is barely there, and
+    // anything strong enough to see as a *shape* is wrong however well it
+    // tiles.
+    const tint = rand() < 0.5 ? '90,88,82' : '206,202,192';
+    wrapped((dx, dy) => {
+      const grad = ctx.createRadialGradient(cx + dx, cy + dy, 0, cx + dx, cy + dy, r);
+      grad.addColorStop(0, `rgba(${tint},0.075)`);
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, size, size);
+    });
   }
+  // Speckle is 1.5 px and only wraps in the sense that a grain landing on
+  // the border needs its other half on the far side; cheap enough to stamp
+  // the same way rather than special-case.
   for (let i = 0; i < 9000; i++) {
     const v = rand() > 0.5 ? 0 : 255;
-    ctx.fillStyle = `rgba(${v},${v},${v},${rand() * 0.1})`;
-    ctx.fillRect(rand() * size, rand() * size, 1.5, 1.5);
+    const x = rand() * size;
+    const y = rand() * size;
+    const a = rand() * 0.1;
+    ctx.fillStyle = `rgba(${v},${v},${v},${a})`;
+    wrapped((dx, dy) => ctx.fillRect(x + dx, y + dy, 1.5, 1.5));
   }
   return finishTexture(canvas, true);
 }
