@@ -273,12 +273,15 @@ controls.minDistance = 0.12;
 // controls.maxDistance is driven per-frame off this, so it can be
 // temporarily tightened without losing what it's meant to be.
 //
-// Kept deliberately short for normal play. Past roughly this distance the
-// camera clears the treeline and you start looking out over the edge of the
-// 55m world, which reads as the yard being a floating island — and the sky
-// dome's lower half comes into view with it. Debug mode raises it below,
-// since inspecting a whole roof or a treeline genuinely needs the room.
-let orbitMaxDistance = 13;
+// Doubled, on request, from the 13 it sat at.
+//
+// The old note said 13 was as far as it could go before the camera cleared
+// the treeline and you started looking out over the edge of a 55 m world —
+// yard as floating island, sky dome's lower half in view. That was written
+// when the tree line was a thin band of see-through trees. It's a tall
+// opaque wall now, which is most of what was holding the limit down.
+// If the horizon does show at full zoom, this is the number to pull back.
+let orbitMaxDistance = 26;
 controls.maxDistance = orbitMaxDistance;
 // Right-drag rotates, the way it does in most third-person RPGs. Left keeps
 // rotating too, so nothing that already worked stops working — the only
@@ -3129,26 +3132,27 @@ let biteChasing = false;
 const BITE_DURATION = 0.35;
 const BITE_ARRIVE_DIST = 0.55;
 
-// How long Miranda gives up on poop duty after being bitten.
+// Bitten once and she's done collecting poop for the rest of the session.
 //
 // Declared here rather than next to momState, which is where it belongs by
 // subject, because triggerBite is right below and uses it — and this file
 // has taught me five times over to put a constant above its first *use*.
 //
-// Long enough to be the point of biting her rather than a stumble: she drops
-// whatever she was walking to, heads back to the fire, and stays off the job
-// until it expires. Short enough that the yard doesn't just silently fill up
-// afterwards.
-const MOM_BITE_SULK = 14;
-let momSulkUntil = -1;
+// Deliberately permanent, and deliberately not reset by anything: not the
+// day/night toggle, not walking away, not picking her as the player and
+// switching back. Only a reload clears it. It started as a 14-second sulk,
+// which turned out to be the wrong shape — a timer makes biting her a way to
+// buy a pause, where this makes it a decision about how you want the yard to
+// be. Leaving the poop on the lawn is the consequence you chose.
+let momQuitPoopDuty = false;
 
 // Bitten: she abandons the poop she was heading for and walks home.
 //
 // Split out from triggerBite because the same thing has to happen on the
 // other player's screen when a bite arrives over the network — otherwise the
 // biter sees her quit and Miranda's own client sees her carry on working.
-function startMomSulk() {
-  momSulkUntil = elapsed + MOM_BITE_SULK;
+function stopMomCollecting() {
+  momQuitPoopDuty = true;
   // A scoop in progress gets interrupted too.
   //
   // This exempted 'pickingUp' at first, on the theory that finishing the one
@@ -3180,7 +3184,7 @@ function triggerBite() {
   }
   biteActive = true;
   biteElapsed = 0;
-  startMomSulk();
+  stopMomCollecting();
   // The impact pulse itself (biteActive, driven in animate()) already
   // runs unconditionally on whatever local darla/mom objects exist — this
   // just makes sure it also fires on Mom's own screen, not only the biter's.
@@ -4701,11 +4705,12 @@ function updateMom(delta) {
   if (momState === 'idle') {
     resetMomLimbs();
     if (poops.length === 0) return;
-    // Sulking after a bite: she stands at the fire and lets it pile up.
-    // Tested here rather than at the top of updateMom so the walk home still
-    // runs — she retreats first, then refuses to work, which reads as her
-    // giving up rather than as the AI freezing mid-stride.
-    if (elapsed < momSulkUntil) return;
+    // Bitten at some point, so she is off poop duty for good and stands at
+    // the fire letting it pile up. Tested here rather than at the top of
+    // updateMom so the walk home still runs — she retreats first, then
+    // refuses to work, which reads as her giving up rather than as the AI
+    // freezing mid-stride.
+    if (momQuitPoopDuty) return;
     let nearest = poops[0];
     let nearestDist = mom.position.distanceTo(nearest.position);
     for (let i = 1; i < poops.length; i++) {
@@ -5362,7 +5367,7 @@ function applyRemoteFx(msg) {
     biteElapsed = 0;
     // Same interruption as a local bite. Without it the biter watches her
     // give up while Miranda's own client has her calmly carry on collecting.
-    startMomSulk();
+    stopMomCollecting();
   } else if (msg.name === 'callBark') {
     playCallDarlaSound();
     showSpeechBubble(mom, 'Darla!');
