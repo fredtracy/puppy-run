@@ -1487,7 +1487,14 @@ export const HOUSE_BACK_WALK_Z = HOUSE_Z + HALF_D + 0.7;
 // main.js needs three different things from it — where to raycast for a
 // click, where to stand to start climbing, and what height to arrive at —
 // and all three have to agree with the rungs that actually got built.
-const LADDER_X = -5.6;
+// Moved east onto the brick, between the two windows on that section.
+//
+// It used to stand at -5.6, which was fine while the back wall ran flush
+// the whole way across — but recessing the west section put it in front of
+// a wall that is now set back, so it leaned on nothing and reached an eave
+// that wasn't above it. This section is the one piece of the back wall
+// still flush with HALF_D, which is what a ladder needs to lean on.
+const LADDER_X = 5.1;
 const LADDER_HALF_W = 0.21;
 // It leans rather than being bolted flat to the brick, and that isn't
 // styling — the eave overhangs the wall by EAVE (0.44 m), so a ladder
@@ -1628,17 +1635,17 @@ function buildRoofLadder() {
 // it at about 52% of the recess — near enough dead centre — so the two
 // bays are close to equal, and the pier lands between the patio doors and
 // the window rather than off to one side of both.
-// Two free-standing columns, not three. The photo has a pair of brick piers
-// dividing the covered run into three bays; the returns at each end of the
-// recess are wall, not columns, and counting them as piers is what put an
-// extra one in the middle.
-const PIER_SPAN = PORCH.xMax - PORCH.xMin;
-const PIER_X = [
-  PORCH.xMin + PIER_SPAN / 3,
-  PORCH.xMin + (PIER_SPAN * 2) / 3,
-];
 const PIER_Z = HALF_D - 0.26;
 const PIER_HALF = 0.26;
+// Two columns, one at each end of the covered run — they are what holds the
+// roof up where the recess opens, so they belong on its corners rather than
+// spaced along it. An earlier pass had three (both ends plus a middle) and
+// then two placed a third of the way in; neither matches the photo, which
+// has a pier hard against each end of the patio and nothing between.
+//
+// Below PIER_HALF on purpose: these are consts read at module load, so the
+// list has to come after the number it is built from.
+const PIER_X = [PORCH.xMin + PIER_HALF, PORCH.xMax - PIER_HALF];
 
 // The building's masses, in the house's own coordinates. Everything else
 // that needs to know the shape of the house — the collision boxes, the
