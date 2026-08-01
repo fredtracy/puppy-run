@@ -1728,7 +1728,11 @@ function createDrivewayExtension() {
         // edge, so 3 mm of separation left the two meshes z-fighting into
         // a torn white fringe along the whole apron lip. The resulting
         // ~3 cm step reads correctly anyway — concrete meeting asphalt.
-        terrainHeight(x, z) + seamOffset * (1 - t) + 0.045,
+        // The 0.045 is road clearance and belongs at the road, so it ramps
+        // in with t rather than being carried the whole way. Held flat it
+        // lifted the seam at the house end by the same amount, which is
+        // half of the step that used to be there.
+        terrainHeight(x, z) + seamOffset * (1 - t) + 0.045 * t,
         z
       );
       // The same procedural concrete the house's own slabs use, mapped in

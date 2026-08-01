@@ -1454,7 +1454,13 @@ export const HOUSE_DRIVEWAY = {
   // instead of stepping straight in to its running width.
   apronHalfWidth: (GARAGE_W + WALK_W * 2) / 2,
   endZ: HOUSE_Z + DRIVEWAY_END_Z,
-  surfaceY: 0.1,
+  // The top of the driveway slab, above the house's graded pad. Must equal
+  // the SLAB thickness the flatwork is actually built at (0.05) — it was
+  // 0.1, which put yard.js's continuation half a slab proud of the concrete
+  // it joins. With the road-clearance offset on top that came to a 9.5 cm
+  // lip across the mouth of the drive: you saw the step's own side face as
+  // a line, and daylight past it at the edges.
+  surfaceY: 0.05,
 };
 
 // The concrete walk along the back of the house — a safe place to put
