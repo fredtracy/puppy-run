@@ -1211,26 +1211,36 @@ function makePawCursor(active) {
   return `url(${c.toDataURL('image/png')}) 16 21, auto`;
 }
 
-const CURSOR_PAW = makePawCursor(false);
-const CURSOR_PAW_ACTIVE = makePawCursor(true);
+// Off for now, at the owner's request — back to the system cursor.
+//
+// Left as a switch rather than deleted, because "for now" is what was asked.
+// Flip this to true and the paw comes back everywhere it was: the two states
+// below become the paw pair instead of the system's, so every call site
+// downstream works either way without knowing which is in play.
+const PAW_CURSOR = false;
+
+const CURSOR_PAW = PAW_CURSOR ? makePawCursor(false) : '';
+const CURSOR_PAW_ACTIVE = PAW_CURSOR ? makePawCursor(true) : 'pointer';
 renderer.domElement.style.cursor = CURSOR_PAW;
 
-// The paw covers the HUD too, not just the canvas. Leaving the buttons on
-// the system hand would mean the cursor changed species halfway up the
-// screen — so the same two states apply there: lit paw over anything
-// clickable, resting paw everywhere else. Done as an injected rule rather
-// than by editing each button's CSS, since the data URI only exists at
-// runtime and this way it also covers buttons added later.
-//
-// !important, and not out of laziness: the existing rules in index.html are
-// hung off ids and classes (#mp-corner-button, #mp-menu button,
-// .character-card), so a plain `button` selector loses the specificity
-// contest against every one of them and the paw would silently not apply.
-const cursorStyle = document.createElement('style');
-cursorStyle.textContent =
-  `body { cursor: ${CURSOR_PAW}; }\n` +
-  `button, [role="button"], .character-card { cursor: ${CURSOR_PAW_ACTIVE} !important; }`;
-document.head.appendChild(cursorStyle);
+if (PAW_CURSOR) {
+  // The paw covers the HUD too, not just the canvas. Leaving the buttons on
+  // the system hand would mean the cursor changed species halfway up the
+  // screen — so the same two states apply there: lit paw over anything
+  // clickable, resting paw everywhere else. Done as an injected rule rather
+  // than by editing each button's CSS, since the data URI only exists at
+  // runtime and this way it also covers buttons added later.
+  //
+  // !important, and not out of laziness: the existing rules in index.html
+  // are hung off ids and classes (#mp-corner-button, #mp-menu button,
+  // .character-card), so a plain `button` selector loses the specificity
+  // contest against every one of them and the paw would silently not apply.
+  const cursorStyle = document.createElement('style');
+  cursorStyle.textContent =
+    `body { cursor: ${CURSOR_PAW}; }\n` +
+    `button, [role="button"], .character-card { cursor: ${CURSOR_PAW_ACTIVE} !important; }`;
+  document.head.appendChild(cursorStyle);
+}
 
 const momGlow = createHoverGlow(1.1, 1.9, 0.75);
 mom.add(momGlow);
