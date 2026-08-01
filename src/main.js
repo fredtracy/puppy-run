@@ -5167,9 +5167,77 @@ function startClimb(down) {
   climbT = 0;
   moveTarget = null;
   ladderTarget = false;
-  // Facing the house going up, facing out coming down — she climbs looking
-  // at the rungs either way, which is the one thing that would look wrong.
-  player.rotation.y = down ? 0 : Math.PI;
+  // Facing the ladder, both directions — which is how you actually climb
+  // down one, and now also the only thing the pose makes sense against.
+  //
+  // This used to turn her outward for the descent. That was invisible while
+  // the climb was a bare positional tween, but the moment she's braced on
+  // the rungs it reads as leaning backwards off the ladder into thin air.
+  player.rotation.y = Math.PI;
+}
+
+// How many reach-and-step cycles fit into the climb. Four over the ladder's
+// run puts a rung under each hand about where the rungs actually are, which
+// is the thing that stops it reading as a loop playing over a lift.
+const CLIMB_CYCLES = 4;
+
+// Poses the climber against the rungs.
+//
+// `t` is 0 at the foot and 1 at the roof *regardless of direction* — the
+// tween already plays the descent by running t backwards, and the limbs get
+// the same treatment for free, which is why going down looks like climbing
+// down rather than like falling up.
+//
+// `weight` fades the whole pose out across the step-off onto the shingles.
+// Without it she arrives on the roof still splayed against a ladder that is
+// now behind her, and snaps out of it a frame later.
+function applyClimbPose(t, weight) {
+  const swing = Math.sin(t * CLIMB_CYCLES * Math.PI * 2);
+  const w = weight;
+  if (playerKind === 'darla') {
+    const legs = darla.userData.legs;
+    // Reared up against the rungs. Negative pitch is nose-up (see the sit
+    // pose), and a dog on a ladder has to be near-vertical or she reads as
+    // swimming up the side of the house.
+    darla.rotation.x = -1.15 * w;
+    // Front paws reach and pull, back legs push off alternately — opposite
+    // phase, the same diagonal pattern her walk uses.
+    legs.legFR.rotation.x = (-0.95 + swing * 0.5) * w;
+    legs.legFL.rotation.x = (-0.95 - swing * 0.5) * w;
+    legs.legBR.rotation.x = (0.4 - swing * 0.3) * w;
+    legs.legBL.rotation.x = (0.4 + swing * 0.3) * w;
+    return;
+  }
+  const arms = mom.userData.arms;
+  const legs = mom.userData.legs;
+  // Arms overhead on the rungs, one always higher than the other. Forward is
+  // negative on these pivots, so past -pi/2 is up rather than out.
+  arms.armL.rotation.x = (-2.15 + swing * 0.4) * w;
+  arms.armR.rotation.x = (-2.15 - swing * 0.4) * w;
+  // Knees come up high — a ladder rung is a much bigger step than a stride.
+  legs.legL.rotation.x = (-0.6 - swing * 0.5) * w;
+  legs.legR.rotation.x = (-0.6 + swing * 0.5) * w;
+  // Leaning into the ladder rather than standing bolt upright off it.
+  mom.rotation.x = 0.14 * w;
+}
+
+// Puts back whatever applyClimbPose moved, so the walk cycle and the sit
+// pose inherit a clean rig. The pitch especially: nothing else writes
+// rotation.x on Darla, so a leftover would stay until something else did.
+function clearClimbPose() {
+  player.rotation.x = 0;
+  if (playerKind === 'darla') {
+    const legs = darla.userData.legs;
+    legs.legFR.rotation.x = 0;
+    legs.legFL.rotation.x = 0;
+    legs.legBR.rotation.x = 0;
+    legs.legBL.rotation.x = 0;
+  } else {
+    mom.userData.arms.armL.rotation.x = 0;
+    mom.userData.arms.armR.rotation.x = 0;
+    mom.userData.legs.legL.rotation.x = 0;
+    mom.userData.legs.legR.rotation.x = 0;
+  }
 }
 
 function updateClimb(delta) {
@@ -5197,8 +5265,17 @@ function updateClimb(delta) {
     from.z + (to.z - from.z) * k
   );
 
+  // Full pose while she's on the rungs, fading out across the step-off. `t`
+  // is the up-the-ladder parameter either way, so this needs no direction
+  // case of its own.
+  applyClimbPose(
+    t,
+    t < CLIMB_STEP_OFF ? 1 : 1 - (t - CLIMB_STEP_OFF) / (1 - CLIMB_STEP_OFF)
+  );
+
   if (climbT >= 1) {
     climbing = false;
+    clearClimbPose();
     onRoof = !climbDown;
     if (onRoof) lastRoofY = player.position.y;
   }

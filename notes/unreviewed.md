@@ -14,6 +14,38 @@ a human. Those stay in the untested list until someone actually plays them.
 
 ## Judgement calls that could have gone the other way
 
+- **The ladder climb animation has never been seen.** Written with the
+  Browser pane hidden, which pauses `requestAnimationFrame` — and the climb
+  is a timed tween, so it does not run at all in that state. The build passes
+  and the maths is the same shape as the sit pose, but every angle in
+  `applyClimbPose` (`src/main.js`) is reasoned from the rig rather than
+  observed. Most likely to be wrong: Darla's `-1.15` body pitch, which rears
+  her up against the rungs, and Miranda's `-2.15` arm reach, which is meant
+  to put her hands overhead rather than straight out.
+
+- **The climb now faces the ladder in both directions.** It used to turn her
+  outward on the descent. That was invisible while the climb was a bare
+  positional tween, but braced on the rungs it reads as leaning backwards off
+  the ladder. Changing it is a behaviour change nobody asked for, and if the
+  outward-facing descent was deliberate it's one line in `startClimb`.
+
+- **The climb pose is not synced in multiplayer.** A peer watching sees the
+  climber slide up the ladder with their walk cycle on, same as before. Not a
+  regression — the tween was never synced either — but the animation makes
+  the gap more obvious than it was.
+
+- **Tree collision radii are nominal.** `buildBroadleafParts` grows a tree
+  and then rescales it, so finished trunk girth isn't known where the tree is
+  stamped. The numbers (0.3 broadleaf, 0.34 pine, both scaled; 0.3 for the
+  six back trees) are eyeballed against the models and padded, on the
+  principle that stopping slightly early reads as solid and clipping in reads
+  as broken. Cost is measured and negligible; the *feel* is untested.
+
+- **Brush is deliberately not collidable**, while every tree is. Colliding a
+  5.6 m opaque band would wall the yard in and make the pond unreachable,
+  which fights the open "everywhere walkable" item — but it does mean you can
+  walk through bushes and not through trunks, which is a rule nobody stated.
+
 - **Every number in the yard rework is eye-picked from the photos.** The six
   back trees' positions, heights, trunk radii and the width of the gap
   between the two groups of three; the brush band's new 2.5-5.2 m height
