@@ -1167,7 +1167,16 @@ const PITCH = 0.5; // 6:12, matching the main roof in the photos
 // three brick piers dividing two bays, a white-sided back wall (the one
 // wall on the house that isn't brick, along with the entry alcove), French
 // doors, and the string lights.
-const PORCH = { xMin: -FT * 10, xMax: FT * 10, depth: FT * 11 };
+// The recess runs all the way to the west corner, not as a notch centred in
+// the back wall.
+//
+// Corrected against the assessor sketch and the straight-on back photo. The
+// left-hand section — the one with the two windows, where the dog run is —
+// is *recessed*, on the same line as the porch, and the patio slab runs
+// straight across in front of the whole thing. The old version put a brick
+// block flush with the back wall out there, which is what made the back
+// read as a symmetrical notch when it is nothing of the sort.
+const PORCH = { xMin: -HALF_W, xMax: FT * 10, depth: FT * 11 };
 const PORCH_BACK_Z = HALF_D - PORCH.depth;
 
 // The street elevation, divided exactly as the assessor's sketch has it:
@@ -1619,7 +1628,15 @@ function buildRoofLadder() {
 // it at about 52% of the recess — near enough dead centre — so the two
 // bays are close to equal, and the pier lands between the patio doors and
 // the window rather than off to one side of both.
-const PIER_X = [PORCH.xMin + 0.26, 0.1, PORCH.xMax - 0.26];
+// Two free-standing columns, not three. The photo has a pair of brick piers
+// dividing the covered run into three bays; the returns at each end of the
+// recess are wall, not columns, and counting them as piers is what put an
+// extra one in the middle.
+const PIER_SPAN = PORCH.xMax - PORCH.xMin;
+const PIER_X = [
+  PORCH.xMin + PIER_SPAN / 3,
+  PORCH.xMin + (PIER_SPAN * 2) / 3,
+];
 const PIER_Z = HALF_D - 0.26;
 const PIER_HALF = 0.26;
 
@@ -1630,7 +1647,6 @@ const PIER_HALF = 0.26;
 const MASSES = [
   { xMin: -HALF_W, xMax: HALF_W, zMin: -HALF_D, zMax: PORCH_BACK_Z },
   { xMin: PORCH.xMax, xMax: HALF_W, zMin: PORCH_BACK_Z, zMax: HALF_D },
-  { xMin: -HALF_W, xMax: PORCH.xMin, zMin: PORCH_BACK_Z, zMax: HALF_D },
   { xMin: BAY.xMin, xMax: BAY.xMax, zMin: BAY_FRONT_Z, zMax: -HALF_D },
   { xMin: EAST_END.xMin, xMax: EAST_END.xMax, zMin: EAST_FRONT_Z, zMax: -HALF_D },
   { xMin: GARAGE.xMin, xMax: GARAGE.xMax, zMin: GARAGE_FRONT_Z, zMax: -HALF_D },
