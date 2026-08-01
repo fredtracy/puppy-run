@@ -1637,15 +1637,19 @@ function buildRoofLadder() {
 // the window rather than off to one side of both.
 const PIER_Z = HALF_D - 0.26;
 const PIER_HALF = 0.26;
-// Two columns, one at each end of the covered run — they are what holds the
-// roof up where the recess opens, so they belong on its corners rather than
-// spaced along it. An earlier pass had three (both ends plus a middle) and
-// then two placed a third of the way in; neither matches the photo, which
-// has a pier hard against each end of the patio and nothing between.
+// Two columns, spaced along the run rather than jammed into its corners.
+// PIER_Z already puts their outer face flush with the patio's front edge,
+// which is where they stand in the photo — it was only the x that was
+// wrong, and pushing them out to the recess ends made them read as part of
+// the wall instead of as free-standing columns.
 //
 // Below PIER_HALF on purpose: these are consts read at module load, so the
 // list has to come after the number it is built from.
-const PIER_X = [PORCH.xMin + PIER_HALF, PORCH.xMax - PIER_HALF];
+const PIER_SPAN = PORCH.xMax - PORCH.xMin;
+const PIER_X = [
+  PORCH.xMin + PIER_SPAN / 3,
+  PORCH.xMin + (PIER_SPAN * 2) / 3,
+];
 
 // The building's masses, in the house's own coordinates. Everything else
 // that needs to know the shape of the house — the collision boxes, the
@@ -2447,9 +2451,13 @@ export function createHouse() {
   // A touch taller than the slab edge that rings the house, so the porch
   // floor comes out proud of the surrounding grade rather than sunk into
   // it by two centimetres.
+  // Twice the thickness it was, on request — 0.32 rather than 0.16. Only
+  // the slab grows: it sits on the ground and rises, so the ceiling and the
+  // eave above it are untouched and the covered height simply reduces by
+  // the extra step.
   group.add(place(
-    concreteBox(porchW, 0.16, PORCH.depth + 0.3),
-    porchCx, 0.08, PORCH_BACK_Z + (PORCH.depth + 0.3) / 2
+    concreteBox(porchW, 0.32, PORCH.depth + 0.3),
+    porchCx, 0.16, PORCH_BACK_Z + (PORCH.depth + 0.3) / 2
   ));
   // Porch ceiling — the house's own soffit, shaded (see RECESS_CEILING_MAT).
   group.add(place(
