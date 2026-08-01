@@ -621,7 +621,7 @@ function ditchDepthAt(x, z) {
 // How deep the band runs, measured out from the clearing edge. Deep enough
 // that a gap in the front row is backed by two or three more behind it —
 // one row of anything, however tight, still shows daylight at some angle.
-const BRUSH_DEPTH = 4.2;
+const BRUSH_DEPTH = 5.6;
 // How far the inner edge wanders in and out of that line. The clearing is
 // a box (see inOpenArea); brush planted straight along it would end on the
 // same visible straight edge the trees do and read as a clipped hedge. The
@@ -635,12 +635,21 @@ const BRUSH_BAY = 2.2;
 // were replaced with leaf clusters — the spheres were solid by
 // construction and leaf cards are not, so the same layout stopped being
 // enough on its own.
-const BRUSH_SPACING = 1.0;
+const BRUSH_SPACING = 0.9;
 // Raised from 1.5: at that floor the shortest runs of the band topped out
 // right where a 1.5 m sightline runs, and you could see over them (5 holes
 // in 240 rays at that height, against 1 at Darla's own eye level).
-const BRUSH_MIN_HEIGHT = 1.9;
-const BRUSH_MAX_HEIGHT = 3.1;
+//
+// Raised again, and the reason is that "opaque" was being measured at the
+// wrong height. Both numbers above were tuned against sightlines at a dog's
+// eye level, which the band passed — but the player's camera looks *down*
+// into the yard from several metres up, and at that angle you were seeing
+// straight over the brush and through the bare trunks above it to the sky.
+// Every reference photo is opaque from the ground to the canopy with no
+// band of daylight in between, so the brush now has to reach up far enough
+// to meet the crowns rather than just to block a standing figure.
+const BRUSH_MIN_HEIGHT = 2.5;
+const BRUSH_MAX_HEIGHT = 5.2;
 
 // How far outside the clearing a point is, in metres: negative inside, 0 on
 // the boundary, growing into the woods. Ordinary exterior box distance,
@@ -874,7 +883,16 @@ export function createTreeChunk(cx, cz) {
       // under a closed roof of leaves.
       if (nearWater(x, z, 1.2)) continue;
       if (Math.hypot(x - POND.x, z - POND.z) < GLADE_RADIUS * 0.8) continue;
-      if (rand() < 0.1) continue; // thin out a bit so it reads as a forest, not a wall
+      // Thinning, but only well back from the edge.
+      //
+      // The flat 10% everywhere was punching holes in exactly the row you
+      // look at. From the lawn you only ever see the first few metres of
+      // trees, and a gap there is a hole straight through to the sky —
+      // which is what the tree line was doing against photos that are solid
+      // green wall. Deeper in, thinning still earns its keep: it stops the
+      // interior reading as a repeating grid, and nothing out there is
+      // silhouetted against anything.
+      if (woodsDepth(x, z) > 9 && rand() < 0.14) continue;
 
       const kind = rand() < 0.3 ? 'pine' : 'broadleaf';
       const pool = templates[kind];
@@ -4296,6 +4314,12 @@ function createChunkGrass(cx, cz, rand) {
 
       const duff = field(fDuff, x, z);
       const vigour = field(fVigour, x, z);
+      // Signed distance to the woods boundary: negative on the mown lawn,
+      // positive inside the trees. Hoisted up here because both the litter
+      // apron and the coarse-grass fringe below key off it, and the apron
+      // runs first. (Declared above its first *use*, per the note this file
+      // has earned five times over.)
+      const edgeDist = woodsDepth(x, z);
 
       // Reeds, in a band round the waterline.
       //
@@ -4343,6 +4367,30 @@ function createChunkGrass(cx, cz, rand) {
         // Consuming the position meant the bed was needles *instead of*
         // grass rather than needles *as well as* grass — which is exactly
         // why it read as a bald spot with litter on it.
+      }
+
+      // The litter apron where the mown lawn stops and the woods begin.
+      //
+      // This is the single most consistent feature of the reference photos
+      // and the game had none of it: in 3, 6 and 10 the lawn does not run
+      // into the bushes, it runs into a broad band of bare brown leaf and
+      // needle litter, two or three metres of it, and the woods start from
+      // there. Photos 4 and 5 show the same band running the whole width of
+      // the back under the six trees.
+      //
+      // Unlike the pine-straw beds above, this one *does* consume the
+      // position. That rule was written for litter falling onto a living
+      // lawn under a tree standing in the open, where grass genuinely does
+      // grow up through it. Here the ground is shaded out and walked on and
+      // nothing grows: bare is the whole point, and leaving turf in would
+      // put a green haze over the one place that has to read as earth.
+      const apron = edgeDist > -1.6 && edgeDist < 3.4
+        ? Math.min(1, Math.min(edgeDist + 1.6, 3.4 - edgeDist) / 1.1)
+        : 0;
+      if (apron > 0) {
+        entries.NEEDLE.push([x, z, vigour]);
+        if (rand() < apron * 0.8) entries.NEEDLE.push([x, z, vigour]);
+        if (rand() < apron * 0.93) continue;
       }
 
       // Grass grows here exactly as it does anywhere else on the lawn. The
@@ -4393,12 +4441,18 @@ function createChunkGrass(cx, cz, rand) {
       // band is centred just short of the boundary and falls off both ways.
       // A little is still allowed out on the open lawn, because a real lawn
       // does have the odd clump the mower missed — just far less than before.
-      const edgeDist = woodsDepth(x, z);
-      const fringe = Math.max(0, 1 - Math.abs(edgeDist + 0.55) / 1.15);
+      // Emphatically a *fringe*, not a band. At 0.55 this drew a solid
+      // knee-high hedge of grass the whole way round the tree line, which is
+      // not what any of the photos show and was worse than what it replaced.
+      // Photos 3, 6 and 10 all show the same thing where lawn meets woods: a
+      // strip of bare brown litter, with at most a few scruffy tufts the
+      // mower couldn't reach. So this is down to occasional clumps, and the
+      // litter apron below is what actually fills that ground.
+      const fringe = Math.max(0, 1 - Math.abs(edgeDist + 0.35) / 0.8);
       const coarsePatch = field(fCoarse, x, z);
       const coarseChance = Math.max(
-        wild * Math.max(0, coarsePatch - 0.42) * 0.3,
-        fringe * 0.55
+        wild * Math.max(0, coarsePatch - 0.42) * 0.25,
+        fringe * 0.06
       );
 
       // Dandelions. Their own patch field on a tighter scale than the
