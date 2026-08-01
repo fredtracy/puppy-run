@@ -566,10 +566,64 @@ const driveHalfWidth = (t) =>
   // garage all the way out.
   (DRIVE_HOUSE_HALF - DRIVE_HALF_W) * (1 - t) ** 2;
 
-const onDriveway = (x, z) => {
+// Exported so the paved surfaces can be probed from the console. `inHouse`
+// below is exactly isHousePaved || this, and grass grows wherever both are
+// false — so being able to call the two separately is how you find a strip
+// of lawn stranded between two slabs.
+export // The drive's two edges, as a lookup table, with each forced to run one way
+// only.
+//
+// The shape is a centreline that bends toward -x plus a width that is broad
+// at the house, narrows to its running width, and belles out again at the
+// road. Composed naively those two fight: just past the house the width
+// collapses faster than the centreline has drifted, so the left edge moves
+// *inward*, then moves back out once the bend catches up. An edge that
+// doubles back like that pinches a waist into the slab, and the lawn caught
+// inside the waist is the sliver of grass stranded in the middle of the
+// drive — concrete both sides of it, which is why it read as a gap rather
+// than as the edge of the drive.
+//
+// Both edges travel toward -x over the run, so clamping each to a running
+// minimum removes any doubling back while leaving the intended shape alone
+// everywhere it was already monotonic. Done as a table because the clamp is
+// a running quantity — it cannot be evaluated from t alone.
+const DRIVE_LUT_N = 96;
+const driveEdgeLut = (() => {
+  const left = new Float64Array(DRIVE_LUT_N + 1);
+  const right = new Float64Array(DRIVE_LUT_N + 1);
+  let lMin = Infinity;
+  let rMin = Infinity;
+  for (let i = 0; i <= DRIVE_LUT_N; i++) {
+    const t = i / DRIVE_LUT_N;
+    const c = DRIVE_X + DRIVE_BEND * smootherstep(t);
+    const hw =
+      DRIVE_HALF_W +
+      (DRIVE_APRON_HALF - DRIVE_HALF_W) * t ** 5 +
+      (DRIVE_HOUSE_HALF - DRIVE_HALF_W) * (1 - t) ** 2;
+    lMin = Math.min(lMin, c - hw);
+    rMin = Math.min(rMin, c + hw);
+    left[i] = lMin;
+    right[i] = rMin;
+  }
+  return { left, right };
+})();
+
+// Edges at a given t, linearly interpolated between table entries.
+function driveEdges(t) {
+  const f = Math.min(1, Math.max(0, t)) * DRIVE_LUT_N;
+  const i = Math.min(DRIVE_LUT_N - 1, Math.floor(f));
+  const k = f - i;
+  const { left, right } = driveEdgeLut;
+  return {
+    left: left[i] + (left[i + 1] - left[i]) * k,
+    right: right[i] + (right[i + 1] - right[i]) * k,
+  };
+}
+
+export const onDriveway = (x, z) => {
   if (z > DRIVE_START_Z || z < ROAD_Z + ROAD_HALF_WIDTH) return false;
-  const t = driveT(z);
-  return Math.abs(x - driveCenterX(t)) < driveHalfWidth(t);
+  const e = driveEdges(driveT(z));
+  return x > e.left && x < e.right;
 };
 
 // Where grass and trees can't grow because a building or a slab is standing
@@ -1658,10 +1712,12 @@ function createDrivewayExtension() {
   for (let iv = 0; iv <= segsAlong; iv++) {
     const t = iv / segsAlong;
     const z = startZ + (endZ - startZ) * t;
-    const cx = driveCenterX(t);
-    const halfW = driveHalfWidth(t);
+    // Same edges the mask uses, so the concrete and the grass can't
+    // disagree about where the drive is — that disagreement is what put a
+    // strip of lawn inside the slab.
+    const e = driveEdges(t);
     for (let iu = 0; iu <= segsAcross; iu++) {
-      const x = cx + (iu / segsAcross - 0.5) * 2 * halfW;
+      const x = e.left + (e.right - e.left) * (iu / segsAcross);
       positions.push(
         x,
         // ditchDepthAt already fills the swale back in under the drive, so
