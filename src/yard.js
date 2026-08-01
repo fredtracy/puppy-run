@@ -556,7 +556,15 @@ const DRIVE_HOUSE_HALF = HOUSE_DRIVEWAY.apronHalfWidth;
 const driveHalfWidth = (t) =>
   DRIVE_HALF_W +
   (DRIVE_APRON_HALF - DRIVE_HALF_W) * t ** 5 +
-  (DRIVE_HOUSE_HALF - DRIVE_HALF_W) * (1 - t) ** 4;
+  // Exponent 2, not 4. At the fourth power the flare collapsed almost
+  // entirely within the first tenth of the run — half a metre of width lost
+  // in the first metre and a bit — so instead of leaving the house as a
+  // widening apron it left as a pinch, and the notch that made against the
+  // square-mouthed slab behind it read as a wedge of lawn cut into the
+  // drive. Squared spreads the same widening over most of the run, which is
+  // what the reference photo shows: the drive flares continuously from the
+  // garage all the way out.
+  (DRIVE_HOUSE_HALF - DRIVE_HALF_W) * (1 - t) ** 2;
 
 const onDriveway = (x, z) => {
   if (z > DRIVE_START_Z || z < ROAD_Z + ROAD_HALF_WIDTH) return false;

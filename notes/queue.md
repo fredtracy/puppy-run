@@ -7,6 +7,25 @@ Add with `queue: <idea>` in chat — that means "park it, don't derail".
 
 ## Open
 
+- [ ] **Debug pin tool: click a spot, get its world coordinates on screen.**
+      Asked for 2026-07-31. In debug mode, clicking should drop a visible
+      marker at the point under the cursor and print its exact world x/z (and
+      y) on screen. Must support several pins at once, each labelled, so a
+      single screenshot can carry "put it here, and here, and here".
+
+      The point is the round trip we keep doing: the owner marks up a
+      screenshot in red, and I then spend several messages guessing which
+      part of the world that is and flying the debug camera around to find
+      it. Pins would make a marked-up screenshot self-describing — the
+      numbers would be in the image.
+
+      Most of the machinery exists. `?at=`/`?cam=`/`?eye=` already parse and
+      restore coordinates, `camView()` already builds a URL from live camera
+      state, and the debug panel is already a DOM overlay with buttons. What's
+      missing is a raycast from the click into the ground/scene, a marker to
+      drop there, and a list in the panel. Worth emitting a copyable line per
+      pin too, so they can be pasted straight back to me.
+
 - [ ] **Every window should be lit at night, not just some.** `LIT_WINDOW_SHARE`
       in house.js is 0.55 — chosen so the house didn't read as an office block
       with every room blazing. The owner wants them all lit (2026-07-31), so

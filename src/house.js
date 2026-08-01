@@ -1701,12 +1701,6 @@ const BACK_WALK = {
 const FLATWORK = [
   // the covered patio's own slab, inside the building outline
   toWorld({ xMin: PORCH.xMin, xMax: PORCH.xMax, zMin: PORCH_BACK_Z, zMax: HALF_D }),
-  // the entry alcove's stoop, running the length of the slot beside the
-  // garage out to the driveway. Deliberately proud of the walk, so it is
-  // kept out of the union rather than fighting it.
-  toWorld({
-    xMin: ALCOVE.xMin, xMax: ALCOVE.xMax, zMin: GARAGE_FRONT_Z, zMax: -HALF_D,
-  }),
 ];
 
 const inBox = (x, z, b) => x > b.xMin && x < b.xMax && z > b.zMin && z < b.zMax;
@@ -1788,11 +1782,18 @@ function unionOutline(boxes) {
 // its own edge but never its neighbour's. That clamp is the difference
 // between this and the per-slab version: here it only ever softens a corner,
 // where before it could consume the entire shape.
-function filletPolygon(pts, r, steps = 5) {
+// `keepSharp` marks corners that must stay square because something else
+// butts onto them. The driveway's mouth is the case: yard.js carries the
+// drive on out to the road from there, and it leaves the house with a
+// straight edge at the apron's full width. Rounding the union's corners
+// there pulls the concrete back by up to the fillet radius, and the two
+// surfaces stop meeting — which is the notch either side of the drive.
+function filletPolygon(pts, r, steps = 5, keepSharp = () => false) {
   const out = [];
   const n = pts.length;
   for (let i = 0; i < n; i++) {
     const p = pts[i];
+    if (keepSharp(p)) { out.push(p); continue; }
     const a = pts[(i - 1 + n) % n];
     const b = pts[(i + 1) % n];
     const la = Math.hypot(p[0] - a[0], p[1] - a[1]);
@@ -1829,11 +1830,28 @@ const WALK_BOXES = [
     zMin: DRIVEWAY_END_Z,
     zMax: GARAGE_FRONT_Z,
   },
+  // The entry alcove. It used to be its own slab laid 2 cm proud of the
+  // walk, which is where the "concrete stacked by the door" came from — a
+  // raised rectangle with the walk visibly running underneath it. In the
+  // reference photo the alcove is flush: one pour from the drive, past the
+  // garage, into the recess. Joining the union makes it exactly that, and
+  // means the fillet rounds where it meets the drive rather than leaving a
+  // step.
+  {
+    xMin: ALCOVE.xMin, xMax: ALCOVE.xMax, zMin: GARAGE_FRONT_Z, zMax: -HALF_D,
+  },
 ];
 
 // Local coordinates, for the mesh; and the same loop shifted into world
 // coordinates, for the mask.
-const WALK_OUTLINE = filletPolygon(unionOutline(WALK_BOXES), WALK_CORNER_R);
+const WALK_OUTLINE = filletPolygon(
+  unionOutline(WALK_BOXES),
+  WALK_CORNER_R,
+  5,
+  // The two corners at the road end of the driveway, where the yard's
+  // extension takes over. Everything else still rounds.
+  ([, z]) => Math.abs(z - DRIVEWAY_END_Z) < 0.01
+);
 const WALK_OUTLINE_WORLD = WALK_OUTLINE.map(([x, z]) => [x, z + HOUSE_Z]);
 
 function inPolygon(x, z, poly) {
@@ -2652,12 +2670,6 @@ export function createHouse() {
     // where the flicker was most visible.
     group.add(place(m, 0, SLAB + FRONT_WALK_LIFT, 0));
   }
-  // Entry stoop, joining the walk to the recessed front door, and running
-  // the whole depth of the alcove as the real one does.
-  group.add(place(
-    concreteBox(ALCOVE.xMax - ALCOVE.xMin, SLAB + 0.02, GARAGE.proj),
-    (ALCOVE.xMin + ALCOVE.xMax) / 2, (SLAB + 0.02) / 2, -HALF_D - GARAGE.proj / 2
-  ));
 
   const baked = bakeByMaterial(group);
 
