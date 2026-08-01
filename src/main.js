@@ -3129,6 +3129,49 @@ let biteChasing = false;
 const BITE_DURATION = 0.35;
 const BITE_ARRIVE_DIST = 0.55;
 
+// How long Miranda gives up on poop duty after being bitten.
+//
+// Declared here rather than next to momState, which is where it belongs by
+// subject, because triggerBite is right below and uses it — and this file
+// has taught me five times over to put a constant above its first *use*.
+//
+// Long enough to be the point of biting her rather than a stumble: she drops
+// whatever she was walking to, heads back to the fire, and stays off the job
+// until it expires. Short enough that the yard doesn't just silently fill up
+// afterwards.
+const MOM_BITE_SULK = 14;
+let momSulkUntil = -1;
+
+// Bitten: she abandons the poop she was heading for and walks home.
+//
+// Split out from triggerBite because the same thing has to happen on the
+// other player's screen when a bite arrives over the network — otherwise the
+// biter sees her quit and Miranda's own client sees her carry on working.
+function startMomSulk() {
+  momSulkUntil = elapsed + MOM_BITE_SULK;
+  // A scoop in progress gets interrupted too.
+  //
+  // This exempted 'pickingUp' at first, on the theory that finishing the one
+  // in her hands was tidier than snapping out of it. That was wrong, and
+  // badly so for exactly the case worth biting her over: a big poop shrinks
+  // rather than vanishing (removeOrShrinkPoop), so she scoops the same one
+  // over and over, and the exemption meant biting her did nothing at all for
+  // as long as the pile lasted.
+  //
+  // The pose has to be unwound by hand because updateMomPickup owns the bend
+  // and the shovel swing and only resets them when it runs to completion —
+  // leaving mid-scoop without this walks her home doubled over.
+  if (momState === 'pickingUp') {
+    mom.rotation.x = 0;
+    mom.userData.arms.armR.rotation.x = 0;
+    mom.position.y = terrainHeight(mom.position.x, mom.position.z);
+  }
+  momTargetPoop = null;
+  // 'walking' with no target poop is already "head back to MOM_HOME" (see
+  // updateMom), so this reuses the retreat rather than adding a state.
+  momState = 'walking';
+}
+
 function triggerBite() {
   playBiteSound();
   if (darlaLeashed) {
@@ -3137,6 +3180,7 @@ function triggerBite() {
   }
   biteActive = true;
   biteElapsed = 0;
+  startMomSulk();
   // The impact pulse itself (biteActive, driven in animate()) already
   // runs unconditionally on whatever local darla/mom objects exist — this
   // just makes sure it also fires on Mom's own screen, not only the biter's.
@@ -4627,6 +4671,10 @@ function removeOrShrinkPoop(poop) {
 // remove/shrink on the authoritative side; the AI-mode caller (updateMom)
 // just ignores it.
 function updateMomPickup(delta, onComplete) {
+  // Nothing to pick up means something cancelled it mid-scoop — a bite, in
+  // practice. Bailing here rather than letting the completion branch below
+  // read `.userData` off null, which is a crash rather than a glitch.
+  if (!momTargetPoop) return;
   resetMomLimbs();
   momPickupElapsed += delta;
   const t = Math.min(momPickupElapsed / MOM_PICKUP_DURATION, 1);
@@ -4653,6 +4701,11 @@ function updateMom(delta) {
   if (momState === 'idle') {
     resetMomLimbs();
     if (poops.length === 0) return;
+    // Sulking after a bite: she stands at the fire and lets it pile up.
+    // Tested here rather than at the top of updateMom so the walk home still
+    // runs — she retreats first, then refuses to work, which reads as her
+    // giving up rather than as the AI freezing mid-stride.
+    if (elapsed < momSulkUntil) return;
     let nearest = poops[0];
     let nearestDist = mom.position.distanceTo(nearest.position);
     for (let i = 1; i < poops.length; i++) {
@@ -5307,6 +5360,9 @@ function applyRemoteFx(msg) {
     playBiteSound();
     biteActive = true;
     biteElapsed = 0;
+    // Same interruption as a local bite. Without it the biter watches her
+    // give up while Miranda's own client has her calmly carry on collecting.
+    startMomSulk();
   } else if (msg.name === 'callBark') {
     playCallDarlaSound();
     showSpeechBubble(mom, 'Darla!');
