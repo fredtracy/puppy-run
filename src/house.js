@@ -1294,15 +1294,50 @@ function frontBedOutward(pts, i) {
   return [-dz / len, dx / len];
 }
 
-// The walk's outer edge: the bed's outer edge pushed WALK_W away from the
+// How far the front walk runs *past* each end of the planting bed.
+//
+// The bed stops where the arc lands on the east wall, and the walk used to
+// stop with it — which left a gap between the end of the front walk and the
+// perimeter walk coming round the corner, with lawn showing through between
+// two pieces of concrete that plainly ought to be one. Running the strip on
+// along its own end tangent overlaps the perimeter instead, so the two
+// merge. The extension is walk only; the bed itself still ends where it
+// ends, or mulch would spill round the corner with it.
+const FRONT_WALK_RUN_ON = 2.6;
+
+// Continues a polyline past both ends along the direction it was already
+// heading, so an extended strip stays parallel to the run it extends.
+function extendPolylineEnds(pts, d) {
+  const n = pts.length;
+  const dir = (from, to) => {
+    const dx = to[0] - from[0];
+    const dz = to[1] - from[1];
+    const len = Math.hypot(dx, dz) || 1;
+    return [dx / len, dz / len];
+  };
+  const head = dir(pts[1], pts[0]);
+  const tail = dir(pts[n - 2], pts[n - 1]);
+  return [
+    [pts[0][0] + head[0] * d, pts[0][1] + head[1] * d],
+    ...pts,
+    [pts[n - 1][0] + tail[0] * d, pts[n - 1][1] + tail[1] * d],
+  ];
+}
+
+// The walk's inner edge: the bed's outer edge, run on past both ends.
+function frontWalkInnerEdge() {
+  return extendPolylineEnds(frontBedOuterEdge(), FRONT_WALK_RUN_ON);
+}
+
+// The walk's outer edge: that same line pushed FRONT_WALK_W away from the
 // house. Shared by the mesh that draws the walk and by isHousePaved, which
 // is the point — the grass mask drifting away from the geometry it is
 // supposed to mask is exactly the bug this fixes.
 function frontWalkOuterEdge() {
-  const outer = frontBedOuterEdge();
-  return outer.map(([x, z], i) => {
-    const [nx, nz] = frontBedOutward(outer, i);
-    return [x + nx * WALK_W, z + nz * WALK_W];
+  const inner = frontWalkInnerEdge();
+  return inner.map(([x, z], i) => {
+    const [nx, nz] = frontBedOutward(inner, i);
+    return [x + nx * FRONT_WALK_W, z + nz * FRONT_WALK_W];
   });
 }
 
@@ -1324,6 +1359,19 @@ const APRON_X1 = HALF_W + FT * 9;
 // How generously the concrete turns every corner. See where it's used.
 const WALK_CORNER_R = 2.4;
 const WALK_W = FT * 3;
+// The front walk is wider than the 3 ft strip that rings the rest of the
+// house. It's the approach to the front door and the piece you stand on,
+// and at WALK_W it read as a service path squeezed between the bed and the
+// lawn rather than as the front walk.
+//
+// Declared here, immediately after the constant it is derived from, and not
+// up beside the front-walk code where it reads better. Putting it there is
+// what the file's own warning is about: it was a `const` evaluated at module
+// load reading a `WALK_W` declared 26 lines further down, which throws a
+// temporal-dead-zone ReferenceError and shows up only as a loading screen
+// that never finishes. The functions around it get away with it because they
+// read WALK_W when called; a const does not.
+const FRONT_WALK_W = WALK_W * 1.55;
 const PARK_W = FT * 9;
 
 const BACK_WALK_Z1 = HALF_D + PARK_W;
@@ -1773,24 +1821,30 @@ function inPolygon(x, z, poly) {
 // One polygon rather than two, because the bed's outer edge and the walk's
 // inner edge are the same line: trace the wall, jump out to the walk's far
 // edge at the east end where the arc lands on the brick, and come back.
-const FRONT_PAVED_POLY = [
+// Two polygons, one per mesh, rather than one hull spanning both.
+//
+// It was a single loop from the wall out to the walk's far edge, which was
+// fine while the walk stopped exactly where the bed did. Now that the walk
+// runs on past both ends, a single hull would cut a diagonal from the end of
+// the wall to the end of the extension and claim a wedge of lawn that has no
+// concrete on it — which is precisely how the corners went bald last time.
+// Matching the meshes one for one costs a second point-in-polygon test and
+// removes the guesswork.
+const FRONT_BED_POLY = [
   ...frontBedInnerEdge(),
+  ...frontBedOuterEdge().reverse(),
+].map(([x, z]) => [x, z + HOUSE_Z]);
+
+const FRONT_WALK_POLY = [
+  ...frontWalkInnerEdge(),
   ...frontWalkOuterEdge().reverse(),
 ].map(([x, z]) => [x, z + HOUSE_Z]);
 
-// Standard ray-crossing test. The polygon is small (~20 points) and this is
-// only reached for points that missed every box, so there's no need for the
-// bounding-box early-out the pond's equivalent has.
+// Standard ray-crossing test. Both polygons are small (~20 points each) and
+// this is only reached for points that missed every box, so there's no need
+// for the bounding-box early-out the pond's equivalent has.
 function inFrontPaved(x, z) {
-  let inside = false;
-  for (let i = 0, j = FRONT_PAVED_POLY.length - 1; i < FRONT_PAVED_POLY.length; j = i++) {
-    const [xi, zi] = FRONT_PAVED_POLY[i];
-    const [xj, zj] = FRONT_PAVED_POLY[j];
-    if ((zi > z) !== (zj > z) && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) {
-      inside = !inside;
-    }
-  }
-  return inside;
+  return inPolygon(x, z, FRONT_BED_POLY) || inPolygon(x, z, FRONT_WALK_POLY);
 }
 
 // True where the ground is building or pavement rather than lawn. The
@@ -2534,10 +2588,14 @@ export function createHouse() {
   // the bed's edge the whole way round instead of being a separate shape
   // that has to be kept in step by hand.
   {
+    // Both edges are the run-on versions, not the bed's own outline — the
+    // walk carries past each end of the bed to meet the perimeter, while the
+    // bed above stops where it stops.
+    const walkInner = frontWalkInnerEdge();
     const walkOuter = frontWalkOuterEdge();
     const shape = new THREE.Shape();
-    shape.moveTo(bedOuter[0][0], -bedOuter[0][1]);
-    for (let i = 1; i < bedOuter.length; i++) shape.lineTo(bedOuter[i][0], -bedOuter[i][1]);
+    shape.moveTo(walkInner[0][0], -walkInner[0][1]);
+    for (let i = 1; i < walkInner.length; i++) shape.lineTo(walkInner[i][0], -walkInner[i][1]);
     for (let i = walkOuter.length - 1; i >= 0; i--) {
       shape.lineTo(walkOuter[i][0], -walkOuter[i][1]);
     }
