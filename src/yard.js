@@ -2800,15 +2800,23 @@ const LUSH_BLADE_WIDTH = 0.024;
 // silhouette, they aren't two species.
 const SPECIES = {
   TURF: {
-    height: 0.13,
+    // A mown lawn, and mown is the operative word. This was 0.13 with a
+    // wide scale range on top, which put blades up to 0.17 — chest height
+    // on a chihuahua, and the reason the yard read as a shaggy meadow when
+    // every reference photo of it is short, dry and cut. The real thing is
+    // 4-6 cm, so that is what this is now.
+    height: 0.075,
     segments: 2,
     width: LUSH_BLADE_WIDTH,
     // Hold width up the shaft, pinch hard only near the tip.
     taperPow: 2.4,
     taperAmt: 0.85,
     curve: 0.22,
-    scaleMin: 0.72,
-    scaleRange: 0.6,
+    // Tighter range than before as well. Variation in blade length is what
+    // reads as "uncut" — a mower takes the whole field to one height, and
+    // the unevenness that's left is in colour and vigour, not length.
+    scaleMin: 0.82,
+    scaleRange: 0.34,
     lean: 0.85,
   },
   COARSE: {
@@ -4370,8 +4378,28 @@ function createChunkGrass(cx, cz, rand) {
       const paleChance = field(fPale, x, z) * 0.55;
       const blueChance = field(fBlue, x, z) * 0.55;
 
+      // Coarse grass is the ragged fringe along the tree line, not a random
+      // scattering across the lawn.
+      //
+      // That's how the real yard works and why: you can't get a mower right
+      // up against a trunk or into the brush, so the last strip before the
+      // woods is left longer while everything in front of it is cut. Photo 9
+      // is the clearest — mown lawn, then a scruffy ankle-to-shin band a
+      // metre or so wide, then the bushes start. Previously this keyed off a
+      // noise patch field, which put tall tufts out in the middle of the lawn
+      // where a mower obviously goes.
+      //
+      // woodsDepth is negative on the lawn and positive in the woods, so the
+      // band is centred just short of the boundary and falls off both ways.
+      // A little is still allowed out on the open lawn, because a real lawn
+      // does have the odd clump the mower missed — just far less than before.
+      const edgeDist = woodsDepth(x, z);
+      const fringe = Math.max(0, 1 - Math.abs(edgeDist + 0.55) / 1.15);
       const coarsePatch = field(fCoarse, x, z);
-      const coarseChance = wild * Math.max(0, coarsePatch - 0.42) * 1.5;
+      const coarseChance = Math.max(
+        wild * Math.max(0, coarsePatch - 0.42) * 0.3,
+        fringe * 0.55
+      );
 
       // Dandelions. Their own patch field on a tighter scale than the
       // clover's, and thresholded hard: dandelions come up in loose
