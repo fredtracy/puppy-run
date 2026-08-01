@@ -14,6 +14,83 @@ a human. Those stay in the untested list until someone actually plays them.
 
 ## Judgement calls that could have gone the other way
 
+- **`drawnGroundHeight` is a second terrain function, and everything at the
+  pond now uses it instead of `terrainHeight`.** `createLawn` samples terrain
+  on a fixed 0.6 m grid and straight-lines between the samples, so anything
+  narrower than that grid isn't in the mesh — and the stream channel (1.2 m)
+  and the ravine cut are both right at that limit. Props placed on the ideal
+  terrain sat in a notch the visible ground doesn't have, by a metre or more.
+  That is the whole "broken waterfall": the fall hung in front of the
+  hillside like a banner and the boulders floated off it.
+  - It is a real duplication — two functions that answer "how high is the
+    ground", differing only in whether they tell the truth or tell what's
+    drawn. Anything else placed near a fine feature has the same bug and
+    hasn't been checked: the brush, the trees, the palms, the reeds.
+  - Bilinear, where the mesh actually splits each quad into two triangles.
+    A couple of centimetres out, against the metre it's fixing.
+- **The fall's surface follows the channel bottom, not the bank heights,
+  and blends between the two by steepness.** The flat run keeps the old
+  behaviour deliberately — following the bed there drops the water 20 cm
+  and buries the ribbon's feathered edges under its own banks.
+- **The upper part of the fall still stands slightly proud of the face**,
+  and the white is strong. Both judged at dusk from a debug camera.
+- **The water shader grew a foam term, and `waterInfo` went from vec2 to
+  vec3.** Everything in that shader assumes a surface lying flat — the
+  normal is synthesised pointing up regardless of the geometry — so the
+  fall, which is the same ribbon hung down a 4.6 m drop, rendered as a pale
+  smear with horizontal ripples. It was never missing. The third channel is
+  the local slope, baked per vertex, and the shader turns it into vertical
+  white streaks. The pond carries a zero in that slot and is unaffected, but
+  it is a shared material and the change is untested against it.
+- **Foam thresholds are eye-picked**: it starts at 0.35 m of drop per metre
+  travelled and saturates at 1.2, and the streaks' speed and spacing are all
+  taste. The white is also strong — judged at dusk against a dark bank,
+  where it pops; it may be too much in daylight.
+- **`makeBoulder`'s deformation is weaker: 0.38 and 0.13, from 0.55 and
+  0.18.** At the old strength a vertex could land most of the way through
+  the boulder's own middle, and flat shading turned that into concave spikes
+  and paper-thin slabs — the "mess instead of rocks". This changes *every*
+  boulder in the yard, not just the fall's: the pond ring and the new stream
+  stones too. 0.28/0.09 was tried and is worse in the other direction, boxes
+  with the corners knocked off.
+- **The fall has fewer, smaller boulders, and none in the water's line.**
+  2–3 per row rather than 3–5, max 1.45 m rather than 1.8, and nothing
+  inside 1.2 x `STREAM_HALF` of the channel. The old ones were clustered on
+  the centreline of a fall only 2 m long in plan, which buried the water
+  ribbon entirely — that was "the waterfall is broken", not anything wrong
+  with the water. The random *lift* that was added on top of their sink is
+  gone too; it floated the tall ones.
+- **The stream got stones along both banks, which is scenery nobody asked
+  for by name.** The ask was "make it look more stream-like"; the water
+  itself can only do so much when it's a ribbon in a shallow carve, and
+  broken stone at the margin is what says there's a channel there. About one
+  per 0.55 m of bank, a quarter of them dropped at random, a fifth of those
+  standing in the shallows. All of those numbers are eye-picked, and it's
+  ~400 more merged boulder geometries at load.
+- **Grass now grows in the pond's glade, which is more grass than the world
+  had before.** It was always *meant* to — the per-blade test exempts the
+  glade from the fade radius explicitly — but a second, cheaper cull one
+  screen up rejected whole chunks past 44 m without knowing about the
+  exemption, and the pond is 51 m out. So the glade has been bare ground
+  with a pond in it. Fixing it is right, but it does add grass chunks at the
+  far corner of the map that have never been paid for.
+- **The stream ribbon fades out over its last 1.6 m into the pond.** Both
+  surfaces are transparent with `depthWrite` off, so which draws in front
+  depends on the camera, and the submerged tail was showing through the
+  pond as a pale path lying across it from certain angles. Ramping the depth
+  coordinate to zero is sort-order-proof; the cost is that the stream's
+  actual junction with the pond is now a fade rather than a meeting.
+- **The stream's width now varies, 56%–100% of `STREAM_HALF`.** It has to
+  stay inside that radius — the terrain carve and the gap in the brush band
+  are both cut to it — so the wobble is bounded by something real, but the
+  two sine wavelengths that shape it are taste.
+- **The ripple shader's flow coefficient dropped from 0.9 to 0.26.** That's
+  what was banding the stream straight across its width every metre or so
+  and reading as rungs. Only the spatial half changed; the ripples still
+  travel downhill at the old rate, and the pond is untouched (its flow
+  coordinate is 0 everywhere). Still, it's a shared shader and the pond was
+  tuned carefully — worth a second look at the pond after dark.
+
 - **The back elevation's 25/50/25 split moved four things nobody named.** The
   ask was the proportions; everything mounted on that wall had to follow or it
   would have landed on a corner or a pier. The wing windows are now placed at
@@ -554,6 +631,10 @@ was not.
   from the walk, unchanged, but the piers now sit in front of that step
   rather than on the slab behind it, so the approach to it is different.
   Never walked.
+- **How the stream and the fall read in daylight, and from a player's eye
+  height.** Everything above was judged from a debug camera a few metres up,
+  at dusk, where the wet rock material is nearly black. The reshaped
+  boulders in particular have never been seen in sun.
 - **WASD not driving the character in free-fly.**
 - Backspace jumping, and `P` spawning a poop.
 - Holding both mouse buttons to walk forward, including releasing one button

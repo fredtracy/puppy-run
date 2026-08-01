@@ -2444,10 +2444,11 @@ const WATER_MAT = new THREE.ShaderMaterial({
   depthWrite: false,
   vertexShader: /* glsl */ `
     // x is flow along the surface, y is depth: 0 at the shore, 1 in the
-    // middle. Both are baked per-vertex when the geometry is built, since
-    // the shader can't work out where the bank is on its own.
-    attribute vec2 waterInfo;
-    varying vec2 vInfo;
+    // middle, z is how steeply this bit of surface is falling. All three are
+    // baked per-vertex when the geometry is built, since the shader can't
+    // work out where the bank is, or which way is downhill, on its own.
+    attribute vec3 waterInfo;
+    varying vec3 vInfo;
     varying vec3 vWorld;
     varying vec3 vViewDir;
     void main() {
@@ -2466,19 +2467,27 @@ const WATER_MAT = new THREE.ShaderMaterial({
     uniform vec3 uSkyTint;
     uniform vec3 uLightDir;
     uniform vec3 uSunColor;
-    varying vec2 vInfo;
+    varying vec3 vInfo;
     varying vec3 vWorld;
     varying vec3 vViewDir;
 
     void main() {
       float depth = vInfo.y;
       float flow = vInfo.x;
+      float foam = vInfo.z;
 
       // Two ripple trains at different scales and angles, plus a slow
       // drift along the flow direction. Crossing them is what stops the
       // pattern reading as corrugation — a single train is a washboard.
       vec2 p = vWorld.xz;
-      float drift = flow * 0.9 - uTime * 0.35;
+      // Split into how far the ripples have travelled (time) and where you
+      // are along the run (space). They used to share one coefficient, which
+      // tied the two together: at flow * 0.9 feeding terms multiplied by 3
+      // and 6, the phase swept ~5 radians per metre downstream and the
+      // stream came out banded straight across its width, every metre or so,
+      // like the rungs of a ladder. Only the spatial half is turned down —
+      // the ripples still travel downhill at the same rate.
+      float drift = flow * 0.26 - uTime * 0.35;
       float r1 = sin(p.x * 3.1 + p.y * 1.7 + uTime * 1.15 + drift * 3.0);
       float r2 = sin(p.x * -1.9 + p.y * 4.3 + uTime * 0.87 - drift * 2.0);
       float r3 = sin((p.x + p.y) * 8.5 - uTime * 2.4 + drift * 6.0);
@@ -2560,6 +2569,32 @@ const WATER_MAT = new THREE.ShaderMaterial({
       alpha = mix(alpha, 1.0, fres * 0.5);
       alpha *= smoothstep(0.0, 0.1, depth);
 
+      // White water, wherever the surface is falling steeply enough.
+      //
+      // Everything above this assumes a surface lying flat: the normal is
+      // synthesised pointing straight up regardless of the geometry, which
+      // is fine for a pond and for a stream on a gentle grade. Hang that
+      // same surface down a 4.6 m drop and it comes out as a pale smear
+      // with horizontal ripples on it — the fall was rendering the whole
+      // time, it just didn't look like falling water, which is what "the
+      // waterfall is broken" meant.
+      //
+      // Streaks run vertically and move much faster than the ripples do,
+      // because on a fall the eye reads speed off the streaks and nothing
+      // else. Keyed to world height rather than to the flow coordinate so
+      // they stay vertical however the ribbon is oriented.
+      if (foam > 0.001) {
+        float s = sin(vWorld.y * 7.0 - uTime * 7.5 + p.x * 5.0 + p.y * 4.0);
+        float s2 = sin(vWorld.y * 15.0 - uTime * 11.0 - p.x * 3.0);
+        float streak = 0.55 + 0.45 * (s * 0.6 + s2 * 0.4);
+        // Thicker toward the middle of the channel and at the bottom of the
+        // drop, thinner at the edges, so it doesn't come out as a flat white
+        // band with hard sides.
+        float mask = foam * mix(0.45, 1.0, depth);
+        col = mix(col, vec3(0.90, 0.95, 0.96) * (0.65 + 0.35 * streak), mask * 0.85);
+        alpha = mix(alpha, 1.0, mask * 0.9);
+      }
+
       gl_FragColor = vec4(col, alpha);
     }
   `,
@@ -2579,7 +2614,10 @@ function createWater() {
   const SEGMENTS = 72;
   const discGeo = (() => {
     const pos = [0, 0, 0];
-    const info = [0, 1];
+    // Flow, depth, foam. A pond has none of the third — nothing in it is
+    // falling — but the attribute is shared with the stream, so it carries
+    // the slot.
+    const info = [0, 1, 0];
     const idx = [];
     for (let i = 0; i < SEGMENTS; i++) {
       const a = (i / SEGMENTS) * Math.PI * 2;
@@ -2587,12 +2625,12 @@ function createWater() {
       const s = Math.sin(a);
       const r = pondEdgeRadius(c, s) * POND_DISC;
       pos.push(c * r, s * r, 0);
-      info.push(0, 0);
+      info.push(0, 0, 0);
       idx.push(0, 1 + i, 1 + ((i + 1) % SEGMENTS));
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    g.setAttribute('waterInfo', new THREE.Float32BufferAttribute(info, 2));
+    g.setAttribute('waterInfo', new THREE.Float32BufferAttribute(info, 3));
     g.setIndex(idx);
     return g;
   })();
@@ -2613,6 +2651,10 @@ function createWater() {
   // rather than sitting still. Accumulated in metres and fed to the shader
   // as the flow coordinate.
   let run = 0;
+  // Previous row's channel-bottom height and distance along, for the slope
+  // the foam term is worked out from.
+  let prevBedY = 0;
+  let prevRun = 0;
   for (let i = 0; i < STREAM_PATH.length - 1; i++) {
     const [ax, az] = STREAM_PATH[i];
     const [bx, bz] = STREAM_PATH[i + 1];
@@ -2628,27 +2670,121 @@ function createWater() {
       const len = Math.hypot(vx, vz) || 1;
       const nx = -vz / len;
       const nz = vx / len;
-      const w = STREAM_HALF * 0.85;
       if (row > 0) run += Math.hypot(vx, vz) / STEPS;
-      for (const side of [-1, 1]) {
-        const px = cx + nx * w * side;
-        const pz = cz + nz * w * side;
-        positions.push(px, terrainHeight(px, pz) + 0.05, pz);
-        // Flow along the run; depth peaks in the middle of the channel and
-        // goes to zero at both banks, which is what feathers the stream's
-        // edges into the wet ground rather than ending on a hard line.
-        info.push(run, 0.55);
-      }
+      // The channel narrows and widens instead of running at one width the
+      // whole way down, which is most of what made it read as a path with a
+      // blue fill rather than as water finding its way. Two sine terms at
+      // different wavelengths so the pinch points don't come round on a
+      // beat. Stays inside STREAM_HALF: the terrain carve and the gap in the
+      // brush band are both cut to that radius, so a wider ribbon would
+      // climb out of its own channel.
+      const w = STREAM_HALF * (0.78 + 0.22 * Math.sin(run * 0.85 + 1.7) * Math.sin(run * 0.31));
+
+      // Left bank first, then centre, then right — and "left" is the -n side
+      // because that is the order the two-vertex version pushed them in.
+      // Flip it and the triangles wind the other way, the ribbon is
+      // back-facing, and the water simply isn't there when you look down at
+      // it (WATER_MAT doesn't set `side`, so it's front-face only).
+      const lx = cx - nx * w;
+      const lz = cz - nz * w;
+      const rx = cx + nx * w;
+      const rz = cz + nz * w;
+      const ly = drawnGroundHeight(lx, lz) + 0.05;
+      const ry = drawnGroundHeight(rx, rz) + 0.05;
+
+      // Three across, not two. The shader ramps colour *and* alpha off the
+      // depth coordinate — shallow and translucent at 0, deep and opaque at
+      // 1 — and with only bank vertices there was nowhere to put the 1. Both
+      // edges carried 0.55, so the whole ribbon came out one flat mid-tone
+      // ending on a hard line, which is exactly the "blue path" of it. The
+      // comment here has claimed this feathering since it was written; now
+      // it's true.
+      //
+      // The middle vertex takes the mean of the two bank heights rather than
+      // the terrain under it. Water's cross-section is level; sampling the
+      // bed at the centreline would sag the surface into a V following the
+      // channel it's supposed to be filling.
+      // Faded out over the last stretch, where the ribbon runs on into the
+      // pond. It has to end inside the surface — stopping at the waterline
+      // leaves a gap and the stream reads as not reaching the pond — but
+      // both surfaces are transparent with depthWrite off, so which one
+      // draws in front depends on where the camera is. From some angles the
+      // submerged tail showed straight through the pond as a pale path
+      // lying across it. Ramping the depth coordinate to zero takes the
+      // alpha down with it, which is sort-order-proof in a way that any
+      // amount of reordering isn't.
+      const pdx = cx - POND.x;
+      const pdz = cz - POND.z;
+      const inside = pondEdgeRadius(pdx, pdz) * POND_DISC - Math.hypot(pdx, pdz);
+      const mid = 1 - Math.min(1, Math.max(0, inside / 1.6));
+
+      const bedY = drawnGroundHeight(cx, cz);
+
+      // How hard this row is falling, as metres of drop per metre travelled
+      // in plan. On the flat run it's under 0.15; over the fall the terrain
+      // loses 4.6 m in 2 m, so it's past 2. The shader turns this into white
+      // water — see the foam term there for why the fall needed its own
+      // treatment rather than just being more of the same surface.
+      //
+      // Measured off the channel bottom, not off the surface heights below,
+      // which are partly derived from it.
+      //
+      // Applied to the row behind as well as this one. Steepness is a
+      // property of the span between two rows, and lighting it on only the
+      // downhill end put the top of the fall in still blue with the foam
+      // starting a step below the lip.
+      let foam = 0;
       if (row > 0) {
-        const a = (row - 1) * 2;
-        indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+        const slope = (prevBedY - bedY) / Math.max(0.01, run - prevRun);
+        foam = Math.min(1, Math.max(0, (slope - 0.35) / 0.85));
+        if (foam > info[info.length - 7]) {
+          info[info.length - 7] = foam;
+          info[info.length - 4] = foam;
+          info[info.length - 1] = foam;
+        }
+      }
+      prevBedY = bedY;
+      prevRun = run;
+
+      // Where the surface sits, and it can't be worked out the same way at
+      // both ends of the stream.
+      //
+      // On the flat run it's the mean of the two bank heights. Following the
+      // channel bottom there would drop the water 20-odd cm and bury the
+      // ribbon's own edges under the banks, which loses the feathered
+      // margin the shader draws.
+      //
+      // Over the fall that same rule floats it. The ravine's cut falls off
+      // with distance from the centreline, so a bank sample half a metre out
+      // has only taken part of the 4.5 m drop — and the ribbon ends up
+      // hanging in mid-air off the face, at the height of the ground either
+      // side of the channel rather than the channel itself. Which is what
+      // the "broken waterfall" was: a white sheet floating clear of the
+      // cliff. Steep rows take the bed instead, blended by the same
+      // steepness the foam uses so there's no seam where it changes over.
+      const steepY = bedY + 0.05;
+      const lys = ly * (1 - foam) + steepY * foam;
+      const rys = ry * (1 - foam) + steepY * foam;
+      const cy = (ly + ry) / 2 * (1 - foam) + steepY * foam;
+
+      positions.push(lx, lys, lz);
+      info.push(run, 0, foam);
+      positions.push(cx, cy, cz);
+      info.push(run, mid, foam);
+      positions.push(rx, rys, rz);
+      info.push(run, 0, foam);
+
+      if (row > 0) {
+        const a = (row - 1) * 3;
+        indices.push(a, a + 1, a + 3, a + 1, a + 4, a + 3);
+        indices.push(a + 1, a + 2, a + 4, a + 2, a + 5, a + 4);
       }
       row++;
     }
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geo.setAttribute('waterInfo', new THREE.Float32BufferAttribute(info, 2));
+  geo.setAttribute('waterInfo', new THREE.Float32BufferAttribute(info, 3));
   geo.setIndex(indices);
   geo.computeVertexNormals();
   const stream = mesh(geo, WATER_MAT);
@@ -2697,15 +2833,79 @@ function makeBoulder(size, rand) {
     // Push each vertex out along its own direction by a random amount.
     // Doing it per-vertex rather than per-axis is what stops them all
     // being the same lozenge at different scales.
-    const k = 1 + (rand() - 0.5) * 0.55;
+    // Toned down from 0.55 and 0.18. At that strength a vertex could land
+    // most of the way through the boulder's own middle, and with flat
+    // shading the result was concave spikes and paper-thin slabs — a pile
+    // of them read as a heap of broken plates rather than as stone.
+    //
+    // Not toned down further, though it was tried: at 0.28 and 0.09 they
+    // come out as recognisable boxes with the corners knocked off, which is
+    // its own kind of wrong. This is the band where they still read as
+    // stone.
+    const k = 1 + (rand() - 0.5) * 0.38;
     v.multiplyScalar(k);
-    v.x += (rand() - 0.5) * size * 0.18;
-    v.y += (rand() - 0.5) * size * 0.18;
-    v.z += (rand() - 0.5) * size * 0.18;
+    v.x += (rand() - 0.5) * size * 0.13;
+    v.y += (rand() - 0.5) * size * 0.13;
+    v.z += (rand() - 0.5) * size * 0.13;
     pos.setXYZ(i, v.x, v.y, v.z);
   }
   geo.computeVertexNormals();
   return geo;
+}
+
+// The height of the ground you can actually *see*, as opposed to the ideal
+// terrain function.
+//
+// createLawn samples terrainHeight on a fixed 120 m / 200 grid — 0.6 m — and
+// straight-lines between those samples. Anything narrower than that grid
+// doesn't exist in the mesh at all: it gets averaged away between two
+// vertices. The stream's channel is 1.2 m wide and the ravine's cut falls
+// off inside a metre, so both are right at the edge of what the mesh can
+// hold, and terrainHeight can be a metre or more below the surface being
+// drawn over it.
+//
+// That gap is what everything at the fall has been falling into. Props sat
+// on terrainHeight sit in a notch the ground doesn't visibly have, so the
+// water hung in front of the hillside like a banner and the boulders floated
+// off it. Sampling the same four grid corners the mesh does and interpolating
+// between them puts a prop on the surface you can see. (The mesh splits each
+// quad into two triangles, so this is within a couple of centimetres of it
+// rather than exact — far inside the error it's fixing.)
+function drawnGroundHeight(x, z) {
+  const step = LAWN_SIZE / LAWN_SEGMENTS;
+  const half = LAWN_SIZE / 2;
+  const gx = (x + half) / step;
+  const gz = (z + half) / step;
+  const i = Math.floor(gx);
+  const j = Math.floor(gz);
+  const fx = gx - i;
+  const fz = gz - j;
+  const nx = i * step - half;
+  const nz = j * step - half;
+  const h00 = terrainHeight(nx, nz);
+  const h10 = terrainHeight(nx + step, nz);
+  const h01 = terrainHeight(nx, nz + step);
+  const h11 = terrainHeight(nx + step, nz + step);
+  return (h00 * (1 - fx) + h10 * fx) * (1 - fz) + (h01 * (1 - fx) + h11 * fx) * fz;
+}
+
+// The lowest ground anywhere under a rock's footprint, rather than the
+// ground at the single point it's centred on.
+//
+// Sampling one point is fine on a lawn and wrong on a cliff, and the fall is
+// a cliff: the terrain there loses 4.5 m inside a metre of plan. A boulder
+// sat on its centre height then has its whole downhill half hanging in open
+// air over the drop — which is exactly what the rocks floating off the face
+// were. Sitting it on the lowest corner instead buries the uphill half,
+// which is what a rock resting on a steep slope actually does.
+function groundUnder(px, pz, half) {
+  let y = Infinity;
+  for (const dx of [-half, 0, half]) {
+    for (const dz of [-half, 0, half]) {
+      y = Math.min(y, drawnGroundHeight(px + dx, pz + dz));
+    }
+  }
+  return y;
 }
 
 function createFallRocks() {
@@ -2737,21 +2937,30 @@ function createFallRocks() {
     const along = -0.25 + t * 1.5;
     const cx = lip[0] + dx * along;
     const cz = lip[1] + dz * along;
-    const perRow = 3 + Math.floor(rand() * 3);
+    const perRow = 2 + Math.floor(rand() * 2);
     for (let i = 0; i < perRow; i++) {
-      // Across the fall: a spread that widens toward the bottom, the way
-      // debris piles out at the base of a real drop.
-      const spread = (1.1 + t * 2.6) * (rand() - 0.5) * 2;
+      // Across the fall: two banks of rock with the water's own line kept
+      // clear between them, widening toward the bottom the way debris piles
+      // out at the base of a real drop.
+      //
+      // They used to be clustered *on* the centreline — 3 to 5 per row, up
+      // to 1.8 m across, over a fall only 2 m long in plan. That buried the
+      // water ribbon completely: the drop had no visible water on it at all,
+      // which is what "the waterfall is broken" was. Now nothing is placed
+      // inside 1.2 x STREAM_HALF of the channel.
+      const u = (rand() - 0.5) * 2;
+      const spread = Math.sign(u) * (STREAM_HALF * 1.2 + (0.7 + t * 1.1) * Math.abs(u));
       const px = cx + nx * spread + (rand() - 0.5) * 0.4;
       const pz = cz + nz * spread + (rand() - 0.5) * 0.4;
-      const size = 0.55 + rand() * 1.25;
-      const ground = terrainHeight(px, pz);
+      const size = 0.5 + rand() * 0.95;
+      const ground = groundUnder(px, pz, size * 0.5);
       const geo = makeBoulder(size, rand);
       const m = new THREE.Matrix4();
       m.compose(
-        // Sunk by a third, so they read as embedded in the slope rather
-        // than resting on it.
-        new THREE.Vector3(px, ground - size * 0.3 + rand() * 0.25, pz),
+        // Sunk close to half, so they read as ledges the slope is made of
+        // rather than rubble tipped onto it. The old version added a random
+        // *lift* on top of the sink, which floated the tall ones.
+        new THREE.Vector3(px, ground - size * 0.42, pz),
         new THREE.Quaternion().setFromEuler(
           new THREE.Euler(
             (rand() - 0.5) * 0.5,
@@ -2779,7 +2988,7 @@ function createFallRocks() {
     const geo = makeBoulder(size, rand);
     const m = new THREE.Matrix4();
     m.compose(
-      new THREE.Vector3(px, terrainHeight(px, pz) - size * 0.35, pz),
+      new THREE.Vector3(px, groundUnder(px, pz, size * 0.5) - size * 0.35, pz),
       new THREE.Quaternion().setFromEuler(
         new THREE.Euler((rand() - 0.5) * 0.4, rand() * Math.PI * 2, (rand() - 0.5) * 0.4)
       ),
@@ -2787,6 +2996,70 @@ function createFallRocks() {
     );
     geo.applyMatrix4(m);
     dry.push(geo);
+  }
+
+  // Stones down both banks of the stream, and a few standing in it.
+  //
+  // The water itself can only do so much: it's a ribbon lying in a shallow
+  // carve, and from any distance a ribbon with nothing along its edges reads
+  // as something painted on the ground. Broken stone at the margin is what
+  // says there is a *channel* here that the water has cut and is running
+  // through — and it's the same trick the fall already uses to hide the
+  // terrain's stair-stepping, at a tenth the size.
+  //
+  // Skips the fall itself, which has its own boulders and does not need
+  // pebbles thrown in among them.
+  const segs = STREAM_PATH.length - 1;
+  for (let i = 0; i < segs; i++) {
+    if (i >= FALL_FROM && i < FALL_TO) continue;
+    const [ax, az] = STREAM_PATH[i];
+    const [bx, bz] = STREAM_PATH[i + 1];
+    const dxs = bx - ax;
+    const dzs = bz - az;
+    const segLen = Math.hypot(dxs, dzs) || 1;
+    const sx = -dzs / segLen;
+    const sz = dxs / segLen;
+    // Roughly one stone per 0.55 m of bank, both sides at once.
+    const count = Math.max(2, Math.round(segLen / 0.55));
+    for (let k = 0; k < count; k++) {
+      const t = (k + rand()) / count;
+      const cx = ax + dxs * t;
+      const cz = az + dzs * t;
+      for (const side of [-1, 1]) {
+        // A quarter of them are missing, so the two banks don't come out as
+        // matched rows of beads either side of the water.
+        if (rand() < 0.25) continue;
+        // Mostly just outside the waterline, occasionally in the shallows.
+        const inWater = rand() < 0.22;
+        const off = inWater
+          ? STREAM_HALF * (0.15 + rand() * 0.5)
+          : STREAM_HALF * (1.0 + rand() * 0.55);
+        const px = cx + sx * off * side;
+        const pz = cz + sz * off * side;
+        const size = inWater ? 0.1 + rand() * 0.16 : 0.11 + rand() * 0.22;
+        const geo = makeBoulder(size, rand);
+        const m = new THREE.Matrix4();
+        m.compose(
+          // More than half buried. makeBoulder is a squashed box, and at
+          // pebble size the flat top faces catch the light as pale chips
+          // lying on the grass; sinking them leaves the rounded shoulders
+          // showing and not much else.
+          new THREE.Vector3(px, groundUnder(px, pz, size * 0.5) - size * 0.55, pz),
+          new THREE.Quaternion().setFromEuler(
+            new THREE.Euler(
+              (rand() - 0.5) * 0.7, rand() * Math.PI * 2, (rand() - 0.5) * 0.7
+            )
+          ),
+          new THREE.Vector3(1, 1, 1)
+        );
+        geo.applyMatrix4(m);
+        // The inner half of the bank gets the wet material. Stone at the
+        // edge of running water is damp, and the dry grey is bright enough
+        // at this size to read as gravel scattered on the lawn if every
+        // bank stone gets it.
+        (inWater || off < STREAM_HALF * 1.3 ? wet : dry).push(geo);
+      }
+    }
   }
 
   if (dry.length) group.add(mesh(mergeGeometries(dry), ROCK_MAT));
@@ -4452,9 +4725,19 @@ function createChunkGrass(cx, cz, rand) {
   // Cheap early-out for chunks entirely past the fade — skips ~26k inner
   // loop iterations each for the outer ring of the world, which is most
   // of the chunks generateWorld builds.
+  //
+  // It has to make the same exception for the pond's glade that the
+  // per-blade test below does. The pond is 51 m out and the fade stops at
+  // 44, so this was killing every chunk around it before the exemption
+  // could apply — which is why the glade was bare ground with a pond in the
+  // middle of it. Two culls of the same thing, and only one of them knew
+  // about the hole.
   const nearestX = Math.max(originX, Math.min(0, originX + CHUNK_SIZE));
   const nearestZ = Math.max(originZ, Math.min(0, originZ + CHUNK_SIZE));
-  if (Math.hypot(nearestX, nearestZ) > GRASS_FADE_RADIUS) return null;
+  const gladeX = Math.max(originX, Math.min(POND.x, originX + CHUNK_SIZE));
+  const gladeZ = Math.max(originZ, Math.min(POND.z, originZ + CHUNK_SIZE));
+  const touchesGlade = Math.hypot(gladeX - POND.x, gladeZ - POND.z) <= GLADE_RADIUS;
+  if (!touchesGlade && Math.hypot(nearestX, nearestZ) > GRASS_FADE_RADIUS) return null;
 
   // Sampled once for the whole chunk — see the note on sampleChunkField.
   // Deliberately after the fade early-out above, so chunks that produce no
