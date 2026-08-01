@@ -268,7 +268,14 @@ function getTreeTemplates() {
         // Crowded trees are drawn up narrow, open-grown ones spread. Mixing
         // both is what stops the canopy reading as one repeated blob.
         spread: 0.3 + rand() * 0.22,
-        density: 0.85,
+        density: 1.0,
+        // Bigger clusters rather than more of them, which is the cheap way
+        // to close a canopy. Sky was still showing through the crowns where
+        // photos 3, 5 and 6 have a solid roof of leaves, and the obvious fix
+        // — more foliage instances — costs an instance each. Area scales
+        // with the square of this, so a quarter more scale covers about half
+        // as much sky again for nothing.
+        leafScale: 1.22,
       })
     );
   }
@@ -287,8 +294,13 @@ function getTreeTemplates() {
         // wrong way round — a whorled conifer has far more limbs than a
         // recursive broadleaf of the same size, so it needs more cutting,
         // not less.
-        density: 0.38,
-        detail: 0.5,
+        // Raised from 0.38/0.5. At those the forest pines came out as bare
+        // poles with a few thin whorls hanging off them — conspicuous
+        // against photos 1, 3 and 10, where a pine in the tree line is a
+        // dense dark mass and only the mature ones standing alone in the
+        // lawn show clear trunk. Still well under a hero pine's budget.
+        density: 0.52,
+        detail: 0.6,
       })
     );
   }
@@ -4671,7 +4683,22 @@ export function createYard() {
     const pos = new THREE.Vector3();
 
     for (const { x, z, ...shape } of BACK_TREES) {
-      const parts = buildBroadleafParts(backRand, { ...shape, density: 1.15 });
+      // Denser and larger-leaved than anything in the forest. These six are
+      // the closest trees to the player and the only ones seen whole against
+      // the sky, so a crown you can see through reads as a bare tree rather
+      // than as depth — and in photo 5 they are solid enough to throw the
+      // shade the litter apron sits in.
+      const parts = buildBroadleafParts(backRand, {
+        ...shape,
+        density: 1.55,
+        leafScale: 1.35,
+      });
+      // maxDepth: 4 was tried here and reverted. The reasoning was sound —
+      // density and leaf size only fill a crown that already exists, and at
+      // depth 3 there are few twig tips to hang leaves on — but measured it
+      // bought almost no visible foliage for 9 fps off the low (50 to 41).
+      // Whatever is keeping these crowns thinner than the photos, it isn't
+      // branch count, so don't spend that again without checking first.
       pos.set(x, terrainHeight(x, z), z);
       quat.setFromAxisAngle(UP_AXIS, backRand() * Math.PI * 2);
       stamp.compose(pos, quat, scl);
