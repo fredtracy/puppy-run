@@ -1702,9 +1702,7 @@ function createDrivewayExtension() {
   // the seam, since the pad has run out by the time the driveway ends.
   // Blending from the pad's height at startZ down to the real terrain
   // height by endZ removes the step without flattening the slope.
-  const flatHeight = terrainHeight(0, HOUSE_Z) + HOUSE_DRIVEWAY.surfaceY;
-  const realStartHeight = terrainHeight(DRIVE_X, startZ);
-  const seamOffset = flatHeight - realStartHeight;
+  const flatTop = terrainHeight(0, HOUSE_Z) + HOUSE_DRIVEWAY.surfaceY;
 
   const positions = [];
   const uvs = [];
@@ -1728,11 +1726,20 @@ function createDrivewayExtension() {
         // edge, so 3 mm of separation left the two meshes z-fighting into
         // a torn white fringe along the whole apron lip. The resulting
         // ~3 cm step reads correctly anyway — concrete meeting asphalt.
-        // The 0.045 is road clearance and belongs at the road, so it ramps
-        // in with t rather than being carried the whole way. Held flat it
-        // lifted the seam at the house end by the same amount, which is
-        // half of the step that used to be there.
-        terrainHeight(x, z) + seamOffset * (1 - t) + 0.045 * t,
+        // Blend from the slab's flat top to the real terrain, smootherstep
+        // rather than linear — and blending the *height itself*, not an
+        // offset added to the terrain.
+        //
+        // Matching heights at the seam stopped the step but left a crease:
+        // the house slab is dead flat and the extension picked up the full
+        // terrain grade from its very first row, so the surface normal
+        // jumped at the join and lit as a hard line across the drive.
+        // Because smootherstep's derivative is zero at both ends, this
+        // leaves the house flat, eases into the grade, and arrives at the
+        // road running parallel to the terrain again — no crease at either
+        // end. The 0.045 is road clearance and rides along with the same
+        // curve, since it is only needed where the asphalt is.
+        flatTop + (terrainHeight(x, z) + 0.045 - flatTop) * smootherstep(t),
         z
       );
       // The same procedural concrete the house's own slabs use, mapped in
