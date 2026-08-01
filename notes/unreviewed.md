@@ -14,6 +14,38 @@ a human. Those stay in the untested list until someone actually plays them.
 
 ## Judgement calls that could have gone the other way
 
+- **Every number in the yard rework is eye-picked from the photos.** The six
+  back trees' positions, heights, trunk radii and the width of the gap
+  between the two groups of three; the brush band's new 2.5-5.2 m height
+  range, 5.6 m depth and 0.9 m spacing; the litter apron's -1.6 to 3.4 m
+  span; the 3.2 m setback that opens the shaded strip behind the six. All of
+  it was read off the reference photos by eye, not measured. The
+  *arrangement* is faithful to photo 5 — three each side, wider gap in the
+  middle, gap behind the fire pit — but the metres are mine.
+
+- **The lawn was mown from 0.13 to 0.075 without being asked in those terms.**
+  The ask was "get rid of the waist high grass", which was the tree-line
+  band; shortening the whole lawn as well is my reading of the photos, where
+  it is uniformly short and cut. If the yard now looks too shorn, that
+  constant is `SPECIES.TURF.height` in `src/yard.js`.
+
+- **Lawn colour deliberately NOT changed, which is also a call.** Every one
+  of the ten photos shows dry tan-green grass and the game's is saturated
+  green. I left it because it wasn't asked for and a straw lawn would fight
+  the daytime art direction — but it is the single biggest remaining
+  difference from the references, so if accuracy beats prettiness here, say
+  so and it's a three-line change.
+
+- **Tree thinning is now depth-dependent.** The flat 10% cull became 14% but
+  only more than 9 m into the woods. That makes the front row solid, which
+  is what the photos show, at the cost of the tree line being denser than
+  any "reads as a forest not a wall" tuning that came before it.
+
+- **The six back trees' crowns are still thinner than the photos and I
+  don't know why.** `maxDepth: 4` was the obvious suspect, was tried, and
+  bought almost no foliage for 9 fps off the low — so it's reverted with the
+  reasoning recorded in the code. Unresolved, not forgotten.
+
 - **Sit is committed but has never been run.** Session ended before I could
   look at either pose in the browser. The build passes and the logic is
   straightforward, but every *number* in it is a guess made from reading rig
