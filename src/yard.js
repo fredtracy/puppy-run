@@ -4474,8 +4474,26 @@ function createChunkGrass(cx, cz, rand) {
         1,
         Math.max(0, Math.min(x - (BACK_GAP_FROM - 4), BACK_GAP_TO + 4 - x) / 4)
       );
-      const apron = edgeDist > -1.6 && edgeDist < 3.4
-        ? Math.min(1, Math.min(edgeDist + 1.6, 3.4 - edgeDist) / 1.1)
+      // The apron's own wander, and it needs one badly. edgeDist is an
+      // exterior box distance, so a fixed threshold on it is a contour
+      // parallel to the clearing boundary — which is to say a straight line
+      // ruled across the lawn, and that is exactly what it looked like. The
+      // brush hides the same problem with brushEdge; the litter had nothing.
+      //
+      // Two octaves for the same reason brushEdge uses two: the broad one
+      // makes the litter reach out in tongues where a tree leans over the
+      // grass and pull back between them, the fine one keeps the boundary
+      // itself ragged rather than a smooth drawn curve. Its own offsets, not
+      // brushEdge's, so the litter line doesn't track the brush line — two
+      // edges wandering in lockstep would read as one edge with a margin.
+      const litterWander =
+        (valueNoise(x / 6.5 + 133.7, z / 6.5 - 71.2) - 0.5) * 2.6 +
+        (valueNoise(x / 2.1 - 55.3, z / 2.1 + 19.8) - 0.5) * 1.0;
+      const litterDist = edgeDist + litterWander;
+      // Feathered over 1.7 m rather than 1.1, so even where the wander
+      // happens to run straight the density fades in instead of starting.
+      const apron = litterDist > -1.6 && litterDist < 3.4
+        ? Math.min(1, Math.min(litterDist + 1.6, 3.4 - litterDist) / 1.7)
           * backness * backSpan
         : 0;
       if (apron > 0) {
